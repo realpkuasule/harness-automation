@@ -1,0 +1,34 @@
+{"timestamp":"2026-04-23T16:30:00+08:00","type":"milestone","phase":0,"description":"项目初始化：创建开发计划 dev-plan-1.0.md、任务跟踪 TASK.json、变更记录 CHANGELOG.jsonl"}
+{"timestamp":"2026-04-23T16:35:00+08:00","type":"feat","phase":1,"description":"创建 MCP Server 项目结构：package.json、tsconfig.json、目录布局"}
+{"timestamp":"2026-04-23T16:40:00+08:00","type":"feat","phase":1,"description":"实现类型定义系统 types.ts：RuleDefinition, RuleDecision, EngineInput/Output, MCP工具Schema, ABTest, ErrorMessage 等类型"}
+{"timestamp":"2026-04-23T16:45:00+08:00","type":"feat","phase":1,"description":"创建规则数据库 rules.json：16条内置规则，覆盖 code-quality/architecture/process/security/code-style 五大类"}
+{"timestamp":"2026-04-23T16:50:00+08:00","type":"feat","phase":1,"description":"实现决策引擎 engine.ts：四问题判定流（可形式化/代价/反馈速度/频率），认知层集成，团队规模与项目阶段参数调整"}
+{"timestamp":"2026-04-23T16:55:00+08:00","type":"feat","phase":1,"description":"实现状态管理系统 state.ts：.harness/state.json 读写，状态机流转，断点续做支持"}
+{"timestamp":"2026-04-23T17:00:00+08:00","type":"feat","phase":1,"description":"实现配置生成器：CLAUDE.md（软约束）、ESLint（硬约束）、settings.json（harness强制）、.gitignore 生成器"}
+{"timestamp":"2026-04-23T17:05:00+08:00","type":"feat","phase":1,"description":"实现 MCP Server 入口 index.ts：注册 evaluate_rules, generate_config, query_state, reset_state 四个工具"}
+{"timestamp":"2026-04-23T17:10:00+08:00","type":"feat","phase":1,"description":"实现 Skill 层 skill/SKILL.md：用户交互流程，项目信息收集问卷，工具调用集成"}
+{"timestamp":"2026-04-23T17:15:00+08:00","type":"feat","phase":2,"description":"实现 AST 代码扫描器 code_scanner.ts：6种模式检测（console.log/debugger/fetch/魔术数字/untyped-any/未处理异步错误）"}
+{"timestamp":"2026-04-23T17:20:00+08:00","type":"feat","phase":2,"description":"实现 CLAUDE.md 解析器 claude_extractor.ts：从 heading 和 bullet 格式提取已有规则"}
+{"timestamp":"2026-04-23T17:25:00+08:00","type":"feat","phase":2,"description":"实现扫描-决策集成 integration.ts：融合代码扫描发现与决策引擎，置信度加权调整"}
+{"timestamp":"2026-04-23T17:30:00+08:00","type":"feat","phase":2,"description":"实现 Husky hook 生成器 husky.ts：pre-commit（ESLint）/ commit-msg（commitlint）"}
+{"timestamp":"2026-04-23T17:35:00+08:00","type":"feat","phase":2,"description":"实现 CI 工作流生成器 ci.ts：GitHub Actions YAML，包含 lint/test/lock/build 步骤"}
+{"timestamp":"2026-04-23T17:40:00+08:00","type":"feat","phase":2,"description":"实现 package.json 合并器 package_json.ts：规则依赖映射，缺失包检测与安装建议"}
+{"timestamp":"2026-04-23T17:45:00+08:00","type":"feat","phase":2,"description":"实现依赖管理器 deps.ts：包管理器检测，工具链健康检查，outdated 包识别"}
+{"timestamp":"2026-04-23T22:00:00+08:00","type":"feat","phase":2,"description":"Phase 2 完整流程集成：scan_codebase 扫描工具、init_harness 一键初始化、rollback 回滚机制（含自动备份）.harness/backups/"}
+{"timestamp":"2026-04-23T22:30:00+08:00","type":"feat","phase":3,"description":"实现配置验证器 setup_validator.ts：validate_setup 工具，检查9个管理文件的文件存在性、语法正确性、Shell脚本可执行位、权限、devDependencies 完整性"}
+{"timestamp":"2026-04-23T22:35:00+08:00","type":"feat","phase":3,"description":"实现规则效果统计框架 rule_analytics.ts + get_rule_stats 工具：AnalyticsData 收集（按介质分布/平均置信度/认知需求/高置信度），UsageRecords 记录（触发/修复/绕过），历史追溯与持久化（JSON文件存储）"}
+{"timestamp":"2026-04-23T22:40:00+08:00","type":"feat","phase":3,"description":"实现自适应调整建议 rule_adapter.ts + analyze_rule_adjustments 工具：基于 bypassRate/fixRate/confidence 的介质升级/降级推荐逻辑"}
+{"timestamp":"2026-04-23T22:45:00+08:00","type":"feat","phase":3,"description":"实现规则导入/导出 rule_io.ts + export_rules/import_rules/list_rule_presets/list_rule_exports 工具：规则序列化/反序列化，5个预设模板（web-app-ts/library-ts/python-script/prototype/go-service），跨项目复用"}
+{"timestamp":"2026-04-23T22:50:00+08:00","type":"feat","phase":3,"description":"实现性能优化 scan_cache.ts + scanDirCached：增量扫描缓存机制，基于 mtime + size 判断文件变更，仅扫描变更文件，合并缓存结果与增量结果，支持 useCache 参数"}
+{"timestamp":"2026-04-23T18:55:00+08:00","type":"feat","phase":3,"description":"实现 77 个集成测试用例覆盖 Phase 1-3 全部模块：engine.ts(10) code_scanner.ts(13) setup_validator.ts(9) rule_analytics.ts(13) rule_adapter.ts(8) rule_io.ts(12) scan_cache.ts(12)，修复 5 项边界用例断言"}
+{"timestamp":"2026-04-23T23:15:00+08:00","type":"feat","phase":3,"description":"实现 confirm_decisions 工具：ConfirmDecisionsInputSchema、StateManager.setConfirmedDecisions、工具注册与处理器、SKILL.md 集成确认步骤（Step 4）"}
+{"timestamp":"2026-04-24T13:55:00+08:00","type":"fix","phase":4,"description":"P4-1: 修复 TS 编译错误 — rule_analytics.test.ts:46 byMedium 补齐 3 个缺失的介质 key（settings.json/hook/ci）"}
+{"timestamp":"2026-04-24T13:56:00+08:00","type":"fix","phase":4,"description":"P4-2: 修复 CI 生成器 ruleId 匹配 — ci.ts:58,65 d.ruleId → d.ruleName；新增 ci.test.ts 覆盖测试场景"}
+{"timestamp":"2026-04-24T13:56:30+08:00","type":"fix","phase":4,"description":"P4-3: 修正 settings.json 生成路径 — .vscode/settings.json → .claude/settings.json，涉及 index.ts、setup_validator.ts、setup_validator.test.ts 共 5 处"}
+{"timestamp":"2026-04-24T14:00:00+08:00","type":"fix","phase":4,"description":"P4-6: 添加项目 ESLint 配置 — 创建 eslint.config.js（typescript-eslint 推荐规则），添加 eslint + typescript-eslint devDependencies，npm run lint 正常执行"}
+{"timestamp":"2026-04-24T14:00:30+08:00","type":"refactor","phase":4,"description":"P4-5: 重构生成器代码消除重复 — 提取 generateProjectFiles() 共享函数，generate_config 和 init_harness 两个 handler 调用同一函数"}
+{"timestamp":"2026-04-24T14:03:00+08:00","type":"test","phase":4,"description":"P4-4: 添加集成/E2E 测试套件 — 创建 integration.test.ts，覆盖完整流程(evaluate→confirm→generate→validate)、多技术栈(TS/Python/Go)、状态持久化、空决策、dryRun 共 8 个场景"}
+{"timestamp":"2026-04-24T14:04:00+08:00","type":"fix","phase":4,"description":"P4-8: 修复设计文档版本检查脚本 — check_design_completeness.py:156 v2.0 → v3.0 与文档头部一致"}
+{"timestamp":"2026-04-24T14:04:30+08:00","type":"fix","phase":4,"description":"P4-9: 修复 findUntypedAny 注释/字符串误报 — 跳过//注释行、跳过引号内匹配；新增4个边界用例测试"}
+{"timestamp":"2026-04-24T14:05:00+08:00","type":"docs","phase":4,"description":"P4-10: 为项目自身添加 CLAUDE.md — 概述、技术栈、目录结构、常用命令、架构原则"}
+{"timestamp":"2026-04-24T14:05:30+08:00","type":"feat","phase":4,"description":"P4-11: 为项目自身添加 CI/CD — 创建 .github/workflows/ci.yml，包含 npm ci、tsc --noEmit、lint、vitest --coverage、build 步骤"}

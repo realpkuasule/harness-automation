@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.playwright-mcp/
+__pycache__/
+*.pyc
+tmp.md
+coverage/
+*.lcov.info
