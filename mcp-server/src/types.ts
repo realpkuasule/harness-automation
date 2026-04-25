@@ -113,6 +113,8 @@ export interface RuleDecision {
   cognitiveSkillTriggers: string[];
   /** Design §3.1.1: adjusted cost after phase multiplier (1-5) */
   adjustedCost?: number;
+  /** Design §3.1.1: cost classification label */
+  adjustedCostLabel?: "critical" | "high" | "medium" | "low";
   /** Design §3.1.1: feedback speed from rule definition (1-5) */
   feedbackSpeed?: number;
   /** Design §3.1.1: structured error message (why/whatInstead/reference) */
@@ -127,7 +129,7 @@ export interface RuleDecision {
 export interface RuleConflict {
   ruleA: string;
   ruleB: string;
-  type: "behavioral" | "overlap";
+  type: "direct_conflict" | "redundant" | "needs_refinement";
   description: string;
   resolution: string;
 }
@@ -192,7 +194,7 @@ export interface GenerateConfigOutput {
   files: Array<{
     path: string;
     content: string;
-    action: "create" | "overwritten" | "skipped" | "merged" | "dry_run";
+    action: "created" | "overwritten" | "skipped" | "merged" | "dry_run";
     backupPath?: string;
   }>;
   summary: {
@@ -268,12 +270,17 @@ export interface SuitabilityAssessment {
 // A/B Test Types
 // ============================================================
 
+export interface ABTestMetric {
+  name: string;
+  weight: number;
+}
+
 export interface ABTestConfig {
   ruleId: string;
   baselineMedium: RuleMedium;
   testMedium: RuleMedium;
   durationDays: number;
-  metrics: string[];
+  metrics: ABTestMetric[];
 }
 
 export interface ABTestDataPoint {
@@ -309,6 +316,11 @@ export interface ErrorMessageTemplate {
     learningTip: string;
   };
   applicableScenarios: string[];
+  effectiveness?: {
+    fixRate: number;
+    clarityScore: number;
+    learningImpact: number;
+  };
 }
 
 export interface ErrorSuggestion {
@@ -326,6 +338,7 @@ export const ScanCodebaseInputSchema = z.object({
   techStack: z.array(z.enum(["typescript", "javascript", "python", "go", "java", "generic"])).optional().describe("Tech stack for rule filtering"),
   projectPhase: z.enum(["prototype", "early", "growth", "mature"]).optional().describe("Project phase for context-aware decisions"),
   teamSize: z.enum(["solo", "small", "medium", "large"]).optional().describe("Team size for frequency estimation"),
+  scanDepth: z.enum(["quick", "full"]).optional().default("full").describe("Scan depth: quick (config + recent sources) or full (all files)"),
   useCache: z.boolean().optional().default(false).describe("Enable incremental scan cache (only scans changed files)"),
 });
 
@@ -463,7 +476,10 @@ export const StartABTestInputSchema = z.object({
   baselineMedium: z.enum(["linter_error", "linter_warn", "linter+hook", "claude_md", "ci", "hook", "settings", "none", "claude.md", "linter", "settings.json"]).describe("Baseline medium"),
   testMedium: z.enum(["linter_error", "linter_warn", "linter+hook", "claude_md", "ci", "hook", "settings", "none", "claude.md", "linter", "settings.json"]).describe("Test medium"),
   durationDays: z.number().optional().default(14).describe("Test duration in days"),
-  metrics: z.array(z.string()).optional().default(["triggerCount", "fixRate", "bypassCount"]).describe("Metrics to track"),
+  metrics: z.array(z.union([
+    z.string(),
+    z.object({ name: z.string(), weight: z.number() }),
+  ])).optional().default(["triggerCount", "fixRate", "bypassCount"]).describe("Metrics to track: string[] (backward compat) or {name, weight}[]"),
 });
 export type StartABTestInput = z.infer<typeof StartABTestInputSchema>;
 

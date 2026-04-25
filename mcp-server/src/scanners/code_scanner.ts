@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, extname } from "node:path";
 import { ScanCache } from "./scan_cache.js";
@@ -272,6 +272,48 @@ export class CodeScanner {
       findings: allFindings,
       suggestions,
       durationMs,
+    };
+  }
+
+  /** Quick scan: config files and recently modified source files only. */
+  async scanConfigOnly(projectDir: string): Promise<CodeScanResult> {
+    const start = performance.now();
+    const allFiles = await this.collectFiles(projectDir);
+    const now = Date.now();
+    const sevenDays = 7 * 24 * 60 * 60 * 1000;
+
+    // Config files always included; source files only if modified within 7 days
+    const configPatterns = ["claude.md", "package.json", "tsconfig.json", ".eslintrc", ".eslintrc.json", ".eslintrc.js", ".harness/"];
+    const files = allFiles.filter((f) => {
+      const lower = f.toLowerCase();
+      if (configPatterns.some((p) => lower.includes(p))) return true;
+      if (isSourceFile(f)) {
+        try {
+          return now - statSync(f).mtimeMs < sevenDays;
+        } catch { return false; }
+      }
+      return false;
+    });
+
+    const allFindings: ScanFinding[] = [];
+    let totalLines = 0;
+
+    for (const file of files) {
+      try {
+        const content = readFileSync(file, "utf-8");
+        const lineCount = content.split("\n").length;
+        totalLines += lineCount;
+        const findings = this.scanContent(content, file);
+        allFindings.push(...findings);
+      } catch { /* skip unreadable */ }
+    }
+
+    return {
+      scannedFiles: files.length,
+      totalLines,
+      findings: allFindings,
+      suggestions: this._aggregate(allFindings),
+      durationMs: Math.round(performance.now() - start),
     };
   }
 

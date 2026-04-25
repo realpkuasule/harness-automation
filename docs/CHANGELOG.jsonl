@@ -100,3 +100,16 @@
 {"timestamp": "2026-04-25T17:38:53+08:00", "type": "fix", "phase": 6, "description": "P6-25: 修正 HarnessStatus 枚举移除冗余 null"}
 {"timestamp": "2026-04-25T17:38:53+08:00", "type": "fix", "phase": 6, "description": "P6-26: hubSetup→huskySetup 重命名（InitHarnessSummary）"}
 {"timestamp": "2026-04-25T17:38:53+08:00", "type": "fix", "phase": 6, "description": "P6-27: 移除 RuleDecision.evidence 永不填充字段"}
+{"timestamp": "2026-04-25T17:48:57+08:00", "type": "feat", "phase": 6, "description": "P6-14: A/B 测试 metrics 支持 ABTestMetric[]（name+weight）"}
+{"timestamp": "2026-04-25T17:48:57+08:00", "type": "feat", "phase": 6, "description": "P6-15: scan_codebase 补充 scanDepth 参数（quick/full）"}
+{"timestamp": "2026-04-25T17:48:57+08:00", "type": "fix", "phase": 6, "description": "P6-16: adjustedCost 补充分类标签 critical/high/medium/low"}
+{"timestamp": "2026-04-25T17:48:57+08:00", "type": "fix", "phase": 6, "description": "P6-17: 冲突类型值对齐设计标准（direct_conflict/redundant）"}
+{"timestamp": "2026-04-25T17:48:57+08:00", "type": "fix", "phase": 6, "description": "P6-18: action 枚举值 create→created 对齐过去分词"}
+{"timestamp": "2026-04-25T17:48:57+08:00", "type": "feat", "phase": 6, "description": "P6-19: ErrorMessageTemplate 补充 effectiveness 指标"}
+{"timestamp": "2026-04-25T17:48:57+08:00", "type": "feat", "phase": 6, "description": "P6-20: 认知层新增 shouldAutoTrigger 重复错误检测"}
+{"timestamp": "2026-04-25T19:03:52+08:00", "type": "feat", "phase": 11, "description": "P11-1: Spec 补充 ABTestMetric schema 定义"}
+{"timestamp": "2026-04-25T19:03:52+08:00", "type": "fix", "phase": 11, "description": "P11-2: Spec 修正 ConfigFileResult.action 注释错误"}
+{"timestamp": "2026-04-25T19:03:53+08:00", "type": "feat", "phase": 11, "description": "P11-3: Spec start_ab_test.metrics 改为联合类型支持 string|object"}
+{"timestamp": "2026-04-25T19:03:53+08:00", "type": "fix", "phase": 11, "description": "P11-5: Spec import_rules 响应改为 oneOf 覆盖三种导入路径"}
+{"timestamp": "2026-04-25T19:03:53+08:00", "type": "feat", "phase": 11, "description": "P11-6: Spec 定义 DepCheckResult 替换模糊的 recommendedActions"}
+{"timestamp": "2026-04-25T19:03:53+08:00", "type": "fix", "phase": 11, "description": "P11-7: init_harness 响应暴露文件写入错误（Impl+Spec）"}

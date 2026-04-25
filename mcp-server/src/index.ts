@@ -290,7 +290,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
           try {
             const exists = existsSync(filePath);
             // Adjust action based on actual disk state
-            if (exists && f.action === "create") {
+            if (exists && f.action === "created") {
               (f as any).action = "overwritten";
             }
             if (f.action !== "skipped") {
@@ -315,7 +315,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         files: input.dryRun ? files.map((f) => ({ ...f, action: "dry_run" as const })) : files,
         summary: {
           total: files.length,
-          created: files.filter((f) => f.action === "create" || f.action === "merged").length,
+          created: files.filter((f) => f.action === "created" || f.action === "merged").length,
           updated: files.filter((f) => f.action === "overwritten").length,
           skipped: files.filter((f) => f.action === "skipped").length,
         },
@@ -434,7 +434,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         techStack: input.techStack ?? ["generic"],
       };
 
-      const result = await scanAndEvaluate(engineInput, { useCache: input.useCache });
+      const result = await scanAndEvaluate(engineInput, { useCache: input.useCache, scanDepth: input.scanDepth });
 
       // Save scan results to state
       const stateManager = new StateManager(input.projectDir);
@@ -525,7 +525,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         files.push({
           path: `.husky/${hookName}`,
           content: hookContent,
-          action: "create",
+          action: "created",
         });
       }
 
@@ -535,7 +535,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         files.push({
           path: ".github/workflows/ci.yml",
           content: ciContent,
-          action: "create",
+          action: "created",
         });
       }
 
@@ -558,7 +558,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
 
       const fileSummary = {
         total: files.length,
-        created: files.filter((f) => f.action === "create" || f.action === "merged").length,
+        created: files.filter((f) => f.action === "created" || f.action === "merged").length,
         updated: files.filter((f) => f.action === "overwritten").length,
         skipped: files.filter((f) => f.action === "skipped").length,
       };
@@ -588,7 +588,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
           : null,
       };
 
-      const output = { files, summary };
+      const output = { files, summary, errors: errors.length > 0 ? errors : undefined };
 
       sm.setConfigOutput({ files, summary: fileSummary, errors, warnings: [] });
       sm.setProjectInfo(input.techStack, input.projectPhase, input.teamSize);
@@ -1066,12 +1066,16 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
 
     case "start_ab_test": {
       const abInput = StartABTestInputSchema.parse(args);
+      const rawMetrics = abInput.metrics ?? ["triggerCount", "fixRate", "bypassCount"];
+      const normalizedMetrics = rawMetrics.map((m) =>
+        typeof m === "string" ? { name: m, weight: 1 } : m,
+      );
       const config = {
         ruleId: abInput.ruleId,
         baselineMedium: normalizeMediumInput(abInput.baselineMedium),
         testMedium: normalizeMediumInput(abInput.testMedium),
         durationDays: abInput.durationDays ?? 14,
-        metrics: abInput.metrics ?? ["triggerCount", "fixRate", "bypassCount"],
+        metrics: normalizedMetrics,
       };
       const result = startABTest(abInput.projectDir, config);
       return {
@@ -1263,22 +1267,22 @@ function enrichPartialDecisions(
  */
 function generateProjectFiles(
   decisions: RuleDecision[],
-): Array<{ path: string; content: string; action: "create" | "overwritten" | "skipped" | "merged" | "dry_run" }> {
-  const files: Array<{ path: string; content: string; action: "create" | "overwritten" | "skipped" | "merged" | "dry_run" }> = [];
+): Array<{ path: string; content: string; action: "created" | "overwritten" | "skipped" | "merged" | "dry_run" }> {
+  const files: Array<{ path: string; content: string; action: "created" | "overwritten" | "skipped" | "merged" | "dry_run" }> = [];
 
   // 1. CLAUDE.md
-  files.push({ path: "CLAUDE.md", content: generateClaudeMd({ decisions }), action: "create" });
+  files.push({ path: "CLAUDE.md", content: generateClaudeMd({ decisions }), action: "created" });
 
   // 2. ESLint config (if any linter_error or linter_warn rules)
   const linterDecisions = decisions.filter(
     (d) => d.recommendedMedium === "linter_error" || d.recommendedMedium === "linter_warn" || d.recommendedMedium === "linter",
   );
   if (linterDecisions.length > 0) {
-    files.push({ path: "eslint.config.json", content: generateEslintConfig({ decisions }), action: "create" });
+    files.push({ path: "eslint.config.json", content: generateEslintConfig({ decisions }), action: "created" });
   }
 
   // 3. settings.json
-  files.push({ path: ".claude/settings.json", content: generateSettingsJson({ decisions }), action: "create" });
+  files.push({ path: ".claude/settings.json", content: generateSettingsJson({ decisions }), action: "created" });
 
   // 4. .gitignore additions
   const gitignoreAdditions = generateGitignore();

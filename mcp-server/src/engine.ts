@@ -86,42 +86,42 @@ const TEAM_FREQUENCY_MULTIPLIER: Record<TeamSize, number> = {
 const CONFLICT_MATRIX: Array<{
   ruleA: string;
   ruleB: string;
-  type: "behavioral" | "overlap";
+  type: "direct_conflict" | "redundant" | "needs_refinement";
   description: string;
   resolution: string;
 }> = [
   {
     ruleA: "R003",
     ruleB: "R015",
-    type: "behavioral",
+    type: "direct_conflict",
     description: "prefer-early-return 主张提前退出减少嵌套，error-handling 要求全面错误检查可能增加嵌套",
     resolution: "对简单守卫条件使用提前返回，复杂异步流程保持结构化错误处理",
   },
   {
     ruleA: "R009",
     ruleB: "R015",
-    type: "behavioral",
+    type: "direct_conflict",
     description: "no-duplicate-code 可能和 error-handling 冲突，因为错误处理模式看似相似但服务于不同上下文",
     resolution: "将通用的错误处理逻辑提取为共享工具函数，保留上下文特定的处理",
   },
   {
     ruleA: "R005",
     ruleB: "R015",
-    type: "overlap",
+    type: "redundant",
     description: "type-annotations 和 error-handling 都会增加代码冗长度，可能导致代码臃肿",
     resolution: "对公开 API 和错误类型使用类型注解，对边界条件优先运行时错误处理",
   },
   {
     ruleA: "R003",
     ruleB: "R009",
-    type: "overlap",
+    type: "redundant",
     description: "prefer-early-return 可能和 no-duplicate-code 冲突，提前返回可能导致相同逻辑分散在各处",
     resolution: "优先使用提前返回减少嵌套；当发现相同返回模式出现 3+ 次时再提取公共逻辑",
   },
   {
     ruleA: "R007",
     ruleB: "R013",
-    type: "overlap",
+    type: "redundant",
     description: "test-before-merge 和 code-review-required 都要求合并前检查，可能造成流程冗余",
     resolution: "test-before-merge 由 CI 自动执行，code-review 是人工步骤，两者互补不冲突。可在 CI 中配置 review 要求",
   },
@@ -274,6 +274,7 @@ export class DecisionEngine {
       cognitiveLayerRequired: needsCognitive,
       cognitiveSkillTriggers: cognitiveTriggers,
       adjustedCost: cost,
+      adjustedCostLabel: cost >= 5 ? "critical" : cost >= 4 ? "high" : cost >= 3 ? "medium" : "low",
       feedbackSpeed: rule.feedbackSpeed,
       errorMessage: rule.errorMessage,
     };

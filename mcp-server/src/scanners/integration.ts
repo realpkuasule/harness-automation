@@ -27,13 +27,15 @@ export interface IntegratedResult {
  */
 export async function scanAndEvaluate(
   input: EngineInput,
-  options?: { useCache?: boolean },
+  options?: { useCache?: boolean; scanDepth?: "quick" | "full" },
 ): Promise<IntegratedResult> {
-  // Step 1: Code scan (with optional cache)
+  // Step 1: Code scan (with optional cache / depth)
   const codeScanner = new CodeScanner();
 
   let scanResult;
-  if (options?.useCache) {
+  if (options?.scanDepth === "quick") {
+    scanResult = await codeScanner.scanConfigOnly(input.projectDir);
+  } else if (options?.useCache) {
     scanResult = await codeScanner.scanDirCached(input.projectDir);
   } else {
     scanResult = await codeScanner.scanDir(input.projectDir);

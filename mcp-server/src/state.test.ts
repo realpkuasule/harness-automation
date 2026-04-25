@@ -75,7 +75,7 @@ describe("StateManager — state machine transitions", () => {
     sm.setEngineOutput(makeOutput());
     sm.setConfirmedDecisions(makeOutput().decisions);
     sm.setConfigOutput({
-      files: [{ path: "CLAUDE.md", content: "# test", action: "create" }],
+      files: [{ path: "CLAUDE.md", content: "# test", action: "created" }],
       summary: { total: 1, created: 1, updated: 0, skipped: 0 },
       errors: [],
       warnings: [],
@@ -105,7 +105,7 @@ describe("StateManager — state machine transitions", () => {
     expect(sm.load().phase).toBe("confirmed");
 
     sm.setConfigOutput({
-      files: [{ path: "CLAUDE.md", content: "# test", action: "create" }],
+      files: [{ path: "CLAUDE.md", content: "# test", action: "created" }],
       summary: { total: 1, created: 1, updated: 0, skipped: 0 },
       errors: [],
       warnings: [],

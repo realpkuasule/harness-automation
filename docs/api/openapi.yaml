@@ -250,6 +250,11 @@ paths:
                     $ref: "#/components/schemas/InitHarnessSummary"
                   validation:
                     $ref: "#/components/schemas/ValidateSetupOutput"
+                  errors:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ConfigError"
+                    description: 文件写入操作中发生的错误列表
 
   /tools/confirm_decisions:
     post:
@@ -505,22 +510,33 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  preset:
-                    type: string
-                  presetName:
-                    type: string
-                  decisions:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/RuleDecision"
-                  total:
-                    type: integer
-                  warnings:
-                    type: array
-                    items:
-                      type: string
+                oneOf:
+                  - title: PresetImportResult
+                    type: object
+                    properties:
+                      preset:
+                        type: string
+                      presetName:
+                        type: string
+                      decisions:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/RuleDecision"
+                      total:
+                        type: integer
+                  - title: RawImportResult
+                    type: object
+                    properties:
+                      decisions:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/RuleDecision"
+                      total:
+                        type: integer
+                      warnings:
+                        type: array
+                        items:
+                          type: string
         "400":
           description: 未找到预设或无效配置
           content:
@@ -681,7 +697,9 @@ paths:
                 metrics:
                   type: array
                   items:
-                    type: string
+                    oneOf:
+                      - type: string
+                      - $ref: "#/components/schemas/ABTestMetric"
                   default: [triggerCount, fixRate, bypassCount]
       responses:
         "200":
@@ -1168,6 +1186,11 @@ components:
         teamSize:
           $ref: "#/components/schemas/TeamSize"
           description: 实现新增。不传时默认 "small"
+        scanDepth:
+          type: string
+          enum: [quick, full]
+          default: full
+          description: 扫描深度：quick（配置文件+近期修改源文件），full（全部文件）
         useCache:
           type: boolean
           default: false
@@ -1464,6 +1487,10 @@ components:
         adjustedCost:
           type: number
           description: 设计 §3.1.1：阶段乘数调整后的代价（1-5）
+        adjustedCostLabel:
+          type: string
+          enum: [critical, high, medium, low]
+          description: 设计 §3.1.1：代价分类标签
         feedbackSpeed:
           type: number
           description: 设计 §3.1.1：规则定义中的反馈速度（1-5）
@@ -1480,8 +1507,8 @@ components:
           type: string
         type:
           type: string
-          enum: [behavioral, overlap]
-          description: behavioral=规则行为直接冲突, overlap=规则覆盖范围重叠
+          enum: [direct_conflict, redundant, needs_refinement]
+          description: direct_conflict=规则行为直接冲突, redundant=规则覆盖范围重叠, needs_refinement=需要细化调整
         description:
           type: string
         resolution:
@@ -1524,10 +1551,9 @@ components:
           description: dry_run 模式时返回内容预览
         action:
           type: string
-          enum: [create, overwritten, skipped, merged, dry_run]
+          enum: [created, overwritten, skipped, merged, dry_run]
           description: >
-            文件操作类型。设计使用过去分词（created/overwritten/skipped/merged/dry_run），
-            但实现中 generate_config 使用 create 而非 created。
+            文件操作类型。枚举值：created（新建）、overwritten（覆盖）、skipped（跳过）、merged（合并追加）、dry_run（预览）。
         backupPath:
           type: string
           description: 备份路径（如果覆盖了已有文件）
@@ -1900,6 +1926,13 @@ components:
     # ============================================================
     # A/B Test
     # ============================================================
+    ABTestMetric:
+      type: object
+      properties:
+        name:
+          type: string
+        weight:
+          type: number
     ABTestConfig:
       type: object
       properties:
@@ -1914,7 +1947,7 @@ components:
         metrics:
           type: array
           items:
-            type: string
+            $ref: "#/components/schemas/ABTestMetric"
       description: 设计中使用嵌套 testConfig 对象，实现中展开为扁平参数
 
     ABTestDataPoint:
@@ -2072,6 +2105,15 @@ components:
           type: array
           items:
             type: string
+        effectiveness:
+          type: object
+          properties:
+            fixRate:
+              type: number
+            clarityScore:
+              type: number
+            learningImpact:
+              type: number
 
     ErrorSuggestion:
       type: object
@@ -2202,6 +2244,35 @@ components:
     # ============================================================
     # Init Harness Summary
     # ============================================================
+    DepCheckResult:
+      type: object
+      nullable: true
+      properties:
+        missing:
+          type: array
+          items:
+            type: string
+          description: 缺失的依赖项列表
+        outdated:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              current:
+                type: string
+              wanted:
+                type: string
+          description: 过期依赖列表
+        installCommand:
+          type: string
+          description: 安装命令
+        suggestedCommands:
+          type: array
+          items:
+            type: string
+          description: 建议执行的安装命令
     InitHarnessSummary:
       type: object
       properties:
@@ -2222,9 +2293,7 @@ components:
           type: string
           nullable: true
         recommendedActions:
-          type: object
-          nullable: true
-          description: 依赖检查结果
+          $ref: "#/components/schemas/DepCheckResult"
         huskySetup:
           type: string
           nullable: true
