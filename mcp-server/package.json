@@ -1,6 +1,6 @@
 {
   "name": "harness-automation",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Harness Automation System - MCP Server for automated constraint configuration",
   "main": "dist/index.js",
   "type": "module",

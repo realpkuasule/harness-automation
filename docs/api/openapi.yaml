@@ -2235,6 +2235,10 @@ components:
         updatedAt:
           type: string
           format: date-time
+        evaluatedAt:
+          type: string
+          format: date-time
+          description: 最近一次评估时间（evaluate_rules 或 scan_codebase 设置）
         engineInput:
           $ref: "#/components/schemas/EngineInput"
         engineOutput:

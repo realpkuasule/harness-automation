@@ -1811,6 +1811,34 @@
       "dependencies": [
         "P13-11"
       ]
+    },
+    {
+      "id": "P13-13",
+      "title": "Code — 修复 optimize_error_message.projectDir Zod 必填/可选不一致",
+      "description": "OptimizeErrorMessageInputSchema 中 projectDir 为 z.string()（必填），但 handler 用条件判断处理缺省值，spec 也标注为可选。改为 z.string().optional() 使类型系统与运行时行为一致。\n依据：docs/plans/full-fix-20260425-2026.md §P1-1\n改动：\n1. types.ts:506 — projectDir 加 .optional()",
+      "phase": 13,
+      "day": 1,
+      "status": "completed",
+      "priority": "high",
+      "dependencies": [],
+      "fixPlanRef": "P1-1",
+      "gapType": "新发现",
+      "verification": "npm run build + npx vitest run"
+    },
+    {
+      "id": "P13-14",
+      "title": "Spec — 补充 HarnessState.evaluatedAt 字段到 OpenAPI",
+      "description": "P13-9 在 types.ts 和 state.ts 中添加了 evaluatedAt，但 OpenAPI spec 的 HarnessState schema 未同步更新。需要在 spec 中 HarnessState 的 updatedAt 之后添加该字段。\n依据：docs/plans/full-fix-20260425-2026.md §P2-1\n改动：\n1. openapi.yaml — HarnessState 属性中新增 evaluatedAt (type: string, format: date-time)",
+      "phase": 13,
+      "day": 1,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [
+        "P13-13"
+      ],
+      "fixPlanRef": "P2-1",
+      "gapType": "新发现",
+      "verification": "yq eval 确认 evaluatedAt 字段存在于 HarnessState schema"
     }
   ]
 }

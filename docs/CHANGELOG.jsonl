@@ -138,3 +138,5 @@
 {"timestamp": "2026-04-25T20:13:03+08:00", "type": "fix", "phase": 13, "description": "P13-10: 收紧 CognitiveAutoTrigger 返回类型边界（types.ts/orchestrator.ts/index.ts）"}
 {"timestamp": "2026-04-25T20:14:38+08:00", "type": "fix", "phase": 13, "description": "P13-11: 更新 openapi.yaml 3 处工具描述（projectDir/preset/CognitiveAutoTrigger）"}
 {"timestamp": "2026-04-25T20:15:21+08:00", "type": "fix", "phase": 13, "description": "P13-12: 补充 openapi.yaml 5 处边界情况文档（rollback/init_harness/import_rules/query_state/optimize_error_message）"}
+{"timestamp": "2026-04-25T22:06:40+08:00", "type": "fix", "phase": 13, "description": "P13-13: 修复 optimize_error_message.projectDir Zod 必填/可选不一致（types.ts:506）"}
+{"timestamp": "2026-04-25T22:06:50+08:00", "type": "fix", "phase": 13, "description": "P13-14: 补充 HarnessState.evaluatedAt 字段到 OpenAPI spec"}

@@ -503,7 +503,7 @@ export const CollectABMetricsInputSchema = z.object({
 export type CollectABMetricsInput = z.infer<typeof CollectABMetricsInputSchema>;
 
 export const OptimizeErrorMessageInputSchema = z.object({
-  projectDir: z.string().describe("Absolute path to the project directory"),
+  projectDir: z.string().optional().describe("Absolute path to the project directory"),
   ruleId: z.string().optional().describe("Rule ID (optional)"),
   ruleName: z.string().optional().describe("Rule name (optional)"),
   scenario: z.string().optional().describe("Scenario description (optional)"),
