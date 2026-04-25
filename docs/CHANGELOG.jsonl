@@ -121,3 +121,20 @@
 {"timestamp": "2026-04-25T19:26:41+08:00", "type": "fix", "phase": 12, "description": "P12-6: 补充 optimize_error_message stats 条件返回说明"}
 {"timestamp": "2026-04-25T19:26:41+08:00", "type": "fix", "phase": 12, "description": "P12-7: 补充 suggestedCommands 条件返回说明"}
 {"timestamp": "2026-04-25T19:26:41+08:00", "type": "docs", "phase": 12, "description": "P12-8: 补充 RuleDefinition cost/feedbackSpeed/frequency 范围约束"}
+{"timestamp": "2026-04-25T19:49:15+08:00", "type": "docs", "phase": 6, "description": "规划 Skill 层开发计划 (docs/plans/as-claude-code-skill.md)"}
+{"timestamp": "2026-04-25T19:52:56+08:00", "type": "docs", "phase": 13, "description": "分解 Skill 层开发任务到 TASK.json (P13-1~P13-8)"}
+{"timestamp": "2026-04-25T20:02:10+08:00", "type": "feat", "phase": 13, "description": "P13-1: OpenAPI 补充 repeatedPattern 字段和 CognitiveAutoTrigger schema"}
+{"timestamp": "2026-04-25T20:02:10+08:00", "type": "feat", "phase": 13, "description": "P13-2: 创建 skill/SKILL.md 核心 Skill 定义 (11步工作流)"}
+{"timestamp": "2026-04-25T20:02:10+08:00", "type": "feat", "phase": 13, "description": "P13-3: 创建 skill/install.sh 一键安装脚本"}
+{"timestamp": "2026-04-25T20:02:10+08:00", "type": "feat", "phase": 13, "description": "P13-4: 接入 shouldAutoTrigger 到 optimize_error_message 流程"}
+{"timestamp": "2026-04-25T20:02:10+08:00", "type": "feat", "phase": 13, "description": "P13-5: package.json 添加 bin 字段 + 版本 1.0.4"}
+{"timestamp": "2026-04-25T20:02:10+08:00", "type": "test", "phase": 13, "description": "P13-6: 创建 Skill 工作流集成测试 (16 测试用例)"}
+{"timestamp": "2026-04-25T20:02:10+08:00", "type": "test", "phase": 13, "description": "P13-7: 创建安装脚本测试 (7 测试用例)"}
+{"timestamp": "2026-04-25T20:02:10+08:00", "type": "docs", "phase": 13, "description": "P13-8: 创建用户文档 usage-as-claude-code-skill.md"}
+{"timestamp": "2026-04-25T20:02:10+08:00", "type": "fix", "phase": 13, "description": "state.ts: setValidation 新增 phase='validated' 推进"}
+{"timestamp": "2026-04-25T20:07:46+08:00", "type": "chore", "phase": 13, "description": "P13-9: OpenAPI spec vs implementation gap analysis"}
+{"timestamp": "2026-04-25T20:10:03+08:00", "type": "chore", "phase": 13, "description": "P13-10: 编制全面修复计划 (full-fix-20260425-2002.md)"}
+{"timestamp": "2026-04-25T20:12:33+08:00", "type": "fix", "phase": 13, "description": "P13-9: 修复 query_state.lastEvalAt 时间戳漂移（types.ts/state.ts/index.ts）"}
+{"timestamp": "2026-04-25T20:13:03+08:00", "type": "fix", "phase": 13, "description": "P13-10: 收紧 CognitiveAutoTrigger 返回类型边界（types.ts/orchestrator.ts/index.ts）"}
+{"timestamp": "2026-04-25T20:14:38+08:00", "type": "fix", "phase": 13, "description": "P13-11: 更新 openapi.yaml 3 处工具描述（projectDir/preset/CognitiveAutoTrigger）"}
+{"timestamp": "2026-04-25T20:15:21+08:00", "type": "fix", "phase": 13, "description": "P13-12: 补充 openapi.yaml 5 处边界情况文档（rollback/init_harness/import_rules/query_state/optimize_error_message）"}

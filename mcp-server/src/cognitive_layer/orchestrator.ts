@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { RuleDefinition } from "../types.js";
+import type { RuleDefinition, CognitiveAutoTrigger } from "../types.js";
 import { executeDiagnostic } from "./skills/diagnostic.js";
 import type { DiagnosticResult } from "./skills/diagnostic.js";
 import { executeEducational } from "./skills/educational.js";
@@ -76,7 +76,7 @@ export function processCognitiveRequest(input: CognitiveRequest): CognitiveRespo
   }
 }
 
-interface TriggerEntry {
+export interface TriggerEntry {
   ruleId: string;
   timestamp: string;
 }
@@ -88,7 +88,7 @@ interface TriggerEntry {
  */
 export function shouldAutoTrigger(
   history: TriggerEntry[],
-): CognitiveRequest | null {
+): CognitiveAutoTrigger | null {
   const recent = history.slice(-3);
   const counts = new Map<string, number>();
   for (const entry of recent) {

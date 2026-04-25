@@ -25,8 +25,9 @@ import { scanAndEvaluate } from "./scanners/integration.js";
 import { assessSuitability } from "./suitability/assessor.js";
 import { startABTest, collectDataPoint } from "./ab_test/manager.js";
 import { analyzeABResults } from "./ab_test/analyzer.js";
-import { processCognitiveRequest } from "./cognitive_layer/orchestrator.js";
-import type { CognitiveResponse } from "./cognitive_layer/orchestrator.js";
+import { processCognitiveRequest, shouldAutoTrigger } from "./cognitive_layer/orchestrator.js";
+import type { CognitiveResponse, TriggerEntry } from "./cognitive_layer/orchestrator.js";
+import type { CognitiveAutoTrigger } from "./types.js";
 import { generateErrorSuggestion } from "./error_optimization/generator.js";
 import { ErrorMessageEvaluator } from "./error_optimization/evaluator.js";
 import { SetupValidator } from "./validators/setup_validator.js";
@@ -373,7 +374,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
       }
 
       if (state.engineInput) {
-        result.lastEvalAt = state.updatedAt;
+        result.lastEvalAt = state.evaluatedAt ?? state.updatedAt;
       }
 
       if (state.confirmedAt) {
@@ -1187,8 +1188,31 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         stats = evaluator.getStats();
       }
 
+      // Record trigger history for repeated pattern detection
+      let repeatedPattern: CognitiveAutoTrigger | null = null;
+      if (optInput.projectDir && optInput.ruleId) {
+        const historyPath = join(optInput.projectDir, ".harness", "trigger_history.json");
+        let history: TriggerEntry[] = [];
+        try {
+          if (existsSync(historyPath)) {
+            history = JSON.parse(readFileSync(historyPath, "utf-8")) as TriggerEntry[];
+          }
+        } catch { /* ignore corrupt history */ }
+        history.push({ ruleId: optInput.ruleId, timestamp: new Date().toISOString() });
+        try {
+          mkdirSync(join(optInput.projectDir, ".harness"), { recursive: true });
+          writeFileSync(historyPath, JSON.stringify(history, null, 2), "utf-8");
+        } catch { /* best-effort write */ }
+        repeatedPattern = shouldAutoTrigger(history);
+      }
+
+      const result: Record<string, unknown> = { suggestions, stats };
+      if (repeatedPattern) {
+        result.repeatedPattern = repeatedPattern;
+      }
+
       return {
-        content: [{ type: "text", text: JSON.stringify({ suggestions, stats }, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       };
     }
 

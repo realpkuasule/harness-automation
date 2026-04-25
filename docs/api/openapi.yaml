@@ -220,6 +220,7 @@ paths:
         generate_config → validate_setup。支持 preset 嵌套参数简化调用。
         额外生成：.husky/ Git hooks、.github/workflows/ci.yml CI 流水线、package.json 依赖检查与合并。
         适用于二次运行、CI 环境、有经验的用户。
+        dryRun=true 时返回空 files 数组和 summary（不含 validation/errors）。
       operationId: initHarness
       tags: [核心流程]
       parameters:
@@ -309,6 +310,7 @@ paths:
         从 .harness/backups/ 恢复原始文件，清理 generate_config 生成的新文件。
         支持指定 backupId 或回滚最新备份。
         list=true 时列出可用备份而不执行恢复。
+        list=true 时如果没有备份目录，返回 ROLLBACK_FAILED 错误。
         设计中的 target 参数在实现中被替换为 backupId + list 参数。
       operationId: rollback
       tags: [核心流程]
@@ -489,7 +491,7 @@ paths:
       description: >
         实现新增工具。支持三种导入方式：
         presetId（加载内置预设）、exportJson（JSON 字符串）、filePath（导出文件路径）。
-        三者至少提供一个。
+        三者至少提供一个。当提供多个来源时，优先级：presetId > exportJson > filePath。
       operationId: importRules
       tags: [规则管理]
       parameters:
@@ -918,7 +920,7 @@ paths:
       description: >
         实现新增工具。根据规则 ID、场景或代码上下文
         返回包含 why/whatInstead/reference 三要素的结构化错误信息。
-        支持记录评价（rateAfter）。
+        支持记录评价（rateAfter）。所有参数可选。不提供 ruleId 或 scenario 时 suggestions 为空数组。
       operationId: optimizeErrorMessage
       tags: [错误优化]
       parameters:
@@ -939,7 +941,7 @@ paths:
               properties:
                 projectDir:
                   type: string
-                  description: 项目目录路径。不传时不记录评价数据。
+                  description: 项目目录路径。不传时不记录评价数据。另用于记录触发历史以检测重复错误模式（需同时提供 ruleId）。
                 ruleId:
                   type: string
                 ruleName:
@@ -969,6 +971,9 @@ paths:
                   stats:
                     $ref: "#/components/schemas/EvaluationStats"
                     description: 评价统计数据。仅当 projectDir 已设置且 rateAfter !== false 时返回。未记录评价时此字段不出现。
+                  repeatedPattern:
+                    $ref: "#/components/schemas/CognitiveAutoTrigger"
+                    description: 重复错误模式检测结果。当同一规则在最近 3 次触发中出现 ≥2 次时返回，供 Skill 层决定是否自动触发 cognitive_skill educational。
 
 # ============================================================
 # Components
@@ -1232,7 +1237,7 @@ components:
           default: false
         preset:
           type: object
-          description: 嵌套 preset 对象（实现新增，支持简化调用）
+          description: 嵌套 preset 对象，作为扁平参数的替代嵌套写法。扁平参数优先级高于 preset。使用 preset 时仍需提供 projectPhase、teamSize、techStack（或通过 preset 填充）。
           properties:
             techStack:
               type: array
@@ -1632,6 +1637,7 @@ components:
             $ref: "#/components/schemas/GenerationRecord"
         summary:
           type: object
+          description: 当无引擎输出时返回空对象 {}。
           properties:
             totalDecisions:
               type: integer
@@ -2004,12 +2010,37 @@ components:
     # Cognitive Layer
     # ============================================================
     CognitiveResponse:
+      description: >
+        认知层响应。三种结果类型通过 skillType 字段区分（discriminated union）：
+        "diagnostic" → DiagnosticResult, "educational" → EducationalResult, "decision-support" → DecisionSupportResult。
       oneOf:
         - $ref: "#/components/schemas/DiagnosticResult"
         - $ref: "#/components/schemas/EducationalResult"
         - $ref: "#/components/schemas/DecisionSupportResult"
       discriminator:
         propertyName: skillType
+
+    CognitiveAutoTrigger:
+      description: >
+        重复错误模式自动触发信息。当 shouldAutoTrigger 检测到同一规则在短期内重复触发时返回，
+        包含建议调用的 cognitive_skill 参数。Skill 层可直接用此信息调用 cognitive_skill。
+        此结构可直接作为 cognitive_skill 的输入（skillType=educational, ruleId, topic, experienceLevel 字段对应）。
+      type: object
+      properties:
+        skillType:
+          type: string
+          enum: [educational]
+          description: 固定为 educational（当前仅支持自动触发教育型技能）
+        ruleId:
+          type: string
+          description: 重复触发的规则 ID
+        topic:
+          type: string
+          description: 自动生成的提示语，说明重复模式检测结果
+        experienceLevel:
+          type: string
+          enum: [beginner, intermediate, advanced]
+          description: 推荐的学习者经验级别
 
     DiagnosticResult:
       type: object

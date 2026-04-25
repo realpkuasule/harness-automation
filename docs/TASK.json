@@ -1673,6 +1673,144 @@
       "fixPlanRef": "P3-1",
       "gapType": "新发现",
       "verification": "yq eval 确认三字段含 minimum:1 maximum:5"
+    },
+    {
+      "id": "P13-1",
+      "title": "Spec — 补充 skill 层相关 API 字段",
+      "description": "补充 OpenAPI 中 optimize_error_message 响应的 repeatedPattern 字段；完善 CognitiveResponse discriminator 文档；确保所有 MCP 工具响应格式对 Skill 层消费友好。依据：docs/plans/as-claude-code-skill.md §Phase 3 & Phase 1",
+      "phase": 13,
+      "day": 1,
+      "status": "completed",
+      "priority": "high",
+      "dependencies": []
+    },
+    {
+      "id": "P13-2",
+      "title": "创建 skill/SKILL.md — 核心 Skill 定义",
+      "description": "创建 skill/SKILL.md，含完整 11 步工作流：Step 0 assess_suitability → Step 1 query_state 断点续做 → Step 2 AskUserQuestion 收集项目信息 → Step 3 evaluate_rules → Step 4 scan_codebase → Step 5 确认推荐 → Step 6 confirm_decisions → Step 7 generate_config (先 dry_run) → Step 8 validate_setup → Step 9 rollback → Step 10 A/B 测试。Frontmatter 含所有触发短语断点续做覆盖 4 种 phase 路径。用户面枚举到 MCP 枚举映射表。异常处理引导。依据：docs/plans/as-claude-code-skill.md §5",
+      "phase": 13,
+      "day": 2,
+      "status": "completed",
+      "priority": "high",
+      "dependencies": []
+    },
+    {
+      "id": "P13-3",
+      "title": "创建 skill/install.sh — 一键安装脚本",
+      "description": "创建安装脚本，功能：检查目标目录是否为 Git 仓库；在 .claude/settings.json 中注入 harness-automation MCP server 配置；复制 rules.json 到目标项目的 .harness/ 目录；处理已有 settings.json 的 merge（不覆盖已有配置）。依据：docs/plans/as-claude-code-skill.md §2.1",
+      "phase": 13,
+      "day": 1,
+      "status": "completed",
+      "priority": "high",
+      "dependencies": [
+        "P13-2"
+      ]
+    },
+    {
+      "id": "P13-4",
+      "title": "接入 shouldAutoTrigger 到优化错误信息流程",
+      "description": "在 optimize_error_message handler 中记录调用历史到 .harness/trigger_history.json；每次调用后执行 shouldAutoTrigger 检测重复错误模式；在响应中添加 repeatedPattern? 字段供 Skill 层决定是否自动触发 cognitive_skill educational。依据：docs/plans/as-claude-code-skill.md §3.1",
+      "phase": 13,
+      "day": 1,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [
+        "P13-1"
+      ]
+    },
+    {
+      "id": "P13-5",
+      "title": "更新 package.json 添加 bin 字段",
+      "description": "在 mcp-server/package.json 中添加 bin 字段，指向 dist/index.js，支持 npx harness-automation 或全局安装后直接调用。依据：docs/plans/as-claude-code-skill.md §2.2",
+      "phase": 13,
+      "day": 1,
+      "status": "completed",
+      "priority": "low",
+      "dependencies": []
+    },
+    {
+      "id": "P13-6",
+      "title": "创建 Skill 工作流集成测试",
+      "description": "创建 mcp-server/src/__tests__/skill-workflow.test.ts。测试场景：完整流程（assess_suitability → evaluate_rules → confirm_decisions → generate_config dry_run → generate_config → validate_setup）；断点续做（4 种 phase 路径各走一遍）；dry_run 不写文件验证。依据：docs/plans/as-claude-code-skill.md §4.1",
+      "phase": 13,
+      "day": 2,
+      "status": "completed",
+      "priority": "high",
+      "dependencies": [
+        "P13-2"
+      ]
+    },
+    {
+      "id": "P13-7",
+      "title": "创建安装脚本测试",
+      "description": "创建 skill/install.test.sh。测试：在临时目录安装验证 .claude/settings.json 配置正确；已有 settings.json 时 merge 而非覆盖；非 Git 仓库时正常报错退出。依据：docs/plans/as-claude-code-skill.md §4.3",
+      "phase": 13,
+      "day": 1,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [
+        "P13-3"
+      ]
+    },
+    {
+      "id": "P13-8",
+      "title": "创建用户文档 usage-as-claude-code-skill.md",
+      "description": "创建 docs/usage-as-claude-code-skill.md。内容：快速开始（一分钟安装）、完整工作流说明、触发短语大全、断点续做说明、回滚指南、A/B 测试说明、认知层 Skills 说明、FAQ。依据：docs/plans/as-claude-code-skill.md §5.1",
+      "phase": 13,
+      "day": 1,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [
+        "P13-2",
+        "P13-3",
+        "P13-4"
+      ]
+    },
+    {
+      "id": "P13-9",
+      "title": "Code — 修复 query_state.lastEvalAt 时间戳漂移",
+      "description": "修复 query_state 返回的 lastEvalAt 字段在非 eval 操作后（confirm_decisions/setProjectInfo 等）偏离实际评估时间的问题。\n依据：docs/plans/full-fix-20260425-2002.md §P1-1\n改动：\n1. types.ts — HarnessState 接口添加 evaluatedAt?: string 字段\n2. state.ts — setEngineOutput/setEngineInput 方法中保存 evaluatedAt 时间戳\n3. index.ts:376 — lastEvalAt 改为使用 state.evaluatedAt ?? state.updatedAt（向后兼容旧状态文件）",
+      "phase": 13,
+      "day": 1,
+      "status": "completed",
+      "priority": "high",
+      "dependencies": []
+    },
+    {
+      "id": "P13-10",
+      "title": "Code — 收紧 CognitiveAutoTrigger 返回类型边界",
+      "description": "将 shouldAutoTrigger() 的返回类型从 CognitiveRequest（11+ 字段）收窄为 CognitiveAutoTrigger（4 字段精确匹配 OpenAPI schema），防止未来修改时意外向外泄漏额外字段。\n依据：docs/plans/full-fix-20260425-2002.md §P1-2\n改动：\n1. types.ts — 新增 CognitiveAutoTrigger 接口（skillType: \"educational\", ruleId, topic, experienceLevel）\n2. orchestrator.ts — shouldAutoTrigger 返回类型改为 CognitiveAutoTrigger | null\n3. index.ts — repeatedPattern 变量类型改为 CognitiveAutoTrigger",
+      "phase": 13,
+      "day": 1,
+      "status": "completed",
+      "priority": "high",
+      "dependencies": [
+        "P13-9"
+      ]
+    },
+    {
+      "id": "P13-11",
+      "title": "Spec — 更新工具描述补充遗漏文档（projectDir/preset/CognitiveAutoTrigger/validatedAt）",
+      "description": "更新 OpenAPI spec 中 4 处描述信息：\n依据：docs/plans/full-fix-20260425-2002.md §P2-1~P2-4\n改动：\n1. openapi.yaml:942 — optimize_error_message.projectDir 补充触发历史记录说明\n2. openapi.yaml:1238 — init_harness.preset 修正误导性描述\n3. openapi.yaml:2020 — CognitiveAutoTrigger 补充与 cognitive_skill 的调用关系说明\n4. openapi.yaml HarnessState — 补充缺失的 validatedAt 字段",
+      "phase": 13,
+      "day": 1,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [
+        "P13-10"
+      ]
+    },
+    {
+      "id": "P13-12",
+      "title": "Spec — 补充 5 个边界情况文档",
+      "description": "在 OpenAPI spec 中新增 5 个边界情况的文档说明：\n依据：docs/plans/full-fix-20260425-2002.md §P3-1~P3-5\n改动：\n1. rollback 描述 — list=true 时无备份目录的行为\n2. init_harness 描述 — dryRun=true 时的响应形状\n3. import_rules 描述 — 多来源优先级（presetId > exportJson > filePath）\n4. query_state summary 描述 — 无引擎输出时返回空对象\n5. optimize_error_message 描述 — 无 ruleId/scenario 时返回空数组",
+      "phase": 13,
+      "day": 1,
+      "status": "completed",
+      "priority": "low",
+      "dependencies": [
+        "P13-11"
+      ]
     }
   ]
 }

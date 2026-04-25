@@ -71,6 +71,7 @@ export class StateManager {
     const state = this.load();
     state.engineInput = input;
     state.phase = "evaluated";
+    state.evaluatedAt = new Date().toISOString();
     this.save(state);
     return state;
   }
@@ -80,6 +81,7 @@ export class StateManager {
     const state = this.load();
     state.engineOutput = output;
     state.phase = "evaluated";
+    state.evaluatedAt = new Date().toISOString();
     this.save(state);
     return state;
   }
@@ -145,6 +147,7 @@ export class StateManager {
       checkedAt: new Date().toISOString(),
     };
     state.validatedAt = new Date().toISOString();
+    state.phase = "validated";
     this.save(state);
     return state;
   }

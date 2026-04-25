@@ -1,9 +1,12 @@
 {
   "name": "harness-automation",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "description": "Harness Automation System - MCP Server for automated constraint configuration",
   "main": "dist/index.js",
   "type": "module",
+  "bin": {
+    "harness-automation": "./dist/index.js"
+  },
   "scripts": {
     "build": "tsc && cp src/rules.json dist/rules.json",
     "start": "node dist/index.js",

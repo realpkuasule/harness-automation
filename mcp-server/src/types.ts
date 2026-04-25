@@ -229,6 +229,7 @@ export interface HarnessState {
   confirmedAt?: string;
   configOutput?: GenerateConfigOutput;
   version: string;
+  evaluatedAt?: string;
   // Design §4.1 missing fields:
   sessionId?: string;
   validatedAt?: string;
@@ -327,6 +328,14 @@ export interface ErrorSuggestion {
   templateId: string;
   renderedMessage: string;
   confidence: number;
+}
+
+/** Cognitive auto-trigger for repeated error pattern detection (OpenAPI CognitiveAutoTrigger). */
+export interface CognitiveAutoTrigger {
+  skillType: "educational";
+  ruleId: string;
+  topic: string;
+  experienceLevel: "beginner" | "intermediate" | "advanced";
 }
 
 // ============================================================

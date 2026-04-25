@@ -442,9 +442,9 @@ describe("TC11 — init_harness: one-click init", () => {
     expect(filePaths).toContain("CLAUDE.md");
     expect(filePaths).toContain(".claude/settings.json");
 
-    // State is generated
+    // State is validated (init_harness includes validate_setup)
     const stateResult = await callTool(h.client, "query_state", { projectDir: h.tmpDir });
-    expect((parseResult(stateResult) as any).phase).toBe("generated");
+    expect((parseResult(stateResult) as any).phase).toBe("validated");
   });
 });
 
