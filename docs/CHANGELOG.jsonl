@@ -113,3 +113,11 @@
 {"timestamp": "2026-04-25T19:03:53+08:00", "type": "fix", "phase": 11, "description": "P11-5: Spec import_rules 响应改为 oneOf 覆盖三种导入路径"}
 {"timestamp": "2026-04-25T19:03:53+08:00", "type": "feat", "phase": 11, "description": "P11-6: Spec 定义 DepCheckResult 替换模糊的 recommendedActions"}
 {"timestamp": "2026-04-25T19:03:53+08:00", "type": "fix", "phase": 11, "description": "P11-7: init_harness 响应暴露文件写入错误（Impl+Spec）"}
+{"timestamp": "2026-04-25T19:26:41+08:00", "type": "fix", "phase": 12, "description": "P12-1: 修复 optimize_error_message 移出 projectDir required 以匹配实现"}
+{"timestamp": "2026-04-25T19:26:41+08:00", "type": "fix", "phase": 12, "description": "P12-2: 修复 start_ab_test 响应中 endTime 标记为条件存在"}
+{"timestamp": "2026-04-25T19:26:41+08:00", "type": "fix", "phase": 12, "description": "P12-3: 修复 init_harness 始终返回 errors 数组而非省略"}
+{"timestamp": "2026-04-25T19:26:41+08:00", "type": "fix", "phase": 12, "description": "P12-4: 补充 generate_config decisions 回退行为文档"}
+{"timestamp": "2026-04-25T19:26:41+08:00", "type": "fix", "phase": 12, "description": "P12-5: 补充 query_state 条件发射字段说明"}
+{"timestamp": "2026-04-25T19:26:41+08:00", "type": "fix", "phase": 12, "description": "P12-6: 补充 optimize_error_message stats 条件返回说明"}
+{"timestamp": "2026-04-25T19:26:41+08:00", "type": "fix", "phase": 12, "description": "P12-7: 补充 suggestedCommands 条件返回说明"}
+{"timestamp": "2026-04-25T19:26:41+08:00", "type": "docs", "phase": 12, "description": "P12-8: 补充 RuleDefinition cost/feedbackSpeed/frequency 范围约束"}

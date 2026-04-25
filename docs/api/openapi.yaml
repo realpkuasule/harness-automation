@@ -112,6 +112,8 @@ paths:
         纯读取操作，不修改任何文件。
         检查 .harness/state.json 是否存在，返回当前阶段和项目摘要信息。
         用于断点续做。
+        注意：project、lastEvalAt、confirmedAt、validatedAt、validation、sessionId、generationLog
+        仅在对应数据存在时返回，不保证始终存在。
       operationId: queryState
       tags: [核心流程]
       parameters:
@@ -720,6 +722,7 @@ paths:
                   endTime:
                     type: string
                     format: date-time
+                    description: 测试结束时间（仅 status=started 时存在）
                   message:
                     type: string
                     description: 人类可读的状态说明
@@ -932,10 +935,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [projectDir]
+              required: []
               properties:
                 projectDir:
                   type: string
+                  description: 项目目录路径。不传时不记录评价数据。
                 ruleId:
                   type: string
                 ruleName:
@@ -964,6 +968,7 @@ paths:
                       $ref: "#/components/schemas/ErrorSuggestion"
                   stats:
                     $ref: "#/components/schemas/EvaluationStats"
+                    description: 评价统计数据。仅当 projectDir 已设置且 rateAfter !== false 时返回。未记录评价时此字段不出现。
 
 # ============================================================
 # Components
@@ -1078,12 +1083,18 @@ components:
           type: boolean
         cost:
           type: integer
+          minimum: 1
+          maximum: 5
           description: 执行代价（1-5）
         feedbackSpeed:
           type: integer
+          minimum: 1
+          maximum: 5
           description: 反馈速度（1-5，1=最快）
         frequency:
           type: integer
+          minimum: 1
+          maximum: 5
           description: 发生频率（1-5）
         recommendedMedium:
           $ref: "#/components/schemas/RuleMedium"
@@ -1156,7 +1167,10 @@ components:
           type: string
         decisions:
           type: array
-          description: 确认后的规则决策。设计字段名为 recommendations，实现使用 decisions。
+          description: >
+            确认后的规则决策。设计字段名为 recommendations，实现使用 decisions。
+            传空数组时将回退到 state.json 中的已存决策（evaluate_rules 的结果）。
+            两者均为空时返回 NO_DECISIONS 错误。
           items:
             type: object
             required: [ruleId, recommendedMedium]
@@ -2272,7 +2286,7 @@ components:
           type: array
           items:
             type: string
-          description: 建议执行的安装命令
+          description: 建议执行的安装命令。仅在检测到缺失依赖时返回。
     InitHarnessSummary:
       type: object
       properties:

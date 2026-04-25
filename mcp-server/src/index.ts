@@ -588,7 +588,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
           : null,
       };
 
-      const output = { files, summary, errors: errors.length > 0 ? errors : undefined };
+      const output = { files, summary, errors };
 
       sm.setConfigOutput({ files, summary: fileSummary, errors, warnings: [] });
       sm.setProjectInfo(input.techStack, input.projectPhase, input.teamSize);
