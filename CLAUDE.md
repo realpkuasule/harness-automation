@@ -13,6 +13,27 @@ Harness Automation System 是一个基于 MCP (Model Context Protocol) 的自动
 - **Vitest** (测试框架)
 - **ESLint + typescript-eslint** (代码规范)
 
+## 协作
+- 任务看板: "./docs/TASK.json"。
+- 变更记录: "./docs/CHANGELOG.jsonl"
+
+## 项目管理脚本
+
+```bash
+# 任务看板操作 (scripts/task.py)
+python3 scripts/task.py summary                 # 按状态/优先级统计
+python3 scripts/task.py list [--status pending|completed|in_progress]
+python3 scripts/task.py list --phase 6
+python3 scripts/task.py show P6-5               # 查看任务详情
+python3 scripts/task.py update P6-5 completed   # 更新任务状态
+
+# 变更记录操作 (scripts/changelog.py)
+python3 scripts/changelog.py add feat 6 "P6-X: 实现某功能"
+python3 scripts/changelog.py add fix 4 "P4-Y: 修复某问题"
+python3 scripts/changelog.py list [n]           # 查看最近 n 条
+python3 scripts/changelog.py search <keyword>   # 搜索变更
+```
+
 ## 目录结构
 
 ```

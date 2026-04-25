@@ -8,7 +8,7 @@ function makeAnalytics(overrides?: Partial<AnalyticsData>): AnalyticsData {
     collectedAt: "2026-01-01T00:00:00.000Z",
     summary: {
       totalRules: 2,
-      byMedium: { linter: 1, "claude.md": 1 },
+      byMedium: { linter_warn: 1, claude_md: 1 },
       averageConfidence: 0.78,
       cognitiveRequired: 1,
       highConfidence: 1,
@@ -17,7 +17,7 @@ function makeAnalytics(overrides?: Partial<AnalyticsData>): AnalyticsData {
       {
         ruleId: "R001",
         ruleName: "no-console-log",
-        medium: "linter",
+        medium: "linter_warn",
         confidence: 0.85,
         cognitiveRequired: false,
         category: "code-quality",
@@ -25,7 +25,7 @@ function makeAnalytics(overrides?: Partial<AnalyticsData>): AnalyticsData {
       {
         ruleId: "R003",
         ruleName: "prefer-early-return",
-        medium: "claude.md",
+        medium: "claude_md",
         confidence: 0.7,
         cognitiveRequired: true,
         category: "code-style",
@@ -110,7 +110,7 @@ describe("RuleAdapter", () => {
           {
             ruleId: "R016",
             ruleName: "no-debugger",
-            medium: "linter",
+            medium: "linter_warn",
             confidence: 0.4,
             cognitiveRequired: false,
             category: "code-quality",
@@ -130,7 +130,7 @@ describe("RuleAdapter", () => {
       const result = adapter.analyze(analytics, usage);
       const downgrades = result.recommendations.filter((r) => r.action === "downgrade");
       expect(downgrades.length).toBe(1);
-      expect(downgrades[0].suggestedMedium).toBe("settings.json");
+      expect(downgrades[0].suggestedMedium).toBe("settings");
     });
 
     it("recommends upgrade for high confidence in soft medium", () => {
@@ -139,14 +139,13 @@ describe("RuleAdapter", () => {
           {
             ruleId: "R013",
             ruleName: "code-review-required",
-            medium: "claude.md",
+            medium: "claude_md",
             confidence: 0.85,
             cognitiveRequired: false,
             category: "process",
           },
         ],
       });
-      // fixRate (0.3) below FIX_UPGRADE_THRESHOLD, but confidence (0.85) >= 0.8
       const usage: RuleUsageRecord[] = [
         {
           ruleId: "R013",
@@ -160,7 +159,7 @@ describe("RuleAdapter", () => {
       const result = adapter.analyze(analytics, usage);
       const upgrades = result.recommendations.filter((r) => r.action === "upgrade");
       expect(upgrades.length).toBeGreaterThan(0);
-      expect(upgrades[0].suggestedMedium).toBe("linter");
+      expect(upgrades[0].suggestedMedium).toBe("linter_warn");
     });
 
     it("populates summary counts correctly", () => {
@@ -181,20 +180,144 @@ describe("RuleAdapter", () => {
           {
             ruleId: "R001",
             ruleName: "no-console-log",
-            medium: "linter",
+            medium: "linter_warn",
             confidence: 0.85,
             cognitiveRequired: false,
             category: "code-quality",
           },
         ],
       });
-      // Usage with triggeredCount=0 should be skipped
       const usage: RuleUsageRecord[] = [
         { ruleId: "R001", triggeredCount: 0, fixedCount: 0, bypassedCount: 0, lastTriggered: null },
       ];
 
       const result = adapter.analyze(analytics, usage);
       expect(result.summary.total).toBe(0);
+    });
+  });
+
+  describe("bypass downgrade threshold boundaries", () => {
+    it("keeps when bypass rate is just below threshold (0.29)", () => {
+      const analytics = makeAnalytics({
+        rules: [{ ruleId: "R001", ruleName: "no-console-log", medium: "linter_warn", confidence: 0.85, cognitiveRequired: false, category: "code-quality" }],
+      });
+      const usage: RuleUsageRecord[] = [
+        { ruleId: "R001", triggeredCount: 100, fixedCount: 71, bypassedCount: 29, lastTriggered: "2026-01-01T00:00:00.000Z" },
+      ];
+      const result = adapter.analyze(analytics, usage);
+      expect(result.recommendations.filter((r) => r.action === "downgrade").length).toBe(0);
+    });
+
+    it("keeps when bypass at claude_md (already at softest medium)", () => {
+      const analytics = makeAnalytics({
+        rules: [{ ruleId: "R003", ruleName: "prefer-early-return", medium: "claude_md", confidence: 0.7, cognitiveRequired: true, category: "code-style" }],
+      });
+      const usage: RuleUsageRecord[] = [
+        { ruleId: "R003", triggeredCount: 10, fixedCount: 2, bypassedCount: 8, lastTriggered: "2026-01-01T00:00:00.000Z" },
+      ];
+      const result = adapter.analyze(analytics, usage);
+      const downgrades = result.recommendations.filter((r) => r.action === "downgrade");
+      expect(downgrades.length).toBe(0);
+    });
+  });
+
+  describe("low confidence downgrade across media", () => {
+    it("downgrades hook to linter_error when confidence is low", () => {
+      const analytics = makeAnalytics({
+        rules: [{ ruleId: "R004", ruleName: "commit-message-convention", medium: "hook", confidence: 0.3, cognitiveRequired: false, category: "process" }],
+      });
+      const usage: RuleUsageRecord[] = [
+        { ruleId: "R004", triggeredCount: 5, fixedCount: 3, bypassedCount: 2, lastTriggered: "2026-01-01T00:00:00.000Z" },
+      ];
+      const result = adapter.analyze(analytics, usage);
+      const downgrades = result.recommendations.filter((r) => r.action === "downgrade");
+      expect(downgrades.length).toBe(1);
+      expect(downgrades[0].suggestedMedium).toBe("linter_error");
+    });
+
+    it("keeps when low confidence at claude_md (cannot downgrade further)", () => {
+      const analytics = makeAnalytics({
+        rules: [{ ruleId: "R003", ruleName: "prefer-early-return", medium: "claude_md", confidence: 0.2, cognitiveRequired: true, category: "code-style" }],
+      });
+      const usage: RuleUsageRecord[] = [
+        { ruleId: "R003", triggeredCount: 5, fixedCount: 3, bypassedCount: 2, lastTriggered: "2026-01-01T00:00:00.000Z" },
+      ];
+      const result = adapter.analyze(analytics, usage);
+      expect(result.recommendations.filter((r) => r.action === "downgrade").length).toBe(0);
+    });
+  });
+
+  describe("fix rate upgrade boundaries", () => {
+    it("keeps when fix rate is below threshold", () => {
+      const analytics = makeAnalytics({
+        rules: [{ ruleId: "R003", ruleName: "prefer-early-return", medium: "claude_md", confidence: 0.7, cognitiveRequired: true, category: "code-style" }],
+      });
+      const usage: RuleUsageRecord[] = [
+        { ruleId: "R003", triggeredCount: 10, fixedCount: 5, bypassedCount: 5, lastTriggered: "2026-01-01T00:00:00.000Z" },
+      ];
+      const result = adapter.analyze(analytics, usage);
+      expect(result.recommendations.filter((r) => r.action === "upgrade").length).toBe(0);
+    });
+
+    it("upgrades from linter_warn to linter_error when fix rate is very high", () => {
+      const analytics = makeAnalytics({
+        rules: [{ ruleId: "R001", ruleName: "no-console-log", medium: "linter_warn", confidence: 0.85, cognitiveRequired: false, category: "code-quality" }],
+      });
+      const usage: RuleUsageRecord[] = [
+        { ruleId: "R001", triggeredCount: 10, fixedCount: 9, bypassedCount: 1, lastTriggered: "2026-01-01T00:00:00.000Z" },
+      ];
+      const result = adapter.analyze(analytics, usage);
+      const upgrades = result.recommendations.filter((r) => r.action === "upgrade");
+      expect(upgrades.length).toBeGreaterThan(0);
+      expect(upgrades[0].suggestedMedium).toBe("linter_error");
+    });
+  });
+
+  describe("high confidence in non-linter soft media", () => {
+    it("upgrades from settings to linter_warn with high confidence", () => {
+      const analytics = makeAnalytics({
+        rules: [{ ruleId: "R009", ruleName: "no-duplicate-code", medium: "settings", confidence: 0.9, cognitiveRequired: false, category: "code-quality" }],
+      });
+      const usage: RuleUsageRecord[] = [
+        { ruleId: "R009", triggeredCount: 5, fixedCount: 3, bypassedCount: 0, lastTriggered: "2026-01-01T00:00:00.000Z" },
+      ];
+      const result = adapter.analyze(analytics, usage);
+      const upgrades = result.recommendations.filter((r) => r.action === "upgrade");
+      expect(upgrades.length).toBe(1);
+      expect(upgrades[0].suggestedMedium).toBe("linter_warn");
+    });
+  });
+
+  describe("none strictest medium", () => {
+    it("cannot upgrade none (already strictest)", () => {
+      const analytics = makeAnalytics({
+        rules: [{ ruleId: "R007", ruleName: "test-before-merge", medium: "none", confidence: 0.9, cognitiveRequired: false, category: "process" }],
+      });
+      const usage: RuleUsageRecord[] = [
+        { ruleId: "R007", triggeredCount: 10, fixedCount: 9, bypassedCount: 1, lastTriggered: "2026-01-01T00:00:00.000Z" },
+      ];
+      const result = adapter.analyze(analytics, usage);
+      expect(result.recommendations.filter((r) => r.action === "upgrade").length).toBe(0);
+    });
+  });
+
+  describe("mixed multi-rule scenarios", () => {
+    it("produces correct summary with multiple rules of different outcomes", () => {
+      const analytics = makeAnalytics({
+        rules: [
+          { ruleId: "R001", ruleName: "no-console-log", medium: "linter_warn", confidence: 0.85, cognitiveRequired: false, category: "code-quality" },
+          { ruleId: "R003", ruleName: "prefer-early-return", medium: "claude_md", confidence: 0.7, cognitiveRequired: true, category: "code-style" },
+          { ruleId: "R016", ruleName: "no-debugger", medium: "hook", confidence: 0.85, cognitiveRequired: false, category: "code-quality" },
+        ],
+      });
+      const usage: RuleUsageRecord[] = [
+        { ruleId: "R001", triggeredCount: 10, fixedCount: 2, bypassedCount: 8, lastTriggered: "2026-01-01T00:00:00.000Z" },
+        { ruleId: "R003", triggeredCount: 0, fixedCount: 0, bypassedCount: 0, lastTriggered: null },
+        { ruleId: "R016", triggeredCount: 10, fixedCount: 9, bypassedCount: 1, lastTriggered: "2026-01-01T00:00:00.000Z" },
+      ];
+      const result = adapter.analyze(analytics, usage);
+      expect(result.recommendations.length).toBeGreaterThan(0);
+      expect(result.summary.total).toBe(result.recommendations.length);
     });
   });
 });

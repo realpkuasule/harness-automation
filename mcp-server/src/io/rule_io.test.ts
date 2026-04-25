@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { RuleIO } from "./rule_io.js";
@@ -212,6 +212,101 @@ describe("RuleIO", () => {
       expect(ids).toContain("python-script");
       expect(ids).toContain("prototype");
       expect(ids).toContain("go-service");
+    });
+
+    it("filters presets by techStack", () => {
+      const presets = io.listPresets();
+      const pythonPresets = presets.filter((p) => p.techStack.includes("python"));
+      expect(pythonPresets.length).toBeGreaterThan(0);
+      for (const p of pythonPresets) {
+        expect(p.techStack).toContain("python");
+      }
+    });
+
+    it("all preset decisions have valid ruleId format", () => {
+      const presets = io.listPresets();
+      for (const preset of presets) {
+        for (const decision of preset.decisions) {
+          expect(decision.ruleId).toMatch(/^R\d{3}$/);
+        }
+      }
+    });
+  });
+
+  describe("exportRules — edge cases", () => {
+    it("exports empty decisions array", () => {
+      const data = io.exportRules([]);
+      expect(data.rules).toEqual([]);
+      expect(data.version).toBe("1.0");
+    });
+
+    it("exports all 5 medium types", () => {
+      const decisions: RuleDecision[] = [
+        { ruleId: "R001", ruleName: "no-console-log", recommendedMedium: "linter", alternativeMedia: [], confidence: 0.8, reasons: [], cognitiveLayerRequired: false, cognitiveSkillTriggers: [] },
+        { ruleId: "R002", ruleName: "some-hook", recommendedMedium: "hook", alternativeMedia: [], confidence: 0.8, reasons: [], cognitiveLayerRequired: false, cognitiveSkillTriggers: [] },
+        { ruleId: "R003", ruleName: "some-ci", recommendedMedium: "ci", alternativeMedia: [], confidence: 0.8, reasons: [], cognitiveLayerRequired: false, cognitiveSkillTriggers: [] },
+        { ruleId: "R004", ruleName: "some-claude", recommendedMedium: "claude.md", alternativeMedia: [], confidence: 0.8, reasons: [], cognitiveLayerRequired: false, cognitiveSkillTriggers: [] },
+        { ruleId: "R005", ruleName: "some-settings", recommendedMedium: "settings.json", alternativeMedia: [], confidence: 0.8, reasons: [], cognitiveLayerRequired: false, cognitiveSkillTriggers: [] },
+      ];
+      const data = io.exportRules(decisions);
+      const exportedMedia = data.rules.map((r) => r.recommendedMedium);
+      expect(exportedMedia).toContain("linter");
+      expect(exportedMedia).toContain("hook");
+      expect(exportedMedia).toContain("ci");
+      expect(exportedMedia).toContain("claude.md");
+      expect(exportedMedia).toContain("settings.json");
+    });
+  });
+
+  describe("importRules — edge cases", () => {
+    it("partially matches definitions, falls back to export values", () => {
+      const decisions = makeDecisions();
+      decisions.push({
+        ruleId: "R999", ruleName: "unknown-rule", recommendedMedium: "claude.md",
+        alternativeMedia: [], confidence: 0.5, reasons: [], cognitiveLayerRequired: false, cognitiveSkillTriggers: [],
+      });
+      const data = io.exportRules(decisions);
+      const defs = makeDefinitions();
+      const result = io.importRules(data, defs);
+      const matched = result.decisions.find((d) => d.ruleId === "R001")!;
+      expect(matched.cognitiveLayerRequired).toBe(false); // from definition
+      const unmatched = result.decisions.find((d) => d.ruleId === "R999")!;
+      expect(unmatched.cognitiveLayerRequired).toBe(false); // fallback
+    });
+
+    it("imports empty rules array", () => {
+      const data = io.exportRules([]);
+      const result = io.importRules(data);
+      expect(result.decisions).toEqual([]);
+      expect(result.warnings).toEqual([]);
+      expect(result.total).toBe(0);
+    });
+  });
+
+  describe("roundtrip", () => {
+    it("export → import preserves decisions", () => {
+      const original = makeDecisions();
+      const data = io.exportRules(original);
+      const defs = makeDefinitions();
+      const result = io.importRules(data, defs);
+      expect(result.total).toBe(original.length);
+      for (const d of result.decisions) {
+        const orig = original.find((o) => o.ruleId === d.ruleId);
+        expect(orig).toBeDefined();
+        expect(d.recommendedMedium).toBe(orig!.recommendedMedium);
+        expect(d.cognitiveLayerRequired).toBe(orig!.cognitiveLayerRequired);
+      }
+    });
+
+    it("export → save → load → import completes full cycle", () => {
+      const original = makeDecisions();
+      const data = io.exportRules(original);
+      const filePath = io.saveExport(data, "full-cycle.json");
+      const loaded = io.loadExport(filePath);
+      const defs = makeDefinitions();
+      const result = io.importRules(loaded, defs);
+      expect(result.total).toBe(original.length);
+      expect(existsSync(filePath)).toBe(true);
     });
   });
 });

@@ -10,7 +10,7 @@ export interface SettingsJsonConfig {
  */
 export function generateSettingsJson(config: SettingsJsonConfig): string {
   const settingsRules = config.decisions.filter(
-    (d) => d.recommendedMedium === "settings.json",
+    (d) => d.recommendedMedium === "settings" || d.recommendedMedium === "settings.json",
   );
 
   const settings: Record<string, unknown> = {

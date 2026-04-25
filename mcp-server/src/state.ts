@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { HarnessState, HarnessStatus, EngineInput, EngineOutput, GenerateConfigOutput, RuleDecision } from "./types.js";
+import { randomUUID } from "node:crypto";
+import type { HarnessState, HarnessStatus, EngineInput, EngineOutput, GenerateConfigOutput, RuleDecision, GenerationRecord, TechStack, ProjectPhase, TeamSize } from "./types.js";
 
 const STATE_DIR = ".harness";
 const STATE_FILE = "state.json";
@@ -37,7 +38,13 @@ export class StateManager {
         return this._default();
       }
       const raw = readFileSync(this.statePath, "utf-8");
-      return JSON.parse(raw) as HarnessState;
+      const parsed = JSON.parse(raw) as HarnessState & { status?: HarnessStatus };
+      // Migrate from old "status" field to "phase" (design §4.1)
+      if (parsed.status !== undefined && parsed.phase === undefined) {
+        parsed.phase = parsed.status;
+        delete parsed.status;
+      }
+      return parsed as HarnessState;
     } catch {
       return this._default();
     }
@@ -54,7 +61,7 @@ export class StateManager {
   /** Update the harness status. */
   updateStatus(status: HarnessStatus): HarnessState {
     const state = this.load();
-    state.status = status;
+    state.phase = status;
     this.save(state);
     return state;
   }
@@ -63,7 +70,7 @@ export class StateManager {
   setEngineInput(input: EngineInput): HarnessState {
     const state = this.load();
     state.engineInput = input;
-    state.status = "evaluated";
+    state.phase = "evaluated";
     this.save(state);
     return state;
   }
@@ -72,7 +79,7 @@ export class StateManager {
   setEngineOutput(output: EngineOutput): HarnessState {
     const state = this.load();
     state.engineOutput = output;
-    state.status = "evaluated";
+    state.phase = "evaluated";
     this.save(state);
     return state;
   }
@@ -81,7 +88,7 @@ export class StateManager {
   setConfirmedDecisions(decisions: RuleDecision[]): HarnessState {
     const state = this.load();
     state.decisions = decisions;
-    state.status = "confirmed";
+    state.phase = "confirmed";
     state.confirmedAt = new Date().toISOString();
     this.save(state);
     return state;
@@ -91,7 +98,7 @@ export class StateManager {
   setConfigOutput(output: GenerateConfigOutput): HarnessState {
     const state = this.load();
     state.configOutput = output;
-    state.status = "generated";
+    state.phase = "generated";
     this.save(state);
     return state;
   }
@@ -99,22 +106,53 @@ export class StateManager {
   /** Check if we can resume from a previous session. */
   canResume(): boolean {
     const state = this.load();
-    return state.status !== null && state.engineInput !== undefined;
+    return state.phase !== null && state.engineInput !== undefined;
   }
 
   /** Get the last status for resume logic. */
   getStatus(): HarnessStatus {
-    return this.load().status;
+    return this.load().phase;
   }
 
   /** Create a fresh default state. */
   private _default(): HarnessState {
     return {
-      status: null,
+      phase: null,
       projectDir: this.projectDir,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       version: VERSION,
+      sessionId: randomUUID(),
     };
+  }
+
+  /** Save a generation log entry. */
+  logGeneration(entry: GenerationRecord): void {
+    const state = this.load();
+    if (!state.generationLog) state.generationLog = [];
+    state.generationLog.push(entry);
+    this.save(state);
+  }
+
+  /** Store validation result snapshot. */
+  setValidation(result: { summary: { status: "pass" | "warn" | "fail"; errors: number; warnings: number; info: number } }): HarnessState {
+    const state = this.load();
+    state.validation = {
+      status: result.summary.status,
+      errors: result.summary.errors,
+      warnings: result.summary.warnings,
+      findings: result.summary.errors + result.summary.warnings + result.summary.info,
+      checkedAt: new Date().toISOString(),
+    };
+    state.validatedAt = new Date().toISOString();
+    this.save(state);
+    return state;
+  }
+
+  /** Store project info snapshot. */
+  setProjectInfo(techStack: TechStack[], projectPhase: ProjectPhase, teamSize: TeamSize): void {
+    const state = this.load();
+    state.project = { techStack, projectPhase, teamSize };
+    this.save(state);
   }
 }

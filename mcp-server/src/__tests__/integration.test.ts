@@ -64,10 +64,10 @@ describe("integration: full harness flow", () => {
     const sm = new StateManager(tmpDir);
     sm.setEngineInput(TS_INPUT);
     sm.setEngineOutput(output);
-    expect(sm.load().status).toBe("evaluated");
+    expect(sm.load().phase).toBe("evaluated");
 
     sm.setConfirmedDecisions(output.decisions);
-    expect(sm.load().status).toBe("confirmed");
+    expect(sm.load().phase).toBe("confirmed");
 
     // Generate config files
     const files: Array<{ path: string }> = [];
@@ -75,7 +75,9 @@ describe("integration: full harness flow", () => {
     write(claudeMdPath, generateClaudeMd({ decisions: output.decisions }));
     files.push({ path: "CLAUDE.md" });
 
-    const linterDecisions = output.decisions.filter((d) => d.recommendedMedium === "linter");
+    const linterDecisions = output.decisions.filter((d) =>
+      d.recommendedMedium === "linter_warn" || d.recommendedMedium === "linter_error" || d.recommendedMedium === "linter",
+    );
     if (linterDecisions.length > 0) {
       write(join(tmpDir, "eslint.config.json"), generateEslintConfig({ decisions: output.decisions }));
       files.push({ path: "eslint.config.json" });
@@ -113,7 +115,9 @@ describe("integration: full harness flow", () => {
     write(join(tmpDir, "CLAUDE.md"), generateClaudeMd({ decisions: output.decisions }));
     write(join(tmpDir, ".claude", "settings.json"), generateSettingsJson({ decisions: output.decisions }));
 
-    const linterDecisions = output.decisions.filter((d) => d.recommendedMedium === "linter");
+    const linterDecisions = output.decisions.filter((d) =>
+      d.recommendedMedium === "linter_warn" || d.recommendedMedium === "linter_error" || d.recommendedMedium === "linter",
+    );
     if (linterDecisions.length > 0) {
       write(join(tmpDir, "eslint.config.json"), generateEslintConfig({ decisions: output.decisions }));
       checkFiles.push("eslint.config.json");
@@ -146,7 +150,9 @@ describe("integration: full harness flow", () => {
     write(join(tmpDir, "CLAUDE.md"), generateClaudeMd({ decisions: output.decisions }));
     write(join(tmpDir, ".claude", "settings.json"), generateSettingsJson({ decisions: output.decisions }));
 
-    const linterDecisions = output.decisions.filter((d) => d.recommendedMedium === "linter");
+    const linterDecisions = output.decisions.filter((d) =>
+      d.recommendedMedium === "linter_warn" || d.recommendedMedium === "linter_error" || d.recommendedMedium === "linter",
+    );
     if (linterDecisions.length > 0) {
       write(join(tmpDir, "eslint.config.json"), generateEslintConfig({ decisions: output.decisions }));
       checkFiles.push("eslint.config.json");
@@ -216,7 +222,7 @@ describe("integration: full harness flow", () => {
     const sm = new StateManager(tmpDir);
 
     // Initial state
-    expect(sm.load().status).toBeNull();
+    expect(sm.load().phase).toBeNull();
 
     // After evaluation — setEngineOutput does NOT set engineInput,
     // so also call setEngineInput for canResume() to work
@@ -224,17 +230,17 @@ describe("integration: full harness flow", () => {
     const output = engine.evaluate(TS_INPUT);
     sm.setEngineOutput(output);
     sm.setEngineInput(TS_INPUT);
-    expect(sm.load().status).toBe("evaluated");
+    expect(sm.load().phase).toBe("evaluated");
     expect(sm.load().engineOutput?.summary.total).toBe(output.summary.total);
 
     // After confirmation
     sm.setConfirmedDecisions(output.decisions);
-    expect(sm.load().status).toBe("confirmed");
+    expect(sm.load().phase).toBe("confirmed");
     expect(sm.load().decisions?.length).toBe(output.decisions.length);
 
     // Reload from new StateManager instance (simulates restart)
     const sm2 = new StateManager(tmpDir);
-    expect(sm2.load().status).toBe("confirmed");
+    expect(sm2.load().phase).toBe("confirmed");
     expect(sm2.canResume()).toBe(true);
   });
 
@@ -278,6 +284,6 @@ describe("integration: full harness flow", () => {
     // State should not be saved (dry run)
     const stateManager = new StateManager(tmpDir);
     const state = stateManager.load();
-    expect(state.status).toBeNull();
+    expect(state.phase).toBeNull();
   });
 });

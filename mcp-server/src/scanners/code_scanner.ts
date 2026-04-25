@@ -1,7 +1,6 @@
-import { readFileSync, existsSync } from "node:fs";
-import { stat, readdir } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { join, extname } from "node:path";
-import { parse } from "@typescript-eslint/parser";
 import { ScanCache } from "./scan_cache.js";
 
 // ============================================================

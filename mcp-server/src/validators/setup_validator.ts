@@ -20,7 +20,9 @@ export interface ValidationResult {
     warnings: number;
     info: number;
     passed: boolean;
+    status: "pass" | "warn" | "fail";
   };
+  nextSteps: string[];
 }
 
 export interface SetupValidatorOptions {
@@ -125,6 +127,33 @@ export class SetupValidator {
     const warnings = findings.filter((f) => f.type === "warning").length;
     const info = findings.filter((f) => f.type === "info").length;
 
+    const status: "pass" | "warn" | "fail" = errors > 0 ? "fail" : warnings > 0 ? "warn" : "pass";
+
+    const nextSteps: string[] = [];
+    if (errors > 0) {
+      const missingFiles = findings.filter((f) => f.type === "error" && f.fix);
+      for (const f of missingFiles) {
+        if (f.fix) nextSteps.push(f.fix);
+      }
+      nextSteps.push(`修复 ${errors} 个错误后重新运行 validate_setup 确认`);
+    }
+    if (warnings > 0) {
+      nextSteps.push(`处理 ${warnings} 个警告以提高配置质量`);
+    }
+    const checkedFiles = this.options.checkFiles ?? MANAGED_FILES;
+    const passCount = checkedFiles.filter((f) => {
+      try {
+        return existsSync(join(this.options.projectDir, f));
+      } catch { return false; }
+    }).length;
+    if (passCount > 0) {
+      nextSteps.push(`${passCount} 个文件检查通过，可继续下一步操作`);
+    }
+    if (status === "pass") {
+      nextSteps.push("所有检查通过，Harness 配置完整");
+      nextSteps.push("如需调整规则介质，可使用 analyze_rule_adjustments");
+    }
+
     return {
       projectDir: this.options.projectDir,
       findings,
@@ -133,7 +162,9 @@ export class SetupValidator {
         warnings,
         info,
         passed: errors === 0,
+        status,
       },
+      nextSteps,
     };
   }
 
@@ -148,7 +179,7 @@ export class SetupValidator {
       const content = readFileSync(fullPath, "utf-8");
 
       // JSON validation
-      if (file.endsWith(".json")) {
+      if (ext === "json") {
         JSON.parse(content);
       }
 

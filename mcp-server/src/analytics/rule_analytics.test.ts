@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { RuleAnalytics } from "./rule_analytics.js";
-import type { HarnessState, RuleDecision } from "../types.js";
+import type { HarnessState } from "../types.js";
 
 function makeState(overrides?: Partial<HarnessState>): HarnessState {
   return {
-    status: "evaluated",
+    phase: "evaluated",
     projectDir: "/tmp/test",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
@@ -41,9 +41,10 @@ function makeState(overrides?: Partial<HarnessState>): HarnessState {
           cognitiveSkillTriggers: ["diagnostic", "educational"],
         },
       ],
+      conflicts: [],
       summary: {
         total: 2,
-        byMedium: { linter: 1, "claude.md": 1, "settings.json": 0, hook: 0, ci: 0 },
+        byMedium: { linter: 1, "claude.md": 1, "settings.json": 0, hook: 0, ci: 0 } as any,
         highConfidence: 1,
         cognitiveRequired: 1,
       },

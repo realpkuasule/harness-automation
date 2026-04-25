@@ -1,6 +1,5 @@
-import { CodeScanner, type ScanSuggestion, type ScanFinding } from "./code_scanner.js";
+import { CodeScanner, type ScanSuggestion } from "./code_scanner.js";
 import { ClaudeExtractor } from "./claude_extractor.js";
-import { ScanCache } from "./scan_cache.js";
 import { DecisionEngine } from "../engine.js";
 import type { RuleDecision, Medium, EngineInput } from "../types.js";
 
@@ -85,7 +84,7 @@ export async function scanAndEvaluate(
  * Adjust decision confidence based on scan findings.
  * Rules with many occurrences get higher confidence.
  */
-function adjustDecisionsByScan(
+export function adjustDecisionsByScan(
   decisions: RuleDecision[],
   suggestions: ScanSuggestion[],
 ): RuleDecision[] {

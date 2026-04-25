@@ -1,0 +1,53 @@
+{
+  "version": "1.0",
+  "projectDir": "/Users/zhichao/claude/harness/mcp-server/src/__fixtures__/mixed",
+  "lastScanned": "2026-04-24T12:31:44.612Z",
+  "entries": {
+    "/Users/zhichao/claude/harness/mcp-server/src/__fixtures__/mixed/src/index.ts": {
+      "mtimeMs": 1777020517544.8586,
+      "size": 244,
+      "findings": [
+        {
+          "ruleId": "no-console-log",
+          "file": "/Users/zhichao/claude/harness/mcp-server/src/__fixtures__/mixed/src/index.ts",
+          "line": 4,
+          "snippet": "  console.log(\"starting app\");",
+          "confidence": 0.95
+        },
+        {
+          "ruleId": "no-console-log",
+          "file": "/Users/zhichao/claude/harness/mcp-server/src/__fixtures__/mixed/src/index.ts",
+          "line": 8,
+          "snippet": "  console.log(\"result:\", result);",
+          "confidence": 0.95
+        },
+        {
+          "ruleId": "no-debugger",
+          "file": "/Users/zhichao/claude/harness/mcp-server/src/__fixtures__/mixed/src/index.ts",
+          "line": 6,
+          "snippet": "  debugger;",
+          "confidence": 0.99
+        },
+        {
+          "ruleId": "no-direct-fetch",
+          "file": "/Users/zhichao/claude/harness/mcp-server/src/__fixtures__/mixed/src/index.ts",
+          "line": 5,
+          "snippet": "  const data = await fetch(\"/api/data\");",
+          "confidence": 0.8
+        },
+        {
+          "ruleId": "error-handling",
+          "file": "/Users/zhichao/claude/harness/mcp-server/src/__fixtures__/mixed/src/index.ts",
+          "line": 3,
+          "snippet": "async function main(): Promise<void> {",
+          "confidence": 0.5
+        }
+      ]
+    },
+    "/Users/zhichao/claude/harness/mcp-server/src/__fixtures__/mixed/src/utils.ts": {
+      "mtimeMs": 1777032506191.7805,
+      "size": 78,
+      "findings": []
+    }
+  }
+}

@@ -18,7 +18,7 @@ export function generateHuskyConfig(config: HuskyConfig): Record<string, string>
   };
 
   const hasLinterRules = config.decisions.some(
-    (d) => d.recommendedMedium === "linter",
+    (d) => d.recommendedMedium === "linter_warn" || d.recommendedMedium === "linter_error" || d.recommendedMedium === "linter",
   );
   const hasHookRules = config.decisions.some(
     (d) => d.recommendedMedium === "hook",

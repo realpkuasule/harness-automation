@@ -16,6 +16,10 @@ export function generateCiWorkflow(config: CiConfig): string {
     (d) => d.recommendedMedium === "ci",
   );
 
+  const hasLinterRules = config.decisions.some(
+    (d) => d.recommendedMedium === "linter_error" || d.recommendedMedium === "linter_warn" || d.recommendedMedium === "linter",
+  );
+
   if (!hasCiRules && !config.techStack) return "";
 
   const nodeVer = config.nodeVersion || "18";
@@ -47,8 +51,8 @@ export function generateCiWorkflow(config: CiConfig): string {
   lines.push("      - run: npm ci");
   lines.push("");
 
-  // ESLint check
-  if (config.decisions.some((d) => d.recommendedMedium === "linter")) {
+  // ESLint check (linter_error or linter_warn triggers CI lint step)
+  if (hasLinterRules) {
     lines.push("      - name: Lint check");
     lines.push("        run: npx eslint . --max-warnings=0");
     lines.push("");

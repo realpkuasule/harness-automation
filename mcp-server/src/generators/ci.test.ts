@@ -45,4 +45,13 @@ describe("generateCiWorkflow", () => {
     const result = generateCiWorkflow({ decisions: [] });
     expect(result).toBe("");
   });
+
+  // 23. nodeVersion 参数
+  it("uses specified nodeVersion in matrix", () => {
+    const result = generateCiWorkflow({
+      decisions: [makeDecision({ ruleName: "test-before-merge" })],
+      nodeVersion: "20",
+    });
+    expect(result).toContain("node-version: [20]");
+  });
 });

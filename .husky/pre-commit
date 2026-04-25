@@ -1,0 +1,2 @@
+cd mcp-server
+npx eslint . && npm test

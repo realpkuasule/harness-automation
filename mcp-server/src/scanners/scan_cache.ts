@@ -83,7 +83,6 @@ export class ScanCache {
     }
 
     // Remove entries for files that no longer exist
-    const staleSet = new Set(stale);
     const existingFiles = new Set(files);
     for (const key of Object.keys(cache.entries)) {
       if (!existingFiles.has(key)) {

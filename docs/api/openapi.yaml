@@ -1,0 +1,2231 @@
+openapi: "3.0.3"
+info:
+  title: Harness Automation MCP Server
+  description: >
+    Harness Automation System 的 MCP (Model Context Protocol) 工具接口规范。
+    基于 Harness Engineering 方法论，将"建立有效约束体系"的四步流程自动化。
+
+    注意：本规范描述的是通过 MCP stdio 传输调用的工具接口（而非 HTTP REST API）。
+    所有工具通过 JSON-RPC 风格的 CallToolRequest 调用，返回结构化 JSON。
+
+    **Skill + MCP 双层架构**: MCP 层纯计算 + 文件操作，不直接与用户交互。
+    Skill 层负责用户交互和流程引导。
+
+    设计文档: `docs/harness-automation-design.md` v3.0 (2026-04-22)
+    实现差异在 schema 的 description 中标注。
+  version: "1.0.0"
+  contact:
+    name: Harness Automation Team
+
+servers:
+  - url: "mcp://localhost"
+    description: MCP Server (stdio transport)
+
+x-mcp-note: >
+  本规范中所有 responses 描述的是 MCP CallToolResult 中 content[0].text 字段内的 JSON payload。
+  实际线缆格式为 MCP JSON-RPC 包装：{"content": [{"type": "text", "text": "<payload>"}], "isError": false}。
+  客户端需先解包 MCP 协议层，再按对应 schema 解析 text 内容。
+
+# ============================================================
+# Paths (MCP Tools)
+# ============================================================
+paths:
+  /tools/evaluate_rules:
+    post:
+      summary: 评估项目适用的规则，输出推荐介质
+      description: >
+        纯计算工具。输入项目参数，输出规则推荐列表。
+        按 techStack 过滤规则，应用四问题判定流（形式化→代价→反馈速度→频率），
+        运行冲突检测，将结果写入 .harness/state.json（dryRun=false 时）。
+      operationId: evaluateRules
+      tags: [核心流程]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: evaluate_rules
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EvaluateRulesInput"
+      responses:
+        "200":
+          description: 规则评估结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EngineOutput"
+        "400":
+          description: 输入校验失败
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HarnessError"
+
+  /tools/generate_config:
+    post:
+      summary: 根据规则决策生成配置文件
+      description: >
+        生成 CLAUDE.md、ESLint 配置、.claude/settings.json、.gitignore 四种核心配置文件。
+        写文件前自动备份现有文件到 .harness/backups/{timestamp}/。
+        dryRun=true 时只计算预览内容，不执行写操作。
+        注意：实现中 decisions 字段名与设计的 recommendations 不同。
+      operationId: generateConfig
+      tags: [核心流程]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: generate_config
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateConfigInput"
+      responses:
+        "200":
+          description: 配置生成结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenerateConfigOutput"
+        "400":
+          description: 输入校验失败或无决策
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HarnessError"
+
+  /tools/query_state:
+    post:
+      summary: 查询当前项目的 Harness 状态
+      description: >
+        纯读取操作，不修改任何文件。
+        检查 .harness/state.json 是否存在，返回当前阶段和项目摘要信息。
+        用于断点续做。
+      operationId: queryState
+      tags: [核心流程]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: query_state
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectDir]
+              properties:
+                projectDir:
+                  type: string
+                  description: 项目目录绝对路径
+      responses:
+        "200":
+          description: 状态查询结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryStateOutput"
+
+  /tools/reset_state:
+    post:
+      summary: 重置 Harness 状态
+      description: 将状态机的 phase 重置为 null，用于重新开始流程。
+      operationId: resetState
+      tags: [核心流程]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: reset_state
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectDir]
+              properties:
+                projectDir:
+                  type: string
+                  description: 项目目录绝对路径
+      responses:
+        "200":
+          description: 重置成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: State reset successfully
+
+  /tools/scan_codebase:
+    post:
+      summary: 扫描代码库，检测违规模式并与现有 CLAUDE.md 规则合并评估
+      description: >
+        分析项目代码，检测违规模式，提取现有 CLAUDE.md 中的规则，
+        与内置规则合并评估，返回扫描发现和建议规则。
+        支持增量扫描缓存（useCache=true）。
+        实现中可选的 projectPhase/teamSize/techStack 参数用于规则过滤。
+      operationId: scanCodebase
+      tags: [核心流程]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: scan_codebase
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScanCodebaseInput"
+      responses:
+        "200":
+          description: 扫描结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanCodebaseOutput"
+
+  /tools/init_harness:
+    post:
+      summary: 一键初始化
+      description: >
+        快捷入口：跳过交互，内部依次调用 evaluate_rules → 自动确认决策 →
+        generate_config → validate_setup。支持 preset 嵌套参数简化调用。
+        额外生成：.husky/ Git hooks、.github/workflows/ci.yml CI 流水线、package.json 依赖检查与合并。
+        适用于二次运行、CI 环境、有经验的用户。
+      operationId: initHarness
+      tags: [核心流程]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: init_harness
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InitHarnessInput"
+      responses:
+        "200":
+          description: 初始化结果（含生成摘要和验证结果）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ConfigFileResult"
+                  summary:
+                    $ref: "#/components/schemas/InitHarnessSummary"
+                  validation:
+                    $ref: "#/components/schemas/ValidateSetupOutput"
+
+  /tools/confirm_decisions:
+    post:
+      summary: 确认规则决策
+      description: >
+        用户确认/调整推荐后，将最终决策写入 .harness/state.json，
+        将 phase 推进到 confirmed。在执行 generate_config 前需要先确认。
+        实现中 decisions 数组支持全量 RuleDecision 或精简版（ruleId + medium）。
+      operationId: confirmDecisions
+      tags: [核心流程]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: confirm_decisions
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmDecisionsInput"
+      responses:
+        "200":
+          description: 确认结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    const: confirmed
+                  summary:
+                    type: object
+                    properties:
+                      totalRules:
+                        type: integer
+                      byMedium:
+                        type: object
+                        additionalProperties:
+                          type: integer
+
+  /tools/rollback:
+    post:
+      summary: 回滚到之前的 Harness 配置状态
+      description: >
+        从 .harness/backups/ 恢复原始文件，清理 generate_config 生成的新文件。
+        支持指定 backupId 或回滚最新备份。
+        list=true 时列出可用备份而不执行恢复。
+        设计中的 target 参数在实现中被替换为 backupId + list 参数。
+      operationId: rollback
+      tags: [核心流程]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: rollback
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RollbackInput"
+      responses:
+        "200":
+          description: 回滚结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RollbackOutput"
+
+  /tools/validate_setup:
+    post:
+      summary: 验证已生成的 Harness 配置
+      description: >
+        检查文件完整性、ESLint 配置语法、JSON 语法、Husky hooks 可执行权限、
+        依赖完整性。默认检查 9 个关键文件（CLAUDE.md、eslint.config.json、
+        .claude/settings.json、.gitignore、.husky/pre-commit、.husky/commit-msg、
+        .github/workflows/ci.yml、package.json、.harness/state.json），
+        并自动检查 package.json 中的 devDependencies 完整性。
+        支持选择性跳过语法检查或权限检查。
+      operationId: validateSetup
+      tags: [核心流程]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: validate_setup
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ValidateSetupInput"
+      responses:
+        "200":
+          description: 验证结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidateSetupOutput"
+
+  /tools/get_rule_stats:
+    post:
+      summary: 收集并返回规则效果统计数据
+      description: >
+        实现新增工具（设计 §3.1.13 原 recommend_rule_adjustment 的简化替代）。
+        返回触发率、修复率、绕过率、按介质分布等统计数据。
+        collect=true 时从当前状态采集新鲜数据。
+      operationId: getRuleStats
+      tags: [分析优化]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: get_rule_stats
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuleStatsInput"
+      responses:
+        "200":
+          description: 统计数据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyticsData"
+        "400":
+          description: 未找到引擎输出或分析数据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HarnessError"
+
+  /tools/analyze_rule_adjustments:
+    post:
+      summary: 推荐规则介质升级/降级调整
+      description: >
+        实现新增工具。基于使用数据和分析统计，
+        通过 RuleAdapter.analyze() 推荐哪些规则应该升级或降级介质。
+        与设计的 recommend_rule_adjustment 功能相似但接口简化。
+      operationId: analyzeRuleAdjustments
+      tags: [分析优化]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: analyze_rule_adjustments
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyzeAdjustmentsInput"
+      responses:
+        "200":
+          description: 调整推荐
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdapterResult"
+        "400":
+          description: 缺少分析前置数据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HarnessError"
+
+  /tools/export_rules:
+    post:
+      summary: 导出规则配置为可移植 JSON
+      description: 实现新增工具。导出当前规则决策为 JSON 格式，
+        支持保存到 .harness/exports/ 文件或直接返回。
+      operationId: exportRules
+      tags: [规则管理]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: export_rules
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExportRulesInput"
+      responses:
+        "200":
+          description: 导出数据
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  export:
+                    type: object
+                  savedPath:
+                    type: string
+                    nullable: true
+        "400":
+          description: 未找到引擎输出
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HarnessError"
+
+  /tools/import_rules:
+    post:
+      summary: 从 JSON / 预设 / 文件导入规则配置
+      description: >
+        实现新增工具。支持三种导入方式：
+        presetId（加载内置预设）、exportJson（JSON 字符串）、filePath（导出文件路径）。
+        三者至少提供一个。
+      operationId: importRules
+      tags: [规则管理]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: import_rules
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportRulesInput"
+      responses:
+        "200":
+          description: 导入结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  preset:
+                    type: string
+                  presetName:
+                    type: string
+                  decisions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RuleDecision"
+                  total:
+                    type: integer
+                  warnings:
+                    type: array
+                    items:
+                      type: string
+        "400":
+          description: 未找到预设或无效配置
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HarnessError"
+
+  /tools/list_rule_presets:
+    post:
+      summary: 列出可用规则预设模板
+      description: 实现新增工具。支持按技术栈过滤预设列表。
+      operationId: listRulePresets
+      tags: [规则管理]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: list_rule_presets
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ListRulePresetsInput"
+      responses:
+        "200":
+          description: 预设列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  presets:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RulePreset"
+
+  /tools/list_rule_exports:
+    post:
+      summary: 列出已保存的导出文件
+      description: 实现新增工具。列出 .harness/exports/ 中的导出文件。
+      operationId: listRuleExports
+      tags: [规则管理]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: list_rule_exports
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ListRuleExportsInput"
+      responses:
+        "200":
+          description: 导出文件列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exports:
+                    type: array
+                    items:
+                      type: string
+                    description: 导出文件名列表（按时间倒序排列）
+
+  /tools/assess_suitability:
+    post:
+      summary: 评估项目是否适合应用 Harness 约束体系
+      description: >
+        在流程开始时调用，评估项目适合度。
+        检查 Git 历史、文件结构、依赖管理和测试覆盖。
+        设计中的 analysisDepth（quick/full）决定分析深度；
+        实现额外接受 techStack 数组参数。
+      operationId: assessSuitability
+      tags: [核心流程]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: assess_suitability
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectDir]
+              properties:
+                projectDir:
+                  type: string
+                  description: 项目目录绝对路径
+                techStack:
+                  type: array
+                  items:
+                    type: string
+                  description: 技术栈（可选，实现新增）
+                analysisDepth:
+                  type: string
+                  enum: [quick, full]
+                  default: full
+                  description: 分析深度
+      responses:
+        "200":
+          description: 评估结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuitabilityAssessment"
+
+  /tools/start_ab_test:
+    post:
+      summary: 启动 A/B 测试
+      description: >
+        为特定规则启动 A/B 测试，对比两种介质配置的效果。
+        创建测试记录到 .harness/ab_tests.json。
+        实现中接受扁平参数而非设计中的嵌套 testConfig 对象。
+      operationId: startABTest
+      tags: [A/B 测试]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: start_ab_test
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectDir, ruleId, baselineMedium, testMedium]
+              properties:
+                projectDir:
+                  type: string
+                ruleId:
+                  type: string
+                baselineMedium:
+                  $ref: "#/components/schemas/RuleMedium"
+                testMedium:
+                  $ref: "#/components/schemas/RuleMedium"
+                durationDays:
+                  type: number
+                  default: 14
+                metrics:
+                  type: array
+                  items:
+                    type: string
+                  default: [triggerCount, fixRate, bypassCount]
+      responses:
+        "200":
+          description: 测试启动结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  testId:
+                    type: string
+                  status:
+                    type: string
+                    enum: [started, already_running, invalid_config]
+                  startTime:
+                    type: string
+                    format: date-time
+                  endTime:
+                    type: string
+                    format: date-time
+                  message:
+                    type: string
+                    description: 人类可读的状态说明
+
+  /tools/collect_ab_metrics:
+    post:
+      summary: 收集 A/B 测试数据点
+      description: >
+        为一个活跃的 A/B 测试收集一条数据点。
+        与设计不同：实现采用扁平参数（非嵌套 timeRange），
+        且每次调用只传入单条数据点而非批量收集。
+      operationId: collectABMetrics
+      tags: [A/B 测试]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: collect_ab_metrics
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectDir, testId, triggerCount, fixRate, bypassCount]
+              properties:
+                projectDir:
+                  type: string
+                testId:
+                  type: string
+                triggerCount:
+                  type: number
+                fixRate:
+                  type: number
+                  description: 修复率（0-1）
+                bypassCount:
+                  type: number
+                userFeedback:
+                  type: string
+      responses:
+        "200":
+          description: 数据点收集结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  collected:
+                    type: boolean
+                  message:
+                    type: string
+
+  /tools/analyze_ab_results:
+    post:
+      summary: 分析 A/B 测试结果
+      description: >
+        分析收集到的 A/B 测试数据，返回统计显著性和推荐操作。
+        与设计不同：实现中 testId 可选（不指定则分析所有活跃测试），
+        且不要求 significanceLevel 参数。
+      operationId: analyzeABResults
+      tags: [A/B 测试]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: analyze_ab_results
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectDir]
+              properties:
+                projectDir:
+                  type: string
+                testId:
+                  type: string
+                  description: 可选，不指定则分析所有活跃测试
+      responses:
+        "200":
+          description: 分析结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ABTestResult"
+                  summary:
+                    type: object
+                    properties:
+                      total:
+                        type: integer
+                      significant:
+                        type: integer
+                      keep:
+                        type: integer
+                      revert:
+                        type: integer
+                      adjust:
+                        type: integer
+
+  /tools/cognitive_skill:
+    post:
+      summary: 认知层技能调用
+      description: >
+        实现新增工具。调用认知层的三大技能：
+        diagnostic（诊断代码模式）、educational（教育解释）、
+        decision-support（决策支持）。根据 skillType 启用不同参数。
+      operationId: cognitiveSkill
+      tags: [认知层]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: cognitive_skill
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CognitiveSkillInput"
+      responses:
+        "200":
+          description: 认知层响应
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CognitiveResponse"
+        "400":
+          description: 规则未找到或输入无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HarnessError"
+
+  /tools/suggest_error_improvement:
+    post:
+      summary: 分析错误信息模板使用效果并建议优化方向
+      description: >
+        实现新增工具。基于模板使用频率、用户评分和修复率，
+        通过 ErrorMessageEvaluator 生成改进建议。
+      operationId: suggestErrorImprovement
+      tags: [错误优化]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: suggest_error_improvement
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectDir]
+              properties:
+                projectDir:
+                  type: string
+      responses:
+        "200":
+          description: 改进建议
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stats:
+                    $ref: "#/components/schemas/EvaluationStats"
+                  suggestions:
+                    type: array
+                    items:
+                      type: string
+
+  /tools/optimize_error_message:
+    post:
+      summary: 生成优化后的错误信息
+      description: >
+        实现新增工具。根据规则 ID、场景或代码上下文
+        返回包含 why/whatInstead/reference 三要素的结构化错误信息。
+        支持记录评价（rateAfter）。
+      operationId: optimizeErrorMessage
+      tags: [错误优化]
+      parameters:
+        - name: toolName
+          in: query
+          required: true
+          schema:
+            type: string
+            const: optimize_error_message
+          description: MCP 工具名称（固定值）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectDir]
+              properties:
+                projectDir:
+                  type: string
+                ruleId:
+                  type: string
+                ruleName:
+                  type: string
+                scenario:
+                  type: string
+                actualCode:
+                  type: string
+                fileName:
+                  type: string
+                lineNumber:
+                  type: number
+                rateAfter:
+                  type: boolean
+      responses:
+        "200":
+          description: 优化后的错误信息
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  suggestions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ErrorSuggestion"
+                  stats:
+                    $ref: "#/components/schemas/EvaluationStats"
+
+# ============================================================
+# Components
+# ============================================================
+components:
+  schemas:
+    # ============================================================
+    # Enums
+    # ============================================================
+    RuleMedium:
+      type: string
+      enum:
+        - linter_error
+        - linter_warn
+        - linter+hook
+        - claude_md
+        - ci
+        - hook
+        - settings
+        - none
+        # 向后兼容别名（已废弃）:
+        - claude.md
+        - linter
+        - settings.json
+      description: >
+        规则介质类型（约束强度递减）。
+        前 8 个为推荐值；后 3 个为向后兼容别名，新代码应避免使用。
+        设计 v3.0 中为 8 值枚举（不含废弃别名）。
+
+    TechStack:
+      type: string
+      enum: [typescript, javascript, python, go, java, generic]
+      description: >
+        技术栈分类。设计 v3.0 使用 nextjs-ts / react-vite / node-ts / other，
+        实现采用更细粒度的 6 值枚举，更适合规则过滤。
+
+    ProjectPhase:
+      type: string
+      enum: [prototype, early, growth, mature]
+      description: >
+        项目阶段。设计 v3.0 使用 prototype / development / maintenance，
+        实现采用 4 阶段模型以更精确地适配频率评估。
+
+    TeamSize:
+      type: string
+      enum: [solo, small, medium, large]
+      description: >
+        团队规模。设计 v3.0 使用 1-2 / 3-5 / 5+，
+        实现采用 4 级模型以适配频率乘数。
+
+    HarnessStatus:
+      type: string
+      nullable: true
+      enum: [evaluated, confirmed, generated, validated]
+      description: 状态机阶段
+
+    ErrorCode:
+      type: string
+      enum:
+        - STATE_NOT_FOUND
+        - STATE_PHASE_MISMATCH
+        - FILE_READ_ERROR
+        - FILE_WRITE_ERROR
+        - FILE_BACKUP_ERROR
+        - CONFIRM_REQUIRED
+        - NO_DECISIONS
+        - INVALID_CONFIG
+        - DEPENDENCY_MISSING
+        - SCAN_FAILED
+        - ROLLBACK_FAILED
+        - UNKNOWN_ERROR
+        - UNKNOWN_TOOL
+      description: >
+        错误码。设计 v3.0 定义 10 个错误码（不含 NO_DECISIONS / UNKNOWN_TOOL），
+        实现扩展为 13 个，新增 CONFIRM_REQUIRED、NO_DECISIONS、UNKNOWN_TOOL。
+
+    # ============================================================
+    # Error
+    # ============================================================
+    HarnessError:
+      type: object
+      required: [code, message, recoverable]
+      properties:
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+        message:
+          type: string
+          description: 人类可读的错误描述
+        detail:
+          type: string
+          description: 详细的技术信息（可选）
+        recoverable:
+          type: boolean
+          description: 用户能否自行恢复
+
+    # ============================================================
+    # Rule Definition
+    # ============================================================
+    RuleDefinition:
+      type: object
+      required: [id, name, description, category, formalizable, cost, feedbackSpeed, frequency, recommendedMedium, alternativeMedium, techStack]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        formalizable:
+          type: boolean
+        cost:
+          type: integer
+          description: 执行代价（1-5）
+        feedbackSpeed:
+          type: integer
+          description: 反馈速度（1-5，1=最快）
+        frequency:
+          type: integer
+          description: 发生频率（1-5）
+        recommendedMedium:
+          $ref: "#/components/schemas/RuleMedium"
+        alternativeMedium:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuleMedium"
+        techStack:
+          type: array
+          items:
+            $ref: "#/components/schemas/TechStack"
+        cognitiveLayerSupport:
+          $ref: "#/components/schemas/RuleCognitiveSupport"
+        errorMessage:
+          $ref: "#/components/schemas/ErrorMessage"
+
+    RuleCognitiveSupport:
+      type: object
+      properties:
+        required:
+          type: boolean
+        skillTriggers:
+          type: array
+          items:
+            type: string
+        contextRequirements:
+          type: array
+          items:
+            type: string
+
+    ErrorMessage:
+      type: object
+      properties:
+        why:
+          type: string
+        whatInstead:
+          type: string
+        reference:
+          type: string
+
+    # ============================================================
+    # Input Schemas
+    # ============================================================
+    EvaluateRulesInput:
+      type: object
+      required: [projectDir, projectPhase, teamSize, techStack]
+      properties:
+        projectDir:
+          type: string
+          description: 项目目录绝对路径
+        projectPhase:
+          $ref: "#/components/schemas/ProjectPhase"
+        teamSize:
+          $ref: "#/components/schemas/TeamSize"
+        techStack:
+          type: array
+          items:
+            $ref: "#/components/schemas/TechStack"
+          description: 技术栈数组（设计为单个 string，实现为数组）
+        dryRun:
+          type: boolean
+          default: false
+          description: 预览模式
+
+    GenerateConfigInput:
+      type: object
+      required: [projectDir, decisions]
+      properties:
+        projectDir:
+          type: string
+        decisions:
+          type: array
+          description: 确认后的规则决策。设计字段名为 recommendations，实现使用 decisions。
+          items:
+            type: object
+            required: [ruleId, recommendedMedium]
+            properties:
+              ruleId:
+                type: string
+              recommendedMedium:
+                $ref: "#/components/schemas/RuleMedium"
+        dryRun:
+          type: boolean
+          default: false
+
+    ScanCodebaseInput:
+      type: object
+      required: [projectDir]
+      properties:
+        projectDir:
+          type: string
+        techStack:
+          type: array
+          items:
+            $ref: "#/components/schemas/TechStack"
+          description: 实现新增，设计无此字段。不传时默认 ["generic"]
+        projectPhase:
+          $ref: "#/components/schemas/ProjectPhase"
+          description: 实现新增。不传时默认 "early"
+        teamSize:
+          $ref: "#/components/schemas/TeamSize"
+          description: 实现新增。不传时默认 "small"
+        useCache:
+          type: boolean
+          default: false
+          description: 增量扫描缓存（实现新增，设计无此字段）
+
+    InitHarnessInput:
+      type: object
+      required: [projectDir, projectPhase, teamSize, techStack]
+      properties:
+        projectDir:
+          type: string
+        projectPhase:
+          $ref: "#/components/schemas/ProjectPhase"
+          description: 项目当前阶段
+        teamSize:
+          $ref: "#/components/schemas/TeamSize"
+          description: 开发团队规模
+        techStack:
+          type: array
+          description: 使用的技术栈
+          items:
+            $ref: "#/components/schemas/TechStack"
+        dryRun:
+          type: boolean
+          default: false
+        preset:
+          type: object
+          description: 嵌套 preset 对象（实现新增，支持简化调用）
+          properties:
+            techStack:
+              type: array
+              items:
+                $ref: "#/components/schemas/TechStack"
+            projectPhase:
+              $ref: "#/components/schemas/ProjectPhase"
+            teamSize:
+              $ref: "#/components/schemas/TeamSize"
+
+    ConfirmDecisionsInput:
+      type: object
+      required: [projectDir, decisions]
+      properties:
+        projectDir:
+          type: string
+        decisions:
+          type: array
+          items:
+            type: object
+            required: [ruleId, recommendedMedium]
+            properties:
+              ruleId:
+                type: string
+              ruleName:
+                type: string
+              recommendedMedium:
+                $ref: "#/components/schemas/RuleMedium"
+              alternativeMedia:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RuleMedium"
+              confidence:
+                type: number
+                minimum: 0
+                maximum: 1
+              reasons:
+                type: array
+                items:
+                  type: string
+              cognitiveLayerRequired:
+                type: boolean
+              cognitiveSkillTriggers:
+                type: array
+                items:
+                  type: string
+
+    RollbackInput:
+      type: object
+      required: [projectDir]
+      properties:
+        projectDir:
+          type: string
+        backupId:
+          type: string
+          description: 指定 backup（默认回滚最新）。设计使用 target（last/all），实现使用 backupId。
+        list:
+          type: boolean
+          default: false
+          description: 仅列出备份，不执行回滚（实现新增）
+
+    ValidateSetupInput:
+      type: object
+      required: [projectDir]
+      properties:
+        projectDir:
+          type: string
+        checkFiles:
+          type: array
+          items:
+            type: string
+          description: >
+            可选，指定要检查的文件列表。
+            不传时使用默认 9 个关键文件：
+            CLAUDE.md/eslint.config.json/.claude/settings.json/
+            .gitignore/.husky/pre-commit/.husky/commit-msg/
+            .github/workflows/ci.yml/package.json/.harness/state.json
+        skipSyntaxCheck:
+          type: boolean
+          default: false
+          description: 实现新增
+        skipPermissionCheck:
+          type: boolean
+          default: false
+          description: 实现新增
+
+    RuleStatsInput:
+      type: object
+      required: [projectDir]
+      properties:
+        projectDir:
+          type: string
+        collect:
+          type: boolean
+          default: true
+          description: 是否从当前状态采集新鲜数据
+
+    AnalyzeAdjustmentsInput:
+      type: object
+      required: [projectDir]
+      properties:
+        projectDir:
+          type: string
+
+    ExportRulesInput:
+      type: object
+      required: [projectDir]
+      properties:
+        projectDir:
+          type: string
+        saveToFile:
+          type: boolean
+          default: false
+        filename:
+          type: string
+          description: 自定义导出文件名
+
+    ImportRulesInput:
+      type: object
+      required: [projectDir]
+      properties:
+        projectDir:
+          type: string
+        exportJson:
+          type: string
+          description: JSON 字符串
+        presetId:
+          type: string
+          description: 预设 ID
+        filePath:
+          type: string
+          description: 导出文件路径
+
+    ListRulePresetsInput:
+      type: object
+      properties:
+        techStack:
+          type: array
+          items:
+            type: string
+          description: 按技术栈过滤
+
+    ListRuleExportsInput:
+      type: object
+      required: [projectDir]
+      properties:
+        projectDir:
+          type: string
+
+    CognitiveSkillInput:
+      type: object
+      required: [skillType, ruleId]
+      properties:
+        skillType:
+          type: string
+          enum: [diagnostic, educational, decision-support]
+        ruleId:
+          type: string
+        projectDir:
+          type: string
+        codePattern:
+          type: string
+          description: diagnostic 使用
+        contextDescription:
+          type: string
+          description: diagnostic 使用
+        topic:
+          type: string
+          description: educational 使用
+        experienceLevel:
+          type: string
+          enum: [beginner, intermediate, advanced]
+          description: educational 使用
+        currentMedium:
+          type: string
+          description: decision-support 使用
+        candidateMedia:
+          type: array
+          items:
+            type: string
+          description: decision-support 使用
+        projectPhase:
+          type: string
+          description: decision-support 使用
+        teamSize:
+          type: string
+          description: decision-support 使用
+        techStack:
+          type: array
+          items:
+            type: string
+          description: decision-support 使用
+
+    # ============================================================
+    # Output Schemas
+    # ============================================================
+    EngineInput:
+      type: object
+      properties:
+        projectDir:
+          type: string
+        projectPhase:
+          $ref: "#/components/schemas/ProjectPhase"
+        teamSize:
+          $ref: "#/components/schemas/TeamSize"
+        techStack:
+          type: array
+          items:
+            $ref: "#/components/schemas/TechStack"
+        dryRun:
+          type: boolean
+
+    EngineOutput:
+      type: object
+      properties:
+        decisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuleDecision"
+        conflicts:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuleConflict"
+        summary:
+          type: object
+          properties:
+            total:
+              type: integer
+            byMedium:
+              type: object
+              additionalProperties:
+                type: integer
+            highConfidence:
+              type: integer
+            cognitiveRequired:
+              type: integer
+
+    RuleDecision:
+      type: object
+      required: [ruleId, ruleName, recommendedMedium, alternativeMedia, confidence, reasons, cognitiveLayerRequired, cognitiveSkillTriggers]
+      properties:
+        ruleId:
+          type: string
+        ruleName:
+          type: string
+        recommendedMedium:
+          $ref: "#/components/schemas/RuleMedium"
+        alternativeMedia:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuleMedium"
+        confidence:
+          type: number
+          format: float
+          description: 置信度（0-1）
+        reasons:
+          type: array
+          items:
+            type: string
+        cognitiveLayerRequired:
+          type: boolean
+        cognitiveSkillTriggers:
+          type: array
+          items:
+            type: string
+        adjustedCost:
+          type: number
+          description: 设计 §3.1.1：阶段乘数调整后的代价（1-5）
+        feedbackSpeed:
+          type: number
+          description: 设计 §3.1.1：规则定义中的反馈速度（1-5）
+        errorMessage:
+          $ref: "#/components/schemas/ErrorMessage"
+
+    RuleConflict:
+      type: object
+      required: [ruleA, ruleB, type, description, resolution]
+      properties:
+        ruleA:
+          type: string
+        ruleB:
+          type: string
+        type:
+          type: string
+          enum: [behavioral, overlap]
+          description: behavioral=规则行为直接冲突, overlap=规则覆盖范围重叠
+        description:
+          type: string
+        resolution:
+          type: string
+
+    GenerateConfigOutput:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConfigFileResult"
+        summary:
+          type: object
+          properties:
+            total:
+              type: integer
+            created:
+              type: integer
+            updated:
+              type: integer
+            skipped:
+              type: integer
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConfigError"
+        warnings:
+          type: array
+          items:
+            type: string
+
+    ConfigFileResult:
+      type: object
+      properties:
+        path:
+          type: string
+        content:
+          type: string
+          description: dry_run 模式时返回内容预览
+        action:
+          type: string
+          enum: [create, overwritten, skipped, merged, dry_run]
+          description: >
+            文件操作类型。设计使用过去分词（created/overwritten/skipped/merged/dry_run），
+            但实现中 generate_config 使用 create 而非 created。
+        backupPath:
+          type: string
+          description: 备份路径（如果覆盖了已有文件）
+
+    ConfigError:
+      type: object
+      properties:
+        file:
+          type: string
+        message:
+          type: string
+        code:
+          type: string
+
+    QueryStateOutput:
+      type: object
+      properties:
+        stateExists:
+          type: boolean
+        phase:
+          $ref: "#/components/schemas/HarnessStatus"
+        project:
+          type: object
+          properties:
+            techStack:
+              type: array
+              items:
+                $ref: "#/components/schemas/TechStack"
+            projectPhase:
+              $ref: "#/components/schemas/ProjectPhase"
+            teamSize:
+              $ref: "#/components/schemas/TeamSize"
+        lastEvalAt:
+          type: string
+          format: date-time
+        confirmedAt:
+          type: string
+          format: date-time
+        validatedAt:
+          type: string
+          format: date-time
+        validation:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [pass, warn, fail]
+            errors:
+              type: integer
+            warnings:
+              type: integer
+            findings:
+              type: integer
+            checkedAt:
+              type: string
+              format: date-time
+        sessionId:
+          type: string
+        generationLog:
+          type: array
+          items:
+            $ref: "#/components/schemas/GenerationRecord"
+        summary:
+          type: object
+          properties:
+            totalDecisions:
+              type: integer
+            byMedium:
+              type: object
+              additionalProperties:
+                type: integer
+            highConfidence:
+              type: integer
+            cognitiveRequired:
+              type: integer
+            conflicts:
+              type: integer
+            generatedFiles:
+              type: integer
+
+    GenerationRecord:
+      type: object
+      properties:
+        phase:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        action:
+          type: string
+        detail:
+          type: string
+
+    RollbackOutput:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [success, partial, failed]
+        restored:
+          type: array
+          items:
+            type: string
+        failed:
+          type: array
+          items:
+            type: string
+          nullable: true
+        errors:
+          type: array
+          items:
+            type: string
+          nullable: true
+        backupId:
+          type: string
+        cleaned:
+          type: array
+          items:
+            type: string
+          nullable: true
+
+    ValidateSetupOutput:
+      type: object
+      properties:
+        projectDir:
+          type: string
+        findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValidationFinding"
+        summary:
+          type: object
+          properties:
+            errors:
+              type: integer
+            warnings:
+              type: integer
+            info:
+              type: integer
+            passed:
+              type: boolean
+            status:
+              type: string
+              enum: [pass, warn, fail]
+        nextSteps:
+          type: array
+          items:
+            type: string
+          description: 后续操作建议
+
+    ValidationFinding:
+      type: object
+      properties:
+        file:
+          type: string
+        type:
+          type: string
+          enum: [error, warning, info]
+        message:
+          type: string
+        fix:
+          type: string
+
+    ScanCodebaseOutput:
+      type: object
+      properties:
+        scanSummary:
+          type: object
+          properties:
+            filesScanned:
+              type: integer
+            totalLines:
+              type: integer
+            durationMs:
+              type: integer
+            suggestions:
+              type: array
+              items:
+                $ref: "#/components/schemas/ScanSuggestion"
+        extractedRules:
+          type: integer
+        decisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuleDecision"
+          description: 扫描与引擎合并后的规则决策
+
+    ScanSuggestion:
+      type: object
+      properties:
+        ruleId:
+          type: string
+        description:
+          type: string
+        occurrences:
+          type: integer
+        confidence:
+          type: number
+        severity:
+          type: string
+          enum: [low, medium, high]
+
+    # ============================================================
+    # Suitability
+    # ============================================================
+    SuitabilityAssessment:
+      type: object
+      properties:
+        suitable:
+          type: boolean
+        score:
+          type: number
+          description: 适合度评分（0-100）
+        reason:
+          type: string
+        warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/SuitabilityWarning"
+        recommendations:
+          type: array
+          items:
+            type: string
+
+    SuitabilityWarning:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [prototype, script, overhead]
+          description: 实现使用 prototype/script/overhead，设计使用 prototype/one_off_script/high_maintenance_cost/low_roi
+        severity:
+          type: string
+          enum: [low, medium, high]
+        message:
+          type: string
+        evidence:
+          type: array
+          items:
+            type: string
+          description: 实现新增，设计无此字段
+
+    # ============================================================
+    # Analysis
+    # ============================================================
+    AnalyticsData:
+      type: object
+      properties:
+        projectDir:
+          type: string
+        collectedAt:
+          type: string
+          format: date-time
+        summary:
+          type: object
+          properties:
+            totalRules:
+              type: integer
+            byMedium:
+              type: object
+              additionalProperties:
+                type: integer
+            averageConfidence:
+              type: number
+            cognitiveRequired:
+              type: integer
+            highConfidence:
+              type: integer
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuleStats"
+        history:
+          type: array
+          items:
+            type: object
+            properties:
+              timestamp:
+                type: string
+                format: date-time
+              totalRules:
+                type: integer
+              byMedium:
+                type: object
+                additionalProperties:
+                  type: integer
+
+    RuleStats:
+      type: object
+      properties:
+        ruleId:
+          type: string
+        ruleName:
+          type: string
+        medium:
+          $ref: "#/components/schemas/RuleMedium"
+        confidence:
+          type: number
+        cognitiveRequired:
+          type: boolean
+        category:
+          type: string
+
+    AdapterResult:
+      type: object
+      properties:
+        projectDir:
+          type: string
+        analyzedAt:
+          type: string
+          format: date-time
+        summary:
+          type: object
+          properties:
+            total:
+              type: integer
+            upgrade:
+              type: integer
+            downgrade:
+              type: integer
+            keep:
+              type: integer
+        recommendations:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuleRecommendation"
+
+    RuleRecommendation:
+      type: object
+      properties:
+        ruleId:
+          type: string
+        ruleName:
+          type: string
+        currentMedium:
+          $ref: "#/components/schemas/RuleMedium"
+        action:
+          type: string
+          enum: [upgrade, downgrade, keep]
+        suggestedMedium:
+          $ref: "#/components/schemas/RuleMedium"
+        confidence:
+          type: number
+        reasons:
+          type: array
+          items:
+            type: string
+        expectedImpact:
+          type: string
+        fixRateChange:
+          type: number
+        bypassRateChange:
+          type: number
+        implementationCost:
+          type: number
+        dataSnapshot:
+          type: object
+          properties:
+            triggeredCount:
+              type: integer
+            fixedCount:
+              type: integer
+            bypassedCount:
+              type: integer
+            fixRate:
+              type: number
+            bypassRate:
+              type: number
+
+    # ============================================================
+    # A/B Test
+    # ============================================================
+    ABTestConfig:
+      type: object
+      properties:
+        ruleId:
+          type: string
+        baselineMedium:
+          $ref: "#/components/schemas/RuleMedium"
+        testMedium:
+          $ref: "#/components/schemas/RuleMedium"
+        durationDays:
+          type: integer
+        metrics:
+          type: array
+          items:
+            type: string
+      description: 设计中使用嵌套 testConfig 对象，实现中展开为扁平参数
+
+    ABTestDataPoint:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        triggerCount:
+          type: number
+        fixRate:
+          type: number
+        bypassCount:
+          type: number
+        userFeedback:
+          type: string
+
+    ABTestResult:
+      type: object
+      properties:
+        testId:
+          type: string
+        ruleId:
+          type: string
+        config:
+          $ref: "#/components/schemas/ABTestConfig"
+        dataPoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/ABTestDataPoint"
+        statisticalSignificance:
+          type: boolean
+        recommendation:
+          type: string
+          enum: [keep, revert, adjust]
+        confidenceScore:
+          type: number
+
+    # ============================================================
+    # Cognitive Layer
+    # ============================================================
+    CognitiveResponse:
+      oneOf:
+        - $ref: "#/components/schemas/DiagnosticResult"
+        - $ref: "#/components/schemas/EducationalResult"
+        - $ref: "#/components/schemas/DecisionSupportResult"
+      discriminator:
+        propertyName: skillType
+
+    DiagnosticResult:
+      type: object
+      properties:
+        skillType:
+          type: string
+          enum: [diagnostic]
+        analysis:
+          type: string
+        severity:
+          type: string
+          enum: [low, medium, high]
+        rootCause:
+          type: string
+        fixSuggestion:
+          type: string
+        relatedRules:
+          type: array
+          items:
+            type: string
+
+    EducationalResult:
+      type: object
+      properties:
+        skillType:
+          type: string
+          enum: [educational]
+        explanation:
+          type: string
+        bestPractices:
+          type: array
+          items:
+            type: string
+        examples:
+          type: array
+          items:
+            type: string
+        learningResources:
+          type: array
+          items:
+            type: string
+
+    DecisionSupportResult:
+      type: object
+      properties:
+        skillType:
+          type: string
+          enum: [decision-support]
+        tradeoffs:
+          type: array
+          items:
+            type: object
+            properties:
+              medium:
+                $ref: "#/components/schemas/RuleMedium"
+              pros:
+                type: array
+                items:
+                  type: string
+              cons:
+                type: array
+                items:
+                  type: string
+        recommendation:
+          type: object
+          properties:
+            medium:
+              $ref: "#/components/schemas/RuleMedium"
+            reason:
+              type: string
+            confidence:
+              type: number
+        alternatives:
+          type: array
+          items:
+            type: object
+            properties:
+              medium:
+                $ref: "#/components/schemas/RuleMedium"
+              reason:
+                type: string
+
+    # ============================================================
+    # Error Optimization
+    # ============================================================
+    ErrorMessageTemplate:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        structure:
+          type: object
+          properties:
+            why:
+              type: string
+            whatInstead:
+              type: string
+            reference:
+              type: string
+            context:
+              type: string
+            learningTip:
+              type: string
+        applicableScenarios:
+          type: array
+          items:
+            type: string
+
+    ErrorSuggestion:
+      type: object
+      properties:
+        templateId:
+          type: string
+        renderedMessage:
+          type: string
+        confidence:
+          type: number
+
+    EvaluationStats:
+      type: object
+      properties:
+        totalRecords:
+          type: integer
+        ratedRecords:
+          type: integer
+        averageRating:
+          type: number
+        helpfulRate:
+          type: number
+        followRate:
+          type: number
+        templateStats:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              uses:
+                type: integer
+              averageRating:
+                type: number
+
+    # ============================================================
+    # Rule Management
+    # ============================================================
+    RulePreset:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        techStack:
+          type: array
+          items:
+            type: string
+        decisions:
+          type: array
+          items:
+            type: object
+            properties:
+              ruleId:
+                type: string
+              recommendedMedium:
+                $ref: "#/components/schemas/RuleMedium"
+
+    # ============================================================
+    # Harness State
+    # ============================================================
+    HarnessState:
+      type: object
+      properties:
+        phase:
+          $ref: "#/components/schemas/HarnessStatus"
+        projectDir:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        engineInput:
+          $ref: "#/components/schemas/EngineInput"
+        engineOutput:
+          $ref: "#/components/schemas/EngineOutput"
+        decisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuleDecision"
+        confirmedAt:
+          type: string
+          format: date-time
+        configOutput:
+          $ref: "#/components/schemas/GenerateConfigOutput"
+        version:
+          type: string
+        sessionId:
+          type: string
+        validatedAt:
+          type: string
+          format: date-time
+        generationLog:
+          type: array
+          items:
+            $ref: "#/components/schemas/GenerationRecord"
+        validation:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [pass, warn, fail]
+            errors:
+              type: integer
+            warnings:
+              type: integer
+            findings:
+              type: integer
+            checkedAt:
+              type: string
+              format: date-time
+        project:
+          type: object
+          properties:
+            techStack:
+              type: array
+              items:
+                $ref: "#/components/schemas/TechStack"
+            projectPhase:
+              $ref: "#/components/schemas/ProjectPhase"
+            teamSize:
+              $ref: "#/components/schemas/TeamSize"
+
+    # ============================================================
+    # Init Harness Summary
+    # ============================================================
+    InitHarnessSummary:
+      type: object
+      properties:
+        files:
+          type: object
+          properties:
+            total:
+              type: integer
+            created:
+              type: integer
+            updated:
+              type: integer
+            skipped:
+              type: integer
+        decisions:
+          type: integer
+        backupDir:
+          type: string
+          nullable: true
+        recommendedActions:
+          type: object
+          nullable: true
+          description: 依赖检查结果
+        huskySetup:
+          type: string
+          nullable: true
+          description: Husky 安装指引

@@ -8,9 +8,15 @@
     "cost": 1,
     "feedbackSpeed": 1,
     "frequency": 4,
-    "recommendedMedium": "linter",
-    "alternativeMedium": ["hook", "claude.md"],
-    "techStack": ["typescript", "javascript"]
+    "recommendedMedium": "linter_warn",
+    "alternativeMedium": ["hook", "claude_md"],
+    "techStack": ["typescript", "javascript"],
+    "evidence": "console.log 是调试手段，不应出现在生产代码中。ESLint 的 no-console 规则可自动检测。",
+    "errorMessage": {
+      "why": "console.log 会在生产环境中暴露调试信息，且不是可配置的日志方案",
+      "whatInstead": "使用专用日志库（如 winston、pino）或框架内置的日志模块",
+      "reference": "ESLint no-console 规则 — eslint.org/docs/latest/rules/no-console"
+    }
   },
   {
     "id": "R002",
@@ -21,9 +27,15 @@
     "cost": 2,
     "feedbackSpeed": 2,
     "frequency": 3,
-    "recommendedMedium": "linter",
-    "alternativeMedium": ["hook", "claude.md"],
-    "techStack": ["typescript", "javascript"]
+    "recommendedMedium": "linter_warn",
+    "alternativeMedium": ["hook", "claude_md"],
+    "techStack": ["typescript", "javascript"],
+    "evidence": "直接使用 fetch 缺乏统一错误处理、超时和重试机制。封装 API 客户端可提供统一拦截层。",
+    "errorMessage": {
+      "why": "直接使用 fetch 会导致错误处理、超时、重试逻辑分散在各处，难以统一维护",
+      "whatInstead": "创建一个封装好的 API 客户端模块，统一处理错误、超时和认证",
+      "reference": "API Client 模式 — apiclient.dev/best-practices"
+    }
   },
   {
     "id": "R003",
@@ -34,9 +46,15 @@
     "cost": 1,
     "feedbackSpeed": 1,
     "frequency": 5,
-    "recommendedMedium": "claude.md",
-    "alternativeMedium": ["linter", "settings.json"],
-    "techStack": ["typescript", "javascript", "python", "go", "java"]
+    "recommendedMedium": "claude_md",
+    "alternativeMedium": ["linter_warn", "settings"],
+    "techStack": ["typescript", "javascript", "python", "go", "java"],
+    "evidence": "提前返回减少嵌套深度，提高代码可读性。虽不可完全自动化，但可通过代码审查引导。",
+    "errorMessage": {
+      "why": "深层嵌套的 if-else 结构降低代码可读性和可维护性",
+      "whatInstead": "在函数开头使用提前返回来处理边界情况，减少嵌套层级",
+      "reference": "Early Return 模式 — softwarepatterns.com/early-return"
+    }
   },
   {
     "id": "R004",
@@ -48,8 +66,14 @@
     "feedbackSpeed": 1,
     "frequency": 5,
     "recommendedMedium": "hook",
-    "alternativeMedium": ["ci", "claude.md"],
-    "techStack": ["typescript", "javascript", "python", "go", "java", "generic"]
+    "alternativeMedium": ["ci", "claude_md"],
+    "techStack": ["typescript", "javascript", "python", "go", "java", "generic"],
+    "evidence": "Conventional Commits 提供标准化提交信息，便于生成 CHANGELOG 和自动化版本管理。",
+    "errorMessage": {
+      "why": "不规范的提交信息使 CHANGELOG 生成和版本管理变得困难",
+      "whatInstead": "提交信息使用格式: type(scope): description，如 feat(auth): add login button",
+      "reference": "Conventional Commits — conventionalcommits.org"
+    }
   },
   {
     "id": "R005",
@@ -60,9 +84,15 @@
     "cost": 2,
     "feedbackSpeed": 2,
     "frequency": 4,
-    "recommendedMedium": "linter",
-    "alternativeMedium": ["hook", "claude.md"],
-    "techStack": ["typescript", "python"]
+    "recommendedMedium": "linter_warn",
+    "alternativeMedium": ["hook", "claude_md"],
+    "techStack": ["typescript", "python"],
+    "evidence": "类型注解提供编译时检查，减少运行时错误。TypeScript 类型系统可覆盖大部分场景。",
+    "errorMessage": {
+      "why": "缺少类型注解导致隐藏的类型错误在运行时才被发现",
+      "whatInstead": "为所有函数参数、返回值和关键变量添加显式类型注解",
+      "reference": "TypeScript 类型系统 — typescriptlang.org/docs/handbook/types"
+    }
   },
   {
     "id": "R006",
@@ -73,9 +103,15 @@
     "cost": 2,
     "feedbackSpeed": 2,
     "frequency": 3,
-    "recommendedMedium": "linter",
-    "alternativeMedium": ["claude.md", "hook"],
-    "techStack": ["typescript", "javascript", "python", "go", "java"]
+    "recommendedMedium": "linter_warn",
+    "alternativeMedium": ["claude_md", "hook"],
+    "techStack": ["typescript", "javascript", "python", "go", "java"],
+    "evidence": "魔术数字降低可读性和可维护性。命名常量使意图自文档化。",
+    "errorMessage": {
+      "why": "魔术数字的含义不明确，修改时需要查找所有出现位置",
+      "whatInstead": "将有业务含义的数字定义为命名常量，如 MAX_RETRY_COUNT = 3",
+      "reference": "Magic Number 反模式 — refactoring.guru/replace-magic-number-with-constant"
+    }
   },
   {
     "id": "R007",
@@ -87,8 +123,14 @@
     "feedbackSpeed": 5,
     "frequency": 3,
     "recommendedMedium": "ci",
-    "alternativeMedium": ["hook", "claude.md"],
-    "techStack": ["typescript", "javascript", "python", "go", "java"]
+    "alternativeMedium": ["hook", "claude_md"],
+    "techStack": ["typescript", "javascript", "python", "go", "java"],
+    "evidence": "合并前运行测试防止回归。CI 自动化可确保每次合并前测试通过。",
+    "errorMessage": {
+      "why": "未经测试的代码变更可能导致回归错误，影响现有功能",
+      "whatInstead": "在 CI 流水线中配置测试步骤，确保所有测试通过后再合并",
+      "reference": "CI/CD 最佳实践 — continuous-delivery.com"
+    }
   },
   {
     "id": "R008",
@@ -100,8 +142,14 @@
     "feedbackSpeed": 1,
     "frequency": 5,
     "recommendedMedium": "hook",
-    "alternativeMedium": ["ci", "claude.md"],
-    "techStack": ["typescript", "javascript", "python", "go", "java"]
+    "alternativeMedium": ["ci", "claude_md"],
+    "techStack": ["typescript", "javascript", "python", "go", "java"],
+    "evidence": "提交前 lint 可捕获基本代码质量问题。lint 阶段执行速度快，适合 pre-commit hook。",
+    "errorMessage": {
+      "why": "提交后才发现的 lint 错误需要额外的修复提交，污染提交历史",
+      "whatInstead": "在 pre-commit hook 中运行 lint 检查，确保提交的代码符合规范",
+      "reference": "Husky + Lint-Staged — typicode.github.io/husky"
+    }
   },
   {
     "id": "R009",
@@ -112,9 +160,15 @@
     "cost": 3,
     "feedbackSpeed": 3,
     "frequency": 3,
-    "recommendedMedium": "claude.md",
-    "alternativeMedium": ["linter", "settings.json"],
-    "techStack": ["typescript", "javascript", "python", "go", "java"]
+    "recommendedMedium": "claude_md",
+    "alternativeMedium": ["linter_warn", "settings"],
+    "techStack": ["typescript", "javascript", "python", "go", "java"],
+    "evidence": "重复代码增加维护成本。提取公共逻辑遵循 DRY 原则，但需人工判断哪些抽取是合理的。",
+    "errorMessage": {
+      "why": "重复代码使得 bug 修复需要在多处同步修改，容易遗漏",
+      "whatInstead": "将重复逻辑提取为共享函数或模块，遵循 DRY 原则",
+      "reference": "DRY 原则 — en.wikipedia.org/wiki/Don't_repeat_yourself"
+    }
   },
   {
     "id": "R010",
@@ -126,8 +180,14 @@
     "feedbackSpeed": 3,
     "frequency": 2,
     "recommendedMedium": "ci",
-    "alternativeMedium": ["hook", "claude.md"],
-    "techStack": ["typescript", "javascript", "python", "go", "java"]
+    "alternativeMedium": ["hook", "claude_md"],
+    "techStack": ["typescript", "javascript", "python", "go", "java"],
+    "evidence": "锁定文件确保可重复构建。npm/ yarn/pip 等工具的 lock 文件应纳入版本控制。",
+    "errorMessage": {
+      "why": "缺少锁定文件会导致不同环境下安装的依赖版本不一致，产生难以复现的 bug",
+      "whatInstead": "确保 package-lock.json 或 yarn.lock 等锁定文件被提交到版本控制",
+      "reference": "依赖锁定最佳实践 — docs.npmjs.com/cli/lockfiles"
+    }
   },
   {
     "id": "R011",
@@ -138,9 +198,15 @@
     "cost": 2,
     "feedbackSpeed": 2,
     "frequency": 2,
-    "recommendedMedium": "linter",
-    "alternativeMedium": ["hook", "claude.md"],
-    "techStack": ["typescript", "javascript", "python", "go", "java"]
+    "recommendedMedium": "linter_warn",
+    "alternativeMedium": ["hook", "claude_md"],
+    "techStack": ["typescript", "javascript", "python", "go", "java"],
+    "evidence": "大文件难以理解和维护。拆分为小模块提高内聚性，一般建议文件不超过 300 行。",
+    "errorMessage": {
+      "why": "超过 300 行的文件往往承担了过多职责，难以理解和测试",
+      "whatInstead": "按单一职责原则将大文件拆分为多个小模块",
+      "reference": "Single Responsibility Principle — en.wikipedia.org/wiki/Single-responsibility_principle"
+    }
   },
   {
     "id": "R012",
@@ -151,9 +217,15 @@
     "cost": 1,
     "feedbackSpeed": 2,
     "frequency": 3,
-    "recommendedMedium": "linter",
-    "alternativeMedium": ["hook", "ci", "claude.md"],
-    "techStack": ["typescript", "javascript", "python", "go", "java"]
+    "recommendedMedium": "linter_error",
+    "alternativeMedium": ["hook", "ci", "claude_md"],
+    "techStack": ["typescript", "javascript", "python", "go", "java"],
+    "evidence": "硬编码的敏感信息构成安全风险。环境变量是管理配置的行业标准做法。",
+    "errorMessage": {
+      "why": "硬编码的 API 密钥、密码等敏感信息可能通过版本控制泄露",
+      "whatInstead": "使用环境变量或 .env 文件管理敏感信息，并在 .gitignore 中排除",
+      "reference": "OWASP 安全建议 — owasp.org/secure-coding-practices"
+    }
   },
   {
     "id": "R013",
@@ -164,9 +236,15 @@
     "cost": 3,
     "feedbackSpeed": 4,
     "frequency": 4,
-    "recommendedMedium": "claude.md",
-    "alternativeMedium": ["settings.json", "ci"],
-    "techStack": ["typescript", "javascript", "python", "go", "java"]
+    "recommendedMedium": "claude_md",
+    "alternativeMedium": ["settings", "ci"],
+    "techStack": ["typescript", "javascript", "python", "go", "java"],
+    "evidence": "代码评审是发现设计问题和知识共享的关键环节。不可完全自动化，但可以通过流程约束。",
+    "errorMessage": {
+      "why": "没有代码评审时，设计缺陷和技术债务容易积累",
+      "whatInstead": "所有重要变更至少需要一位同事评审后再合并",
+      "reference": "Code Review 最佳实践 — google.github.io/eng-practices/review"
+    }
   },
   {
     "id": "R014",
@@ -177,9 +255,15 @@
     "cost": 1,
     "feedbackSpeed": 1,
     "frequency": 4,
-    "recommendedMedium": "linter",
-    "alternativeMedium": ["claude.md", "hook"],
-    "techStack": ["typescript", "javascript", "python", "go", "java"]
+    "recommendedMedium": "linter_warn",
+    "alternativeMedium": ["claude_md", "hook"],
+    "techStack": ["typescript", "javascript", "python", "go", "java"],
+    "evidence": "一致的命名风格提高代码可读性。ESLint 命名规则可自动检查 camelCase 等命名约定。",
+    "errorMessage": {
+      "why": "命名风格不一致降低代码可读性，增加认知负担",
+      "whatInstead": "遵循项目的命名约定：变量和函数使用 camelCase，类使用 PascalCase",
+      "reference": "命名规范 — eslint.org/docs/latest/rules/naming-convention"
+    }
   },
   {
     "id": "R015",
@@ -190,9 +274,15 @@
     "cost": 3,
     "feedbackSpeed": 3,
     "frequency": 4,
-    "recommendedMedium": "claude.md",
-    "alternativeMedium": ["linter", "settings.json"],
-    "techStack": ["typescript", "javascript", "python", "go", "java"]
+    "recommendedMedium": "claude_md",
+    "alternativeMedium": ["linter_warn", "settings"],
+    "techStack": ["typescript", "javascript", "python", "go", "java"],
+    "evidence": "未处理的异步错误可能导致静默失败。需人工审查关键路径的错误处理分支。",
+    "errorMessage": {
+      "why": "未捕获的异步异常会导致静默失败，难以排查问题根因",
+      "whatInstead": "对每个异步操作添加 try/catch 或 .catch() 处理，对边界条件添加防御性检查",
+      "reference": "Node.js 错误处理最佳实践 — nodejs.dev/error-handling"
+    }
   },
   {
     "id": "R016",
@@ -203,8 +293,14 @@
     "cost": 1,
     "feedbackSpeed": 1,
     "frequency": 2,
-    "recommendedMedium": "linter",
+    "recommendedMedium": "linter_error",
     "alternativeMedium": ["hook", "ci"],
-    "techStack": ["typescript", "javascript", "python", "go", "java"]
+    "techStack": ["typescript", "javascript", "python", "go", "java"],
+    "evidence": "debugger 语句在生产环境中会导致代码执行中断。ESLint 规则可直接检测。",
+    "errorMessage": {
+      "why": "debugger 语句在生产环境中会导致 JavaScript 执行中断，影响用户",
+      "whatInstead": "在开发调试完成后移除所有 debugger 语句，使用断点调试替代",
+      "reference": "ESLint no-debugger 规则 — eslint.org/docs/latest/rules/no-debugger"
+    }
   }
 ]
