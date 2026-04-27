@@ -1,6 +1,6 @@
 {
   "name": "@realpkuasule/harness-automation",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Harness Automation System - MCP Server for automated constraint configuration",
   "main": "dist/index.js",
   "type": "module",

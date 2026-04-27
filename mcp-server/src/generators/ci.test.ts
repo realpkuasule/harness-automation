@@ -46,6 +46,29 @@ describe("generateCiWorkflow", () => {
     expect(result).toBe("");
   });
 
+  it("returns empty string for prototype phase with no ci rules", () => {
+    const result = generateCiWorkflow({ decisions: [], projectPhase: "prototype" });
+    expect(result).toBe("");
+  });
+
+  it("generates CI for prototype when ci medium rules exist", () => {
+    const result = generateCiWorkflow({
+      decisions: [makeDecision({ ruleName: "test-before-merge" })],
+      projectPhase: "prototype",
+    });
+    expect(result).toContain("Run tests");
+  });
+
+  it("generates CI for non-prototype phase even without ci rules", () => {
+    const result = generateCiWorkflow({
+      decisions: [],
+      projectPhase: "growth",
+      techStack: "typescript",
+    });
+    expect(result).toContain("Harness CI");
+    expect(result).toContain("Build check");
+  });
+
   // 23. nodeVersion 参数
   it("uses specified nodeVersion in matrix", () => {
     const result = generateCiWorkflow({

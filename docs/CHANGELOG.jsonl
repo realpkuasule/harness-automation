@@ -161,3 +161,10 @@
 {"timestamp": "2026-04-27T21:53:30+08:00", "type": "fix", "phase": 17, "description": "P17-2: 修复 usage-as-claude-code-skill.md 文档中的 eslint.config.json 文件名"}
 {"timestamp": "2026-04-27T21:53:30+08:00", "type": "fix", "phase": 17, "description": "P17-3: UNKNOWN_TOOL 错误返回结构化 HarnessError 替代 throw"}
 {"timestamp": "2026-04-27T22:28:07+08:00", "type": "feat", "phase": 17, "description": "release harness-automation v1.0.7"}
+{"timestamp": "2026-04-28T00:08:20+08:00", "type": "fix", "phase": 18, "description": "P18-1: enrichPartialDecisions 从 rule 定义构建实义 reasons（reasons/adjustedCost/feedbackSpeed/errorMessage）"}
+{"timestamp": "2026-04-28T00:08:20+08:00", "type": "fix", "phase": 18, "description": "P18-2: 修复 husky .lintstagedrc.json 中 prettier 命令互斥参数（--write --check → --write）"}
+{"timestamp": "2026-04-28T00:08:20+08:00", "type": "feat", "phase": 18, "description": "P18-3: ESLint 配置 ESM 兼容，根据 package.json type 字段自动切换 export default/module.exports"}
+{"timestamp": "2026-04-28T00:08:21+08:00", "type": "feat", "phase": 18, "description": "P18-4: 生成 commitlint.config.js 使 commit-msg hook 可用"}
+{"timestamp": "2026-04-28T00:08:21+08:00", "type": "feat", "phase": 18, "description": "P18-5: CI 工作流增加 projectPhase 感知，prototype 阶段无显式 ci 规则时跳过"}
+{"timestamp": "2026-04-28T00:08:21+08:00", "type": "feat", "phase": 18, "description": "P18-6: init_harness 输出权限配置补全提示（permissions 建议工具列表）"}
+{"timestamp": "2026-04-28T00:29:37+08:00", "type": "feat", "phase": 18, "description": "release harness-automation v1.0.8"}

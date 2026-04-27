@@ -17,7 +17,7 @@ import { generateClaudeMd } from "./generators/claude_md.js";
 import { generateEslintConfig } from "./generators/eslint.js";
 import { generateSettingsJson } from "./generators/settings_json.js";
 import { generateGitignore } from "./generators/gitignore.js";
-import { generateHuskyConfig, generateHuskySetupInstructions, generateLintStagedConfig } from "./generators/husky.js";
+import { generateHuskyConfig, generateHuskySetupInstructions, generateLintStagedConfig, generateCommitlintConfig } from "./generators/husky.js";
 import { generateCiWorkflow } from "./generators/ci.js";
 import { mergeDependencies } from "./generators/package_json.js";
 import { checkDependencies } from "./deps.js";
@@ -276,7 +276,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         };
       }
 
-      const files = generateProjectFiles(decisions);
+      const files = generateProjectFiles(decisions, input.projectDir);
 
       const errors: Array<{ file: string; message: string; code: string }> = [];
       const warnings: string[] = [];
@@ -517,7 +517,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
       // Backup existing files before overwriting
       const backupDir = backupGeneratedFiles(input.projectDir);
 
-      const files = generateProjectFiles(decisions);
+      const files = generateProjectFiles(decisions, input.projectDir);
 
       // 3e. Husky hooks
       const huskyHooks = generateHuskyConfig({ decisions });
@@ -531,13 +531,26 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
       }
 
       // 3f. CI workflow
-      const ciContent = generateCiWorkflow({ decisions, techStack: input.techStack[0] });
+      const ciContent = generateCiWorkflow({ decisions, techStack: input.techStack[0], projectPhase: input.projectPhase });
       if (ciContent.trim()) {
         files.push({
           path: ".github/workflows/ci.yml",
           content: ciContent,
           action: "created",
         });
+      }
+
+      // Check if commitlint config should be generated (when commit-msg hook exists)
+      const hasCommitMsgHook = hookEntries.some(([name]) => name === "commit-msg");
+      if (hasCommitMsgHook) {
+        const commitlintPath = join(input.projectDir, "commitlint.config.js");
+        if (!existsSync(commitlintPath)) {
+          files.push({
+            path: "commitlint.config.js",
+            content: generateCommitlintConfig(),
+            action: "created",
+          });
+        }
       }
 
       // 3g. Package dependency check
@@ -579,6 +592,18 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         }
       }
 
+      const permissionHint = {
+        note: "为提高效率，建议将常用 MCP 工具加入 permissions allowlist",
+        command: "运行 /fewer-permission-prompts 或在 .claude/settings.local.json 中配置",
+        suggestedTools: [
+          "mcp__harness-automation__evaluate_rules",
+          "mcp__harness-automation__generate_config",
+          "mcp__harness-automation__query_state",
+          "mcp__harness-automation__init_harness",
+          "mcp__harness-automation__validate_setup",
+        ],
+      };
+
       const summary = {
         files: fileSummary,
         decisions: evalOutput.summary.total,
@@ -587,6 +612,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         huskySetup: hookEntries.length > 0
           ? generateHuskySetupInstructions()
           : null,
+        permissions: permissionHint,
       };
 
       const output = { files, summary, errors };
@@ -1285,15 +1311,38 @@ function enrichPartialDecisions(
         cognitiveSkillTriggers: [],
       };
     }
+    // Build meaningful reasons from rule definition attributes
+    const reasons: string[] = [];
+    if (rule.formalizable) {
+      reasons.push("规则可形式化，适合自动化检查");
+    } else {
+      reasons.push("规则不可完全形式化，需要认知层支持");
+    }
+    reasons.push(`实施成本 ${rule.cost <= 2 ? "低" : rule.cost <= 3 ? "中" : "高"} (${rule.cost}/5)`);
+    if (rule.frequency <= 2) {
+      reasons.push(`触发频率低 (${rule.frequency}/5)`);
+    } else if (rule.frequency >= 4) {
+      reasons.push(`触发频率高 (${rule.frequency}/5)`);
+    }
+    if (!rule.formalizable) {
+      reasons.push("建议配合认知层 Skills 使用");
+    }
+
     return {
       ruleId: rule.id,
       ruleName: rule.name,
       recommendedMedium: medium,
       alternativeMedia: rule.alternativeMedium,
       confidence: 0.8,
-      reasons: ["User-configured medium assignment"],
-      cognitiveLayerRequired: false,
-      cognitiveSkillTriggers: [],
+      reasons,
+      cognitiveLayerRequired: !rule.formalizable,
+      cognitiveSkillTriggers: !rule.formalizable
+        ? (rule.cognitiveLayerSupport?.skillTriggers ?? ["diagnostic", "educational"])
+        : [],
+      adjustedCost: rule.cost,
+      adjustedCostLabel: rule.cost <= 2 ? "low" : rule.cost <= 3 ? "medium" : "high",
+      feedbackSpeed: rule.feedbackSpeed,
+      errorMessage: rule.errorMessage,
     };
   });
 }
@@ -1304,6 +1353,7 @@ function enrichPartialDecisions(
  */
 function generateProjectFiles(
   decisions: RuleDecision[],
+  projectDir?: string,
 ): Array<{ path: string; content: string; action: "created" | "overwritten" | "skipped" | "merged" | "dry_run" }> {
   const files: Array<{ path: string; content: string; action: "created" | "overwritten" | "skipped" | "merged" | "dry_run" }> = [];
 
@@ -1315,7 +1365,7 @@ function generateProjectFiles(
     (d) => d.recommendedMedium === "linter_error" || d.recommendedMedium === "linter_warn" || d.recommendedMedium === "linter",
   );
   if (linterDecisions.length > 0) {
-    files.push({ path: "eslint.config.js", content: generateEslintConfig({ decisions }), action: "created" });
+    files.push({ path: "eslint.config.js", content: generateEslintConfig({ decisions, projectDir }), action: "created" });
   }
 
   // 3. settings.json

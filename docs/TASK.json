@@ -2158,6 +2158,84 @@
       "fixPlanRef": "§P1-1",
       "gapType": "实现与规范不一致",
       "verification": "向 MCP server 发送未知工具名，收到 isError=true 且 body.code === \"UNKNOWN_TOOL\""
+    },
+    {
+      "id": "P18-1",
+      "title": "Code — enrichPartialDecisions 从 rule 定义构建实义 reasons",
+      "description": "generate_config 接收用户传入的精简决策 {ruleId, recommendedMedium} 时调用 enrichPartialDecisions，但 reasons 固定为占位符 User-configured medium assignment，未从 rule 定义读取 formalizable/cost/frequency 等属性构建实义描述。同时 errorMessage、adjustedCost、adjustedCostLabel、feedbackSpeed 字段也丢失。\n依据：docs/plans/improvement-20260427-2306.md §P0-1\n改动：\n1. mcp-server/src/index.ts L1275-1298 — enrichPartialDecisions 中从 rule 定义构建实义 reasons（formalizable→可形式化、cost→成本、frequency→触发频率）\n2. 补充返回 adjustedCost/adjustedCostLabel/feedbackSpeed/errorMessage 字段",
+      "phase": 18,
+      "day": 1,
+      "status": "completed",
+      "priority": "critical",
+      "dependencies": [],
+      "fixPlanRef": "§P0-1",
+      "gapType": "实现质量",
+      "verification": "generate_config 传 {ruleId:R001,recommendedMedium:linter_warn}，返回的 CLAUDE.md 中 no-console-log 含实义描述（非 User-configured medium assignment）"
+    },
+    {
+      "id": "P18-2",
+      "title": "Code — 修复 .lintstagedrc.json 中 prettier 命令互斥参数",
+      "description": ".lintstagedrc.json 中 prettier 命令为 prettier --write --check，--write（格式化并写入）与 --check（仅检查不写入）互斥。lint-staged 意图是格式化文件，应使用 --write。\n依据：docs/plans/improvement-20260427-2306.md §P0-2\n改动：\n1. mcp-server/src/generators/husky.ts L60 — prettier --write --check → prettier --write\n2. mcp-server/src/generators/husky.test.ts — 新增测试断言生成的 prettier 命令不含 --check",
+      "phase": 18,
+      "day": 1,
+      "status": "completed",
+      "priority": "critical",
+      "dependencies": [],
+      "fixPlanRef": "§P0-2",
+      "gapType": "生成内容错误",
+      "verification": "generateLintStagedConfig() 输出中 prettier 命令为 prettier --write 不含 --check"
+    },
+    {
+      "id": "P18-3",
+      "title": "Code — ESLint 配置 ESM 兼容，检测 type 字段切换格式",
+      "description": "eslint.config.js 始终输出 CommonJS 格式 module.exports = [...]。当项目使用 type: module 时 Node.js 将 .js 视为 ESM，module.exports 语法报错。需检测 package.json 的 type 字段自适应。\n依据：docs/plans/improvement-20260427-2306.md §P1-1\n改动：\n1. mcp-server/src/generators/eslint.ts — 读取 projectDir/package.json 的 type 字段\n2. ESM 输出 export default [...]，CJS 输出 module.exports = [...]\n3. 更新 index.ts 中 generateProjectFiles 调用处传入 projectDir\n4. mcp-server/src/generators/eslint.test.ts — 新增 ESM/CJS 场景测试\n5. docs/api/openapi.yaml L74-77 — 更新 generate_config 描述（ESM 格式说明）",
+      "phase": 18,
+      "day": 1,
+      "status": "completed",
+      "priority": "high",
+      "dependencies": [],
+      "fixPlanRef": "§P1-1",
+      "gapType": "兼容性缺陷",
+      "verification": "type=module → export default; 无 type → module.exports; 无 package.json → module.exports；OpenAPI 描述已更新"
+    },
+    {
+      "id": "P18-4",
+      "title": "Code — 生成 commitlint.config.js 使 commit-msg hook 可用",
+      "description": "commit-msg hook 内容正确（npx --no -- commitlint --edit ），@commitlint/cli 和 @commitlint/config-conventional 也正确安装，但缺少 commitlint.config.js 配置文件，commitlint 运行时报错退出。\n依据：docs/plans/improvement-20260427-2306.md §P1-2\n改动：\n1. mcp-server/src/generators/husky.ts — 新增 generateCommitlintConfig() 函数\n2. mcp-server/src/index.ts L523-531 — init_harness 中调用并写入 commitlint.config.js\n3. 已存在的 commitlint.config.js 不覆盖\n4. docs/api/openapi.yaml L222-225 — 更新 init_harness 描述（补充 commitlint.config.js）",
+      "phase": 18,
+      "day": 1,
+      "status": "completed",
+      "priority": "high",
+      "dependencies": [],
+      "fixPlanRef": "§P1-2",
+      "gapType": "功能缺失",
+      "verification": "init_harness 后项目根目录存在 commitlint.config.js，内容含 extends: [@commitlint/config-conventional]"
+    },
+    {
+      "id": "P18-5",
+      "title": "Code — CI 工作流增加 projectPhase 感知，prototype 阶段裁剪",
+      "description": "generateCiWorkflow 没有 projectPhase 参数，prototype+solo 项目也生成完整 CI 流水线（ubuntu-latest、Node 18 matrix、lockfile-lint、npm test、build）。prototype 阶段通常无 CI runner 触发，配置浪费。\n依据：docs/plans/improvement-20260427-2306.md §P2-1\n改动：\n1. mcp-server/src/generators/ci.ts — CiConfig 新增 projectPhase 字段\n2. 函数开头：prototype 且无显式 ci 规则时不生成 CI\n3. mcp-server/src/generators/ci.test.ts — 新增 prototype 测试",
+      "phase": 18,
+      "day": 1,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [],
+      "fixPlanRef": "§P2-1",
+      "gapType": "体验优化",
+      "verification": "projectPhase=prototype 且无 ci 规则 → 返回 ''；有 ci 规则仍生成；非 prototype 正常生成"
+    },
+    {
+      "id": "P18-6",
+      "title": "Code — init_harness 输出权限配置补全提示",
+      "description": "init_harness 生成 .claude/settings.json（编辑器设置），但不生成 settings.local.json 的 permissions allowlist。用户需手动配置或运行 fewer-permission-prompts skill。\n依据：docs/plans/improvement-20260427-2306.md §P2-2\n改动：\n1. mcp-server/src/index.ts — init_harness handler 返回的 summary 中添加 permissions 提示字段（含建议工具列表和配置方法）\n2. 不自动写入 settings.local.json（避免过度授权），仅输出提示信息\n3. docs/api/openapi.yaml L2347-2371 — InitHarnessSummary schema 新增 permissions 可选属性",
+      "phase": 18,
+      "day": 1,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [],
+      "fixPlanRef": "§P2-2",
+      "gapType": "体验优化",
+      "verification": "init_harness 返回的 summary 含 permissions 提示字段，含建议工具列表；summary 含 permissions 字段"
     }
   ]
 }

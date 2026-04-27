@@ -57,9 +57,20 @@ export function generateHuskyConfig(config: HuskyConfig): Record<string, string>
 export function generateLintStagedConfig(): string {
   const config = {
     "*.{js,jsx,ts,tsx}": ["eslint --fix --max-warnings=0"],
-    "*.{json,md,yaml,yml}": ["prettier --write --check"],
+    "*.{json,md,yaml,yml}": ["prettier --write"],
   };
   return JSON.stringify(config, null, 2);
+}
+
+/**
+ * Generate commitlint.config.js content.
+ * Uses @commitlint/config-conventional for conventional commit messages.
+ */
+export function generateCommitlintConfig(): string {
+  return `module.exports = {
+  extends: ["@commitlint/config-conventional"],
+};
+`;
 }
 
 /**

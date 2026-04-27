@@ -1,13 +1,18 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { RuleDecision } from "../types.js";
 
 export interface EslintConfig {
   decisions: RuleDecision[];
   existingConfig?: Record<string, unknown>;
+  /** Project directory for reading package.json (ESM detection) */
+  projectDir?: string;
 }
 
 /**
  * Generate ESLint Flat Config from rule decisions.
- * Outputs CommonJS module.exports = [...] format for ESLint v9+ compatibility.
+ * Outputs CommonJS module.exports = [...] or ESM export default [...] format
+ * depending on the project's package.json "type" field.
  * Handles merging with existing config.
  */
 export function generateEslintConfig(config: EslintConfig): string {
@@ -68,5 +73,21 @@ export function generateEslintConfig(config: EslintConfig): string {
   }
 
   const configArray = [...prepend, { rules }];
-  return `module.exports = ${JSON.stringify(configArray, null, 2)};\n`;
+
+  // Detect ESM from project's package.json
+  let isEsm = false;
+  if (config.projectDir) {
+    try {
+      const pkgPath = join(config.projectDir, "package.json");
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+      isEsm = pkg.type === "module";
+    } catch {
+      // Default to CJS
+    }
+  }
+
+  const configJson = JSON.stringify(configArray, null, 2);
+  return isEsm
+    ? `export default ${configJson};\n`
+    : `module.exports = ${configJson};\n`;
 }

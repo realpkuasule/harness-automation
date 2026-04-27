@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateHuskyConfig, generateLintStagedConfig } from "./husky.js";
+import { generateHuskyConfig, generateLintStagedConfig, generateCommitlintConfig } from "./husky.js";
 import type { RuleDecision } from "../types.js";
 
 function decision(ruleName: string, medium: RuleDecision["recommendedMedium"]): RuleDecision {
@@ -68,5 +68,18 @@ describe("generateLintStagedConfig", () => {
     expect(parsed["*.{js,jsx,ts,tsx}"][0]).toContain("eslint");
     expect(parsed["*.{json,md,yaml,yml}"]).toBeDefined();
     expect(parsed["*.{json,md,yaml,yml}"][0]).toContain("prettier");
+  });
+
+  it("prettier command does not contain mutually exclusive --check flag", () => {
+    const result = generateLintStagedConfig();
+    expect(result).not.toContain("--check");
+  });
+});
+
+describe("generateCommitlintConfig", () => {
+  it("returns valid commitlint config with conventional commits extension", () => {
+    const result = generateCommitlintConfig();
+    expect(result).toContain("@commitlint/config-conventional");
+    expect(result).toContain("module.exports");
   });
 });

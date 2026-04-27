@@ -6,12 +6,19 @@ export interface CiConfig {
   techStack?: string;
   /** Node version for CI matrix */
   nodeVersion?: string;
+  /** Project phase for context-aware CI generation */
+  projectPhase?: string;
 }
 
 /**
  * Generate a GitHub Actions workflow from rule decisions.
  */
 export function generateCiWorkflow(config: CiConfig): string {
+  // Prototype phase: skip CI unless explicitly requested via ci medium rules
+  if (config.projectPhase === "prototype" && !config.decisions.some((d) => d.recommendedMedium === "ci")) {
+    return "";
+  }
+
   const hasCiRules = config.decisions.some(
     (d) => d.recommendedMedium === "ci",
   );
