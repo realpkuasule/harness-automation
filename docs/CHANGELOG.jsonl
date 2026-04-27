@@ -140,3 +140,14 @@
 {"timestamp": "2026-04-25T20:15:21+08:00", "type": "fix", "phase": 13, "description": "P13-12: 补充 openapi.yaml 5 处边界情况文档（rollback/init_harness/import_rules/query_state/optimize_error_message）"}
 {"timestamp": "2026-04-25T22:06:40+08:00", "type": "fix", "phase": 13, "description": "P13-13: 修复 optimize_error_message.projectDir Zod 必填/可选不一致（types.ts:506）"}
 {"timestamp": "2026-04-25T22:06:50+08:00", "type": "fix", "phase": 13, "description": "P13-14: 补充 HarnessState.evaluatedAt 字段到 OpenAPI spec"}
+{"timestamp": "2026-04-25T22:33:45+08:00", "type": "feat", "phase": 14, "description": "P14-1: 修复 DepCheckResult.outdated 类型 (string[] → object[])"}
+{"timestamp": "2026-04-25T22:33:45+08:00", "type": "feat", "phase": 14, "description": "P14-2: validate_setup.checkFiles 补充 default 声明"}
+{"timestamp": "2026-04-25T22:33:45+08:00", "type": "feat", "phase": 14, "description": "P14-3: 补充 optimize_error_message.ruleName fallback 文档说明"}
+{"timestamp": "2026-04-25T22:33:45+08:00", "type": "feat", "phase": 14, "description": "P14-4: init_harness dryRun 模式下省略的 summary 字段说明"}
+{"timestamp": "2026-04-25T22:33:45+08:00", "type": "feat", "phase": 14, "description": "P14-5: 对齐 reset_state 描述措辞与 spec 一致"}
+{"timestamp": "2026-04-25T22:33:45+08:00", "type": "feat", "phase": 14, "description": "P14-6: import_rules 可选字段丢失的 round-trip 说明"}
+{"timestamp": "2026-04-26T09:41:03+08:00", "type": "feat", "phase": 15, "description": "P15-1: 排除测试文件出 TypeScript 编译"}
+{"timestamp": "2026-04-26T09:41:03+08:00", "type": "feat", "phase": 15, "description": "P15-2: 添加 .npmignore 排除测试和源文件"}
+{"timestamp": "2026-04-26T09:41:03+08:00", "type": "feat", "phase": 15, "description": "P15-3: 配置 npm publish 元数据"}
+{"timestamp": "2026-04-26T09:41:03+08:00", "type": "feat", "phase": 15, "description": "P15-4: 添加 GitHub Actions npm publish 工作流"}
+{"timestamp": "2026-04-26T09:41:03+08:00", "type": "feat", "phase": 15, "description": "P15-5: 添加根级 README.md"}

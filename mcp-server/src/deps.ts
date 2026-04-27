@@ -18,7 +18,7 @@ export interface DepCheckResult {
   /** Suggested install command */
   installCommand: string;
   /** Detected outdated packages (empty if check not run) */
-  outdated: string[];
+  outdated: Array<{ name: string; current: string; wanted: string }>;
 }
 
 /**
@@ -63,7 +63,7 @@ export function checkDependencies(projectDir: string): DepCheckResult {
   }
 
   // Check outdated packages (only if node_modules exists)
-  let outdated: string[] = [];
+  let outdated: Array<{ name: string; current: string; wanted: string }> = [];
   if (hasNodeModules) {
     try {
       const out = execSync("npm outdated --json 2>/dev/null", {
@@ -72,8 +72,17 @@ export function checkDependencies(projectDir: string): DepCheckResult {
         stdio: ["ignore", "pipe", "ignore"],
       });
       if (out) {
-        const parsed = JSON.parse(out);
-        outdated = Object.keys(parsed).slice(0, 10); // top 10
+        const parsed = JSON.parse(out) as Record<
+          string,
+          { current: string; wanted: string }
+        >;
+        outdated = Object.entries(parsed)
+          .slice(0, 10)
+          .map(([name, info]) => ({
+            name,
+            current: info.current,
+            wanted: info.wanted,
+          }));
       }
     } catch {
       // npm outdated exits with non-zero when outdated packages exist
@@ -84,8 +93,17 @@ export function checkDependencies(projectDir: string): DepCheckResult {
           stdio: ["ignore", "pipe", "ignore"],
         });
         if (out && out !== "") {
-          const parsed = JSON.parse(out);
-          outdated = Object.keys(parsed).slice(0, 10);
+          const parsed = JSON.parse(out) as Record<
+            string,
+            { current: string; wanted: string }
+          >;
+          outdated = Object.entries(parsed)
+            .slice(0, 10)
+            .map(([name, info]) => ({
+              name,
+              current: info.current,
+              wanted: info.wanted,
+            }));
         }
       } catch {
         // Not an npm project or npm not available

@@ -116,7 +116,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
       },
       {
         name: "reset_state",
-        description: "重置 Harness 状态（用于重新开始流程）",
+        description: "将状态机的 phase 重置为 null，用于重新开始流程",
         inputSchema: z(ResetStateInputSchema),
       },
       {

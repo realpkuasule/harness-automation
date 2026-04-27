@@ -4,7 +4,7 @@ set -euo pipefail
 # ============================================================
 # Harness Automation — Install Script
 # ============================================================
-# Installs harness-automation as a Claude Code MCP server in
+# Installs @realpkuasule/harness-automation as a Claude Code MCP server in
 # the target project. Can be run from the target project
 # directory or with --dir <path>.
 #
@@ -33,7 +33,7 @@ while [[ $# -gt 0 ]]; do
     --help|-h)
       echo "Usage: install.sh [--dir /path/to/project]"
       echo ""
-      echo "Installs harness-automation as a Claude Code MCP server in the target project."
+      echo "Installs @realpkuasule/harness-automation as a Claude Code MCP server in the target project."
       echo "If --dir is omitted, uses the current working directory."
       exit 0
       ;;
@@ -45,7 +45,7 @@ if [[ -z "$TARGET_DIR" ]]; then
   TARGET_DIR="$(pwd)"
 fi
 
-# Resolve harness-automation root (where this script lives)
+# Resolve @realpkuasule/harness-automation root (where this script lives)
 HARNESS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Allow override via env var
 HARNESS_ROOT="${HARNESS_PATH:-$HARNESS_ROOT}"
@@ -81,13 +81,13 @@ else
   ok "Git 仓库已检测到"
 fi
 
-# --- Step 3: Check harness-automation dist ---
-info "检查 harness-automation 构建产物..."
+# --- Step 3: Check @realpkuasule/harness-automation dist ---
+info "检查 @realpkuasule/harness-automation 构建产物..."
 
 HARNESS_MCP="$HARNESS_ROOT/mcp-server/dist/index.js"
 if [[ ! -f "$HARNESS_MCP" ]]; then
   err "未找到构建产物: $HARNESS_MCP"
-  err "请先在 harness-automation 项目目录中运行: cd mcp-server && npm run build"
+  err "请先在 @realpkuasule/harness-automation 项目目录中运行: cd mcp-server && npm run build"
   exit 1
 fi
 ok "构建产物已找到: $HARNESS_MCP"
@@ -125,7 +125,7 @@ existing['mcpServers']['harness-automation'] = {
 }
 print(json.dumps(existing, indent=2, ensure_ascii=False))
 " <<< "$EXISTING" > "$CLAUDE_SETTINGS"
-  ok "已有 .claude/settings.json，已合并 harness-automation 配置"
+  ok "已有 .claude/settings.json，已合并 @realpkuasule/harness-automation 配置"
 else
   echo "$MCP_CONFIG" > "$CLAUDE_SETTINGS"
   ok "已创建 .claude/settings.json"

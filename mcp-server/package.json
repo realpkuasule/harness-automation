@@ -1,5 +1,5 @@
 {
-  "name": "harness-automation",
+  "name": "@realpkuasule/harness-automation",
   "version": "1.0.6",
   "description": "Harness Automation System - MCP Server for automated constraint configuration",
   "main": "dist/index.js",
@@ -7,6 +7,31 @@
   "bin": {
     "harness-automation": "./dist/index.js"
   },
+  "files": [
+    "dist/",
+    "!dist/**/*.test.*",
+    "!dist/**/__tests__/",
+    "!dist/**/__fixtures__/",
+    "!dist/**/*.js.map",
+    "!dist/**/*.d.ts.map"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/realpkuasule/harness-automation.git"
+  },
+  "bugs": {
+    "url": "https://github.com/realpkuasule/harness-automation/issues"
+  },
+  "homepage": "https://github.com/realpkuasule/harness-automation#readme",
+  "keywords": [
+    "harness",
+    "automation",
+    "constraint",
+    "mcp",
+    "claude-code",
+    "rules"
+  ],
+  "license": "MIT",
   "scripts": {
     "build": "tsc && cp src/rules.json dist/rules.json",
     "start": "node dist/index.js",
@@ -16,7 +41,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:ci": "vitest run --coverage --reporter=verbose",
-    "prepare": "husky"
+    "prepare": "test -d .git && husky || true",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.8.0",

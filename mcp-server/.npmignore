@@ -1,0 +1,19 @@
+# Sources
+src/
+tsconfig.json
+
+# Tests
+*.test.*
+__tests__/
+__fixtures__/
+
+# Maps (production doesn't need them)
+*.js.map
+*.d.ts.map
+
+# Coverage
+coverage/
+
+# Dev
+node_modules/
+eslint.config.js

@@ -1839,6 +1839,155 @@
       "fixPlanRef": "P2-1",
       "gapType": "新发现",
       "verification": "yq eval 确认 evaluatedAt 字段存在于 HarnessState schema"
+    },
+    {
+      "id": "P14-1",
+      "title": "Code — 修复 DepCheckResult.outdated 类型 (string[] → object[])",
+      "description": "deps.ts 中 DepCheckResult.outdated 定义为 string[]，但 OpenAPI spec 期望 Array<{name, current, wanted}>。npm outdated --json 返回完整版本信息但实现仅提取了包名。\n依据：docs/plans/full-fix-20260425-2209.md §P1-A\n改动：\n1. deps.ts:21 — outdated 类型改为 Array<{name: string; current: string; wanted: string}>\n2. deps.ts:66-94 — checkDependencies() 改为 preserve 完整对象",
+      "phase": 14,
+      "day": 1,
+      "status": "completed",
+      "priority": "high",
+      "dependencies": [],
+      "fixPlanRef": "P1-A",
+      "gapType": "新发现",
+      "verification": "npm run build + npx vitest run"
+    },
+    {
+      "id": "P14-2",
+      "title": "Spec — 为 validate_setup.checkFiles 补充 default 声明",
+      "description": "OpenAPI spec 中 ValidateSetupInput.checkFiles 缺少 default 关键字，但实现中 setup_validator.ts 在 checkFiles 未传入时默认使用 MANAGED_FILES。\n依据：docs/plans/full-fix-20260425-2209.md §P2-A\n改动：\n1. openapi.yaml:~1311 — checkFiles 添加 default: [CLAUDE.md, eslint.config.json, ...]",
+      "phase": 14,
+      "day": 1,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [],
+      "fixPlanRef": "P2-A",
+      "gapType": "新发现",
+      "verification": "确认 default 列表与 MANAGED_FILES (setup_validator.ts:42-52) 匹配"
+    },
+    {
+      "id": "P14-3",
+      "title": "Spec — 补充 optimize_error_message.ruleName fallback 文档说明",
+      "description": "OpenAPI spec:923 称「不提供 ruleId 或 scenario 时 suggestions 为空数组」，但实现中 generator.ts:76-90 在提供 ruleName 时会进行模糊匹配，suggestions 可能非空。需更新描述反映第三条匹配路径。\n依据：docs/plans/full-fix-20260425-2209.md §P2-B\n改动：\n1. openapi.yaml:923 — 描述中补充 ruleName 模糊匹配行为",
+      "phase": 14,
+      "day": 1,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [],
+      "fixPlanRef": "P2-B",
+      "gapType": "新发现",
+      "verification": "确认描述准确反映 ruleName 匹配路径 (generator.ts:76-90)"
+    },
+    {
+      "id": "P14-4",
+      "title": "Spec — 说明 init_harness dryRun 模式下省略的 summary 字段",
+      "description": "OpenAPI spec 未说明 dryRun 模式下 InitHarnessSummary 哪些字段缺失。实现 (index.ts:498-503) 在 dryRun=true 时只返回 files 和 decisions，不包含 backupDir/recommendedActions/huskySetup。\n依据：docs/plans/full-fix-20260425-2209.md §P3-A\n改动：\n1. openapi.yaml:~224 — dryRun 描述中补充字段缺失说明",
+      "phase": 14,
+      "day": 1,
+      "status": "completed",
+      "priority": "low",
+      "dependencies": [],
+      "fixPlanRef": "P3-A",
+      "gapType": "新发现",
+      "verification": "确认 dryRun 描述列出了缺失字段"
+    },
+    {
+      "id": "P14-5",
+      "title": "Code — 对齐 reset_state 描述措辞与 spec 一致",
+      "description": "index.ts:119 的 reset_state 描述简化为「重置 Harness 状态（用于重新开始流程）」，而 openapi.yaml:149 原文包含「phase 重置为 null」技术细节。\n依据：docs/plans/full-fix-20260425-2209.md §P3-B\n改动：\n1. index.ts:119 — 更新为 spec 原文",
+      "phase": 14,
+      "day": 1,
+      "status": "completed",
+      "priority": "low",
+      "dependencies": [],
+      "fixPlanRef": "P3-B",
+      "gapType": "新发现",
+      "verification": "确认工具描述与 spec 一致"
+    },
+    {
+      "id": "P14-6",
+      "title": "Spec — 补充 import_rules 可选字段丢失的 round-trip 说明",
+      "description": "import_rules 在导入时重建 RuleDecision，但会丢弃 adjustedCost、adjustedCostLabel、feedbackSpeed、errorMessage 等可选字段。虽不违反 schema 约束，但应在 import_rules 描述中注明。\n依据：docs/plans/full-fix-20260425-2209.md §P3-C\n改动：\n1. openapi.yaml:~490-510 — import_rules 描述中补充可选字段丢失说明",
+      "phase": 14,
+      "day": 1,
+      "status": "completed",
+      "priority": "low",
+      "dependencies": [],
+      "fixPlanRef": "P3-C",
+      "gapType": "新发现",
+      "verification": "确认 import_rules 描述包含数据丢失说明"
+    },
+    {
+      "id": "P15-1",
+      "title": "Build — 排除测试文件出 TypeScript 编译",
+      "description": "tsconfig.json 的 include: [\"src/**/*\"] 会将 .test.ts 文件和 __tests__/、__fixtures__/ 目录编译到 dist/ 中。需在 exclude 中排除这些路径。\n依据：docs/plans/improvement-20260426-0937.md §P15-1\n改动：\n1. mcp-server/tsconfig.json — exclude 追加 src/**/*.test.ts, src/__tests__, src/__fixtures__",
+      "phase": 15,
+      "day": 1,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [],
+      "fixPlanRef": "P15-1",
+      "gapType": "交付体验",
+      "verification": "npm run build → ls dist/*.test.* 为空"
+    },
+    {
+      "id": "P15-2",
+      "title": "Packaging — 添加 .npmignore 排除测试和源文件",
+      "description": "mcp-server 缺少 .npmignore，npm publish 会包含测试文件、source maps、tsconfig 等非交付文件。\n依据：docs/plans/improvement-20260426-0937.md §P15-2\n改动：\n1. 创建 mcp-server/.npmignore — 排除 src/, tsconfig.json, *.test.*, __tests__/, __fixtures__/, *.js.map, *.d.ts.map",
+      "phase": 15,
+      "day": 1,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [
+        "P15-1"
+      ],
+      "fixPlanRef": "P15-2",
+      "gapType": "交付体验",
+      "verification": "npm pack --dry-run 确认文件列表干净"
+    },
+    {
+      "id": "P15-3",
+      "title": "Packaging — 配置 npm publish 元数据",
+      "description": "package.json 缺少 repository、bugs、homepage、license、files 等npm publish 必需字段。缺少 prepublishOnly 脚本。\n依据：docs/plans/improvement-20260426-0937.md §P15-3\n改动：\n1. mcp-server/package.json — 添加 repository, bugs, homepage, keywords, license, files, prepublishOnly",
+      "phase": 15,
+      "day": 1,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [
+        "P15-2"
+      ],
+      "fixPlanRef": "P15-3",
+      "gapType": "交付体验",
+      "verification": "npm pack --dry-run 显示正确的文件列表"
+    },
+    {
+      "id": "P15-4",
+      "title": "CI — 添加 GitHub Actions npm publish 工作流",
+      "description": "CI 只运行 build+test，没有自动 npm publish 流程。需要添加 tag 触发的发布工作流。\n依据：docs/plans/improvement-20260426-0937.md §P15-4\n改动：\n1. 创建 .github/workflows/publish.yml — v* tag 触发 npm publish",
+      "phase": 15,
+      "day": 1,
+      "status": "completed",
+      "priority": "low",
+      "dependencies": [
+        "P15-3"
+      ],
+      "fixPlanRef": "P15-4",
+      "gapType": "交付体验",
+      "verification": "publish.yml 文件存在且语法正确"
+    },
+    {
+      "id": "P15-5",
+      "title": "Docs — 添加根级 README.md",
+      "description": "项目根目录缺少 README.md，用户无法快速了解项目用途和用法。\n依据：docs/plans/improvement-20260426-0937.md §P15-5\n改动：\n1. 创建 README.md — 项目概述、快速开始、架构、工具参考、开发指南",
+      "phase": 15,
+      "day": 1,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [],
+      "fixPlanRef": "P15-5",
+      "gapType": "交付体验",
+      "verification": "README.md 存在并可读"
     }
   ]
 }
