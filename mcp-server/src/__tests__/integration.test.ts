@@ -79,8 +79,9 @@ describe("integration: full harness flow", () => {
       d.recommendedMedium === "linter_warn" || d.recommendedMedium === "linter_error" || d.recommendedMedium === "linter",
     );
     if (linterDecisions.length > 0) {
-      write(join(tmpDir, "eslint.config.json"), generateEslintConfig({ decisions: output.decisions }));
-      files.push({ path: "eslint.config.json" });
+      const eslintContent = generateEslintConfig({ decisions: output.decisions });
+      write(join(tmpDir, "eslint.config.js"), eslintContent);
+      files.push({ path: "eslint.config.js" });
     }
 
     write(join(tmpDir, ".claude", "settings.json"), generateSettingsJson({ decisions: output.decisions }));
@@ -119,8 +120,9 @@ describe("integration: full harness flow", () => {
       d.recommendedMedium === "linter_warn" || d.recommendedMedium === "linter_error" || d.recommendedMedium === "linter",
     );
     if (linterDecisions.length > 0) {
-      write(join(tmpDir, "eslint.config.json"), generateEslintConfig({ decisions: output.decisions }));
-      checkFiles.push("eslint.config.json");
+      const eslintContent = generateEslintConfig({ decisions: output.decisions });
+      write(join(tmpDir, "eslint.config.js"), eslintContent);
+      checkFiles.push("eslint.config.js");
     }
 
     const gitignoreAdditions = generateGitignore();
@@ -154,8 +156,9 @@ describe("integration: full harness flow", () => {
       d.recommendedMedium === "linter_warn" || d.recommendedMedium === "linter_error" || d.recommendedMedium === "linter",
     );
     if (linterDecisions.length > 0) {
-      write(join(tmpDir, "eslint.config.json"), generateEslintConfig({ decisions: output.decisions }));
-      checkFiles.push("eslint.config.json");
+      const eslintContent = generateEslintConfig({ decisions: output.decisions });
+      write(join(tmpDir, "eslint.config.js"), eslintContent);
+      checkFiles.push("eslint.config.js");
     }
 
     const gitignoreAdditions = generateGitignore();

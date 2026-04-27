@@ -9,7 +9,7 @@ export interface HuskyConfig {
 /**
  * Generate Husky hook scripts based on rule decisions.
  *
- * - pre-commit: lint-staged / eslint check
+ * - pre-commit: lint-staged (runs eslint, prettier, etc. on staged files)
  * - commit-msg: commitlint validation
  */
 export function generateHuskyConfig(config: HuskyConfig): Record<string, string> {
@@ -17,28 +17,24 @@ export function generateHuskyConfig(config: HuskyConfig): Record<string, string>
     ...config.existingHooks,
   };
 
-  const hasLinterRules = config.decisions.some(
-    (d) => d.recommendedMedium === "linter_warn" || d.recommendedMedium === "linter_error" || d.recommendedMedium === "linter",
-  );
-  const hasHookRules = config.decisions.some(
-    (d) => d.recommendedMedium === "hook",
+  const hasRelevantRules = config.decisions.some(
+    (d) =>
+      d.recommendedMedium === "linter_warn" ||
+      d.recommendedMedium === "linter_error" ||
+      d.recommendedMedium === "linter" ||
+      d.recommendedMedium === "hook",
   );
 
-  if (!hasLinterRules && !hasHookRules) return hooks;
+  if (!hasRelevantRules) return hooks;
 
-  // pre-commit hook: lint check
+  // pre-commit hook: run lint-staged on staged files
   if (!hooks["pre-commit"]) {
-    const preCommitLines: string[] = [
+    hooks["pre-commit"] = [
       "#!/bin/sh",
       ". \"$(dirname \"$0\")/_/husky.sh\"",
       "",
-    ];
-
-    if (hasLinterRules) {
-      preCommitLines.push("npx eslint . --max-warnings=0");
-    }
-
-    hooks["pre-commit"] = preCommitLines.join("\n");
+      "npx lint-staged",
+    ].join("\n");
   }
 
   // commit-msg hook: commitlint
@@ -52,6 +48,18 @@ export function generateHuskyConfig(config: HuskyConfig): Record<string, string>
   }
 
   return hooks;
+}
+
+/**
+ * Generate .lintstagedrc.json content.
+ * Configures lint-staged to run ESLint on staged JS/TS files.
+ */
+export function generateLintStagedConfig(): string {
+  const config = {
+    "*.{js,jsx,ts,tsx}": ["eslint --fix --max-warnings=0"],
+    "*.{json,md,yaml,yml}": ["prettier --write --check"],
+  };
+  return JSON.stringify(config, null, 2);
 }
 
 /**

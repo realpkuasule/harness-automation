@@ -274,7 +274,7 @@ describe("MCP Server — generate_config", () => {
     const filePaths = genData.files.map((f: any) => f.path);
     expect(filePaths).toContain("CLAUDE.md");
     expect(filePaths).toContain(".claude/settings.json");
-    expect(filePaths).toContain("eslint.config.json");
+    expect(filePaths).toContain("eslint.config.js");
   });
 });
 
@@ -781,5 +781,26 @@ describe("MCP Server — list_rule_presets / list_rule_exports", () => {
     });
     const data = parseResult(result) as any;
     expect(data.exports).toEqual([]);
+  });
+});
+
+describe("MCP Server — unknown tool", () => {
+  let harness: TestHarness;
+
+  beforeEach(async () => {
+    harness = await createTestHarness();
+  });
+
+  afterEach(() => {
+    rmSync(harness.tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns structured UNKNOWN_TOOL error for nonexistent tool", async () => {
+    const result = await callTool(harness.client, "nonexistent_tool_xyz", {});
+    expect(result.isError).toBe(true);
+    const data = parseResult(result) as any;
+    expect(data.code).toBe("UNKNOWN_TOOL");
+    expect(data.message).toContain("Unknown tool");
+    expect(data.recoverable).toBe(false);
   });
 });

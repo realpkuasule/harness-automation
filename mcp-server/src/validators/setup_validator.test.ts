@@ -39,7 +39,7 @@ describe("SetupValidator", () => {
 
   it("passes when all managed files exist with valid content", () => {
     write("CLAUDE.md", "# Project\n## Harness\nSome rules.");
-    write("eslint.config.json", "{}");
+    write("eslint.config.js", "{}");
     write(".claude/settings.json", '{"editor.formatOnSave": true}');
     write(".gitignore", "node_modules\n.harness/state.json\n.harness/backups/");
     write(".husky/pre-commit", "#!/bin/sh\nnpm run lint");
@@ -67,13 +67,12 @@ describe("SetupValidator", () => {
     expect(result.findings.some((f) => f.type === "warning" && f.message.includes("empty"))).toBe(true);
   });
 
-  it("detects JSON syntax errors", () => {
-    write("eslint.config.json", "{ invalid json");
-    write(".harness/state.json", JSON.stringify({ status: "generated", projectDir: tmpDir }));
+  it("detects JSON syntax errors in .json files", () => {
+    write(".harness/state.json", "{ invalid json");
 
     const validator = new SetupValidator({
       projectDir: tmpDir,
-      checkFiles: ["eslint.config.json", ".harness/state.json"],
+      checkFiles: [".harness/state.json"],
     });
     const result = validator.validate();
 
@@ -107,13 +106,13 @@ describe("SetupValidator", () => {
   });
 
   it("detects missing dev dependencies", () => {
-    write("eslint.config.json", "{}");
+    write("eslint.config.js", "{}");
     write("package.json", JSON.stringify({ devDependencies: {} }));
     write(".harness/state.json", JSON.stringify({ status: "generated", projectDir: tmpDir }));
 
     const validator = new SetupValidator({
       projectDir: tmpDir,
-      checkFiles: ["eslint.config.json", "package.json", ".harness/state.json"],
+      checkFiles: ["eslint.config.js", "package.json", ".harness/state.json"],
     });
     const result = validator.validate();
 
@@ -121,12 +120,12 @@ describe("SetupValidator", () => {
   });
 
   it("skips syntax check when skipSyntaxCheck is true", () => {
-    write("eslint.config.json", "{ invalid }");
+    write("eslint.config.js", "{ invalid }");
     write(".harness/state.json", JSON.stringify({ status: "generated", projectDir: tmpDir }));
 
     const validator = new SetupValidator({
       projectDir: tmpDir,
-      checkFiles: ["eslint.config.json", ".harness/state.json"],
+      checkFiles: ["eslint.config.js", ".harness/state.json"],
       skipSyntaxCheck: true,
     });
     const result = validator.validate();

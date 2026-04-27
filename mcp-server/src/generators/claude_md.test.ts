@@ -50,9 +50,12 @@ describe("generateClaudeMd", () => {
     const result = generateClaudeMd({ decisions: [] });
     expect(result.length).toBeGreaterThan(0);
     expect(result).not.toContain("###");
-    expect(result).not.toContain("认知层规则");
-    expect(result).not.toContain("软约束规则");
-    expect(result).not.toContain("参考规则");
+    // Prose mentions are OK; actual rule section headers should not appear
+    expect(result).not.toContain("## 认知层规则");
+    expect(result).not.toContain("## 软约束规则");
+    expect(result).not.toContain("## 参考规则");
+    // Harness overview section is always present
+    expect(result).toContain("## Harness 约束体系");
   });
 
   // 2. 仅 cognitive rules

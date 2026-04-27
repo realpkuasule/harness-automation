@@ -27,8 +27,9 @@ claude
 ```
 
 安装脚本会：
-1. 在 `.claude/settings.json` 中注册 `harness-automation` MCP Server
-2. 将规则数据库复制到 `.harness/rules.json`
+1. 通过 `claude mcp add --scope user` 注册 MCP Server（写入 `~/.claude.json`）
+2. 安装 SKILL.md 到 `~/.claude/skills/harness-automation/`
+3. 将规则数据库复制到 `.harness/rules.json`
 
 ### 验证安装
 
@@ -137,7 +138,7 @@ claude
 | 文件 | 说明 |
 |------|------|
 | `CLAUDE.md` | 项目约束说明文档 |
-| `eslint.config.json` | ESLint 配置 |
+| `eslint.config.js` | ESLint 配置 |
 | `.claude/settings.json` | Claude Code 设置 |
 | `.gitignore` | Git 忽略规则追加 |
 | `.husky/pre-commit` | Git Hooks（可选） |
@@ -217,23 +218,23 @@ Harness Automation 内置三种认知层技能，提供更深层次的帮助：
 
 ### 安装后 Claude Code 不识别触发短语？
 
-确认安装脚本成功运行，并且 `.claude/settings.json` 中包含正确的 MCP Server 配置。可以手动检查：
+确认 MCP Server 已注册。可以通过以下命令查看：
 
 ```bash
-cat .claude/settings.json
+# 查看已注册的 MCP 服务器列表
+claude mcp list
+
+# 确认输出中包含 harness-automation
 ```
 
-应该包含类似：
-```json
-{
-  "mcpServers": {
-    "harness-automation": {
-      "command": "node",
-      "args": ["/path/to/harness/mcp-server/dist/index.js"]
-    }
-  }
-}
+如果没有注册，手动添加：
+
+```bash
+claude mcp add --scope user harness-automation \
+  node /path/to/harness/mcp-server/dist/index.js
 ```
+
+添加后重新启动 Claude Code 生效。
 
 ### 如何更新规则数据库？
 
@@ -246,7 +247,9 @@ cat .claude/settings.json
 ### 如何完全卸载？
 
 ```bash
-# 1. 从 .claude/settings.json 中删除 harness-automation 配置
+# 1. 从 Claude Code 中移除 MCP Server
+claude mcp remove harness-automation
+
 # 2. 删除 .harness/ 目录（可选，包含备份和状态）
 rm -rf .harness
 ```

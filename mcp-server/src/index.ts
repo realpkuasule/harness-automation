@@ -17,7 +17,7 @@ import { generateClaudeMd } from "./generators/claude_md.js";
 import { generateEslintConfig } from "./generators/eslint.js";
 import { generateSettingsJson } from "./generators/settings_json.js";
 import { generateGitignore } from "./generators/gitignore.js";
-import { generateHuskyConfig, generateHuskySetupInstructions } from "./generators/husky.js";
+import { generateHuskyConfig, generateHuskySetupInstructions, generateLintStagedConfig } from "./generators/husky.js";
 import { generateCiWorkflow } from "./generators/ci.js";
 import { mergeDependencies } from "./generators/package_json.js";
 import { checkDependencies } from "./deps.js";
@@ -761,7 +761,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
 
       // Clean up generated files that exist in project but not in backup
       const managedFiles = [
-        "CLAUDE.md", "eslint.config.json", ".claude/settings.json",
+        "CLAUDE.md", "eslint.config.js", ".claude/settings.json",
         ".husky/pre-commit", ".husky/commit-msg", ".github/workflows/ci.yml",
       ];
       const cleaned: string[] = [];
@@ -1217,7 +1217,20 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
     }
 
     default:
-      throw new Error(`Unknown tool: ${name}`);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              code: "UNKNOWN_TOOL",
+              message: `Unknown tool: ${name}`,
+              detail: `The tool "${name}" is not registered. Available tools are listed in the server capabilities.`,
+              recoverable: false,
+            } satisfies HarnessError, null, 2),
+          },
+        ],
+        isError: true,
+      };
   }
 });
 
@@ -1302,7 +1315,7 @@ function generateProjectFiles(
     (d) => d.recommendedMedium === "linter_error" || d.recommendedMedium === "linter_warn" || d.recommendedMedium === "linter",
   );
   if (linterDecisions.length > 0) {
-    files.push({ path: "eslint.config.json", content: generateEslintConfig({ decisions }), action: "created" });
+    files.push({ path: "eslint.config.js", content: generateEslintConfig({ decisions }), action: "created" });
   }
 
   // 3. settings.json
@@ -1312,6 +1325,18 @@ function generateProjectFiles(
   const gitignoreAdditions = generateGitignore();
   if (gitignoreAdditions.trim()) {
     files.push({ path: ".gitignore", content: gitignoreAdditions, action: "merged" });
+  }
+
+  // 5. lint-staged config (if any linter or hook rules)
+  const hasLintStageRelevant = decisions.some(
+    (d) =>
+      d.recommendedMedium === "linter_error" ||
+      d.recommendedMedium === "linter_warn" ||
+      d.recommendedMedium === "linter" ||
+      d.recommendedMedium === "hook",
+  );
+  if (hasLintStageRelevant) {
+    files.push({ path: ".lintstagedrc.json", content: generateLintStagedConfig(), action: "created" });
   }
 
   return files;
@@ -1324,7 +1349,7 @@ function generateProjectFiles(
 function backupGeneratedFiles(projectDir: string): string | null {
   const candidates = [
     "CLAUDE.md",
-    "eslint.config.json",
+    "eslint.config.js",
     ".claude/settings.json",
     ".husky/pre-commit",
     ".husky/commit-msg",

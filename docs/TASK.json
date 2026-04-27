@@ -1988,6 +1988,176 @@
       "fixPlanRef": "P15-5",
       "gapType": "交付体验",
       "verification": "README.md 存在并可读"
+    },
+    {
+      "id": "P16-1",
+      "title": "OpenAPI — 更新规范中的配置文件名和 checkFiles 默认值",
+      "description": "generate_config 和 validate_setup 中的 eslint.config.json 引用需改为 eslint.config.js（如决定改格式）。补充 files[].path 的路径枚举说明。\n依据：docs/plans/fix-20260427-1644.md §0.1+0.3\n改动：\n1. docs/api/openapi.yaml — generate_config description 补充格式说明；validate_setup default checkFiles 更新\n2. docs/api/openapi.yaml — ConfigFileResult path 枚举补充 .husky/、.github/ 路径",
+      "phase": 16,
+      "day": 1,
+      "status": "completed",
+      "priority": "high",
+      "dependencies": [],
+      "fixPlanRef": "§0",
+      "gapType": "实战验证",
+      "verification": "OpenAPI 规范中的 eslint.config.json 引用全部更新为正确值"
+    },
+    {
+      "id": "P16-2",
+      "title": "ESLint — 重构配置生成器为 Flat Config 格式",
+      "description": "当前输出 eslint.config.json（旧版 .eslintrc 格式），ESLint v9+ 使用 eslint.config.js flat config。需改为 module.exports = [...] 格式。\n依据：docs/plans/fix-20260427-1644.md §1\n改动：\n1. mcp-server/src/generators/eslint.ts — 改为输出 JS 模块格式\n2. mcp-server/src/generators/eslint.test.ts — 更新测试断言\n3. mcp-server/src/index.ts L1305 — 文件名改为 eslint.config.js\n4. mcp-server/src/validators/setup_validator.ts L44、L60 — 路径更新\n5. docs/api/openapi.yaml — default checkFiles 更新",
+      "phase": 16,
+      "day": 1,
+      "status": "completed",
+      "priority": "high",
+      "dependencies": [
+        "P16-1"
+      ],
+      "fixPlanRef": "§1",
+      "gapType": "实战验证",
+      "verification": "npm run test 通过，生成文件为 eslint.config.js 且 ESLint v10 可加载"
+    },
+    {
+      "id": "P16-3",
+      "title": "ESLint — 更新规则前缀为 @typescript-eslint/",
+      "description": "当前输出 typescript-eslint/explicit-function-return-type 等旧前缀，ESLint v9 规范要求 @typescript-eslint/。\n依据：docs/plans/fix-20260427-1644.md §2\n改动：\n1. mcp-server/src/generators/eslint.ts L38、L41 — 规则名前缀更新\n2. mcp-server/src/generators/eslint.test.ts L75-76 — 测试期望值更新",
+      "phase": 16,
+      "day": 1,
+      "status": "completed",
+      "priority": "high",
+      "dependencies": [
+        "P16-2"
+      ],
+      "fixPlanRef": "§2",
+      "gapType": "实战验证",
+      "verification": "npm run test 通过，生成的 ESLint 规则使用 @typescript-eslint/ 前缀"
+    },
+    {
+      "id": "P16-4",
+      "title": "Husky — 增强 pre-commit 内容并生成 lint-staged 配置",
+      "description": "当前 pre-commit 只输出 npm test，缺少 lint-staged。R008（lint-before-commit -> hook）要求 commit 前执行 lint。\n依据：docs/plans/fix-20260427-1644.md §3\n改动：\n1. mcp-server/src/generators/husky.ts L37-39 — pre-commit 使用 npx lint-staged\n2. mcp-server/src/index.ts — generateProjectFiles 中补充 .lintstagedrc.json 生成",
+      "phase": 16,
+      "day": 2,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [],
+      "fixPlanRef": "§3",
+      "gapType": "实战验证",
+      "verification": "生成的 pre-commit 包含 npx lint-staged，且 .lintstagedrc.json 存在"
+    },
+    {
+      "id": "P16-5",
+      "title": "Husky — 排查 commit-msg 缺失根因并修复",
+      "description": "init_harness 调用 generateHuskyConfig 会生成 commit-msg，但实战验证时该文件缺失。需排查 generateProjectFiles 与 init_harness 的文件生成逻辑，确认写入覆盖问题。\n依据：docs/plans/fix-20260427-1644.md §4\n改动：\n1. mcp-server/src/index.ts — 排查 L523-573 init_harness 中 husky 文件写入逻辑",
+      "phase": 16,
+      "day": 2,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [
+        "P16-4"
+      ],
+      "fixPlanRef": "§4",
+      "gapType": "实战验证",
+      "verification": "init_harness 后 .husky/commit-msg 存在且内容正确"
+    },
+    {
+      "id": "P16-6",
+      "title": "CLAUDE.md — 添加 Harness 标记段落",
+      "description": "验证器检查 CLAUDE.md 是否包含 \"## Harness\"，但生成器输出的第一个 H2 是\"## 认知层规则\"。需在头部添加 Harness 约束体系说明段。\n依据：docs/plans/fix-20260427-1644.md §5\n改动：\n1. mcp-server/src/generators/claude_md.ts — 标题后添加 ## Harness 约束体系 说明段\n2. mcp-server/src/generators/claude_md.test.ts — 更新测试",
+      "phase": 16,
+      "day": 2,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [],
+      "fixPlanRef": "§5",
+      "gapType": "实战验证",
+      "verification": "验证器检查 CLAUDE.md 的 \"## Harness\" 标记通过"
+    },
+    {
+      "id": "P16-7",
+      "title": "CI — 修复 ESLint 调用命令添加 --config 参数",
+      "description": "npx eslint . --max-warnings=0 在 ESLint v9 flat config 下需指定 --config eslint.config.js 才能加载自定义配置。\n依据：docs/plans/fix-20260427-1644.md §6\n改动：\n1. mcp-server/src/generators/ci.ts L57 — run 命令添加 --config eslint.config.js",
+      "phase": 16,
+      "day": 2,
+      "status": "completed",
+      "priority": "medium",
+      "dependencies": [
+        "P16-2"
+      ],
+      "fixPlanRef": "§6",
+      "gapType": "实战验证",
+      "verification": "CI 工作流中 eslint 命令包含 --config eslint.config.js"
+    },
+    {
+      "id": "P16-8",
+      "title": "Validator — 增强依赖检查含 eslint-plugin-prettier",
+      "description": "consistent-naming 规则依赖 eslint-plugin-prettier，但验证器 REQUIRED_DEV_DEPS 未检查该依赖。需解析 ESLint 配置文件内容提取插件依赖。\n依据：docs/plans/fix-20260427-1644.md §7\n改动：\n1. mcp-server/src/validators/setup_validator.ts — _checkDependencies 增强，扫描 ESLint 配置内容检查插件依赖",
+      "phase": 16,
+      "day": 3,
+      "status": "completed",
+      "priority": "low",
+      "dependencies": [
+        "P16-2"
+      ],
+      "fixPlanRef": "§7",
+      "gapType": "实战验证",
+      "verification": "验证器能检测到 eslint-plugin-prettier 缺失"
+    },
+    {
+      "id": "P16-9",
+      "title": "Validator — 强化 CLAUDE.md 内容完整性检查",
+      "description": "当前验证器只检查文件存在、非空和 \"## Harness\" 标记。需补充检查是否包含至少一个规则分类 H2、是否以 \"# Project\" 前缀开头。\n依据：docs/plans/fix-20260427-1644.md §8\n改动：\n1. mcp-server/src/validators/setup_validator.ts — 补充 CLAUDE.md 内容检查项\n2. mcp-server/src/validators/setup_validator.test.ts — 更新测试",
+      "phase": 16,
+      "day": 3,
+      "status": "completed",
+      "priority": "low",
+      "dependencies": [
+        "P16-6"
+      ],
+      "fixPlanRef": "§8",
+      "gapType": "实战验证",
+      "verification": "验证器检查 CLAUDE.md 分类完整性和前缀正确性"
+    },
+    {
+      "id": "P17-1",
+      "title": "OpenAPI — 修复 validate_setup description 中的文件名",
+      "description": "validate_setup 的 prose description 仍引用 eslint.config.json，需改为 eslint.config.js。schema default 列表和源码已正确，仅 description 文字残留。\n依据：docs/plans/fix-20260427-2111.md §P0-1\n历史：间隙分析 20260425-2209 首次发现 → P16-1 修复遗漏 → 20260427-2111 第三次确认残留\n改动：\n1. docs/api/openapi.yaml L348 — \"eslint.config.json\" → \"eslint.config.js\"",
+      "phase": 17,
+      "day": 1,
+      "status": "completed",
+      "priority": "critical",
+      "dependencies": [],
+      "fixPlanRef": "§P0-1",
+      "gapType": "文档与实际不一致",
+      "verification": "grep -n \"eslint.config.json\" docs/api/openapi.yaml 无结果"
+    },
+    {
+      "id": "P17-2",
+      "title": "Docs — 修复 usage-as-claude-code-skill.md 中的文件名",
+      "description": "usage-as-claude-code-skill.md 中的生成文件列表仍引用 eslint.config.json。与 P17-1 同一概念修复，建议同批提交。\n依据：docs/plans/fix-20260427-2111.md §P0-2\n改动：\n1. docs/usage-as-claude-code-skill.md L141 — \"eslint.config.json\" → \"eslint.config.js\"",
+      "phase": 17,
+      "day": 1,
+      "status": "completed",
+      "priority": "critical",
+      "dependencies": [
+        "P17-1"
+      ],
+      "fixPlanRef": "§P0-2",
+      "gapType": "文档与实际不一致",
+      "verification": "grep -n \"eslint.config.json\" docs/usage-as-claude-code-skill.md 无结果"
+    },
+    {
+      "id": "P17-3",
+      "title": "Code — UNKNOWN_TOOL 错误返回结构化 HarnessError",
+      "description": "index.ts default case 当前 throw Error()，MCP SDK 将其转为协议级错误。但 ErrorCode 枚举定义了 UNKNOWN_TOOL，且 OpenAPI 所有 400 响应均要求结构化 HarnessError 格式。需改为返回 { code, message, detail, recoverable } 结构。\n依据：docs/plans/fix-20260427-2111.md §P1-1\n改动：\n1. mcp-server/src/index.ts L1219-1221 — default case 改为 return 结构化 HarnessError（含 UNKNOWN_TOOL 码）\n2. mcp-server/src/index.test.ts — 新增测试：发送未知工具名验证返回 UNKNOWN_TOOL 错误",
+      "phase": 17,
+      "day": 1,
+      "status": "completed",
+      "priority": "high",
+      "dependencies": [],
+      "fixPlanRef": "§P1-1",
+      "gapType": "实现与规范不一致",
+      "verification": "向 MCP server 发送未知工具名，收到 isError=true 且 body.code === \"UNKNOWN_TOOL\""
     }
   ]
 }

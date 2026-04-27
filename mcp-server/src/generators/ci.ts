@@ -54,7 +54,7 @@ export function generateCiWorkflow(config: CiConfig): string {
   // ESLint check (linter_error or linter_warn triggers CI lint step)
   if (hasLinterRules) {
     lines.push("      - name: Lint check");
-    lines.push("        run: npx eslint . --max-warnings=0");
+    lines.push("        run: npx eslint --config eslint.config.js . --max-warnings=0");
     lines.push("");
   }
 

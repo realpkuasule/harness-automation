@@ -71,7 +71,10 @@ paths:
     post:
       summary: 根据规则决策生成配置文件
       description: >
-        生成 CLAUDE.md、ESLint 配置、.claude/settings.json、.gitignore 四种核心配置文件。
+        生成 CLAUDE.md、ESLint 配置（eslint.config.js Flat Config 格式）、
+        .claude/settings.json、.gitignore 四种核心配置文件。
+        ESLint 配置输出为 Flat Config（module.exports = [...]）格式，
+        文件名 eslint.config.js，兼容 ESLint v9+。
         写文件前自动备份现有文件到 .harness/backups/{timestamp}/。
         dryRun=true 时只计算预览内容，不执行写操作。
         注意：实现中 decisions 字段名与设计的 recommendations 不同。
@@ -342,7 +345,7 @@ paths:
       summary: 验证已生成的 Harness 配置
       description: >
         检查文件完整性、ESLint 配置语法、JSON 语法、Husky hooks 可执行权限、
-        依赖完整性。默认检查 9 个关键文件（CLAUDE.md、eslint.config.json、
+        依赖完整性。默认检查 9 个关键文件（CLAUDE.md、eslint.config.js、
         .claude/settings.json、.gitignore、.husky/pre-commit、.husky/commit-msg、
         .github/workflows/ci.yml、package.json、.harness/state.json），
         并自动检查 package.json 中的 devDependencies 完整性。
@@ -1316,7 +1319,7 @@ components:
             type: string
           default:
             - CLAUDE.md
-            - eslint.config.json
+            - eslint.config.js
             - .claude/settings.json
             - .gitignore
             - .husky/pre-commit
@@ -1327,7 +1330,7 @@ components:
           description: >
             可选，指定要检查的文件列表。
             不传时使用默认 9 个关键文件：
-            CLAUDE.md/eslint.config.json/.claude/settings.json/
+            CLAUDE.md/eslint.config.js/.claude/settings.json/
             .gitignore/.husky/pre-commit/.husky/commit-msg/
             .github/workflows/ci.yml/package.json/.harness/state.json
         skipSyntaxCheck:
@@ -1580,6 +1583,10 @@ components:
       properties:
         path:
           type: string
+          description: >
+            配置文件的相对路径。常见值：CLAUDE.md、eslint.config.js、
+            .claude/settings.json、.gitignore、.husky/pre-commit、
+            .husky/commit-msg、.github/workflows/ci.yml。
         content:
           type: string
           description: dry_run 模式时返回内容预览

@@ -41,7 +41,7 @@ export interface SetupValidatorOptions {
 
 const MANAGED_FILES = [
   "CLAUDE.md",
-  "eslint.config.json",
+  "eslint.config.js",
   ".claude/settings.json",
   ".gitignore",
   ".husky/pre-commit",
@@ -57,7 +57,7 @@ const HARNESS_GITIGNORE_ENTRIES = [
 ];
 
 const REQUIRED_DEV_DEPS: Record<string, string[]> = {
-  "eslint.config.json": ["eslint"],
+  "eslint.config.js": ["eslint"],
   ".husky/pre-commit": ["husky"],
   ".husky/commit-msg": ["@commitlint/cli"],
   ".github/workflows/ci.yml": [],
@@ -229,6 +229,29 @@ export class SetupValidator {
             message: "CLAUDE.md missing Harness section marker",
           });
         }
+
+        // Check for at least one rule section
+        const hasRuleSection =
+          content.includes("## 认知层规则") ||
+          content.includes("## 指引规则") ||
+          content.includes("## 软约束规则") ||
+          content.includes("## 参考规则");
+        if (!hasRuleSection) {
+          findings.push({
+            file,
+            type: "info",
+            message: "CLAUDE.md does not contain any rule section",
+          });
+        }
+
+        // Check title prefix
+        if (!content.startsWith("# ")) {
+          findings.push({
+            file,
+            type: "info",
+            message: "CLAUDE.md missing title (H1) header",
+          });
+        }
       }
     } catch (err) {
       findings.push({
@@ -265,6 +288,11 @@ export class SetupValidator {
     }
   }
 
+  /** Map ESLint rule name prefixes to npm packages */
+  private static readonly ESLINT_PLUGIN_MAP: Record<string, string> = {
+    "@typescript-eslint/": "@typescript-eslint/eslint-plugin",
+  };
+
   private _checkDependencies(findings: ValidationFinding[]): void {
     const pkgPath = join(this.options.projectDir, "package.json");
     if (!existsSync(pkgPath)) return;
@@ -281,6 +309,7 @@ export class SetupValidator {
       ...(pkg.devDependencies as Record<string, string> ?? {}),
     };
 
+    // 1. Static REQUIRED_DEV_DEPS check
     for (const [file, needed] of Object.entries(REQUIRED_DEV_DEPS)) {
       for (const dep of needed) {
         if (!(dep in deps)) {
@@ -294,6 +323,26 @@ export class SetupValidator {
             });
           }
         }
+      }
+    }
+
+    // 2. Dynamic ESLint config plugin detection
+    const eslintConfigPath = join(this.options.projectDir, "eslint.config.js");
+    if (existsSync(eslintConfigPath)) {
+      try {
+        const content = readFileSync(eslintConfigPath, "utf-8");
+        for (const [prefix, pkg] of Object.entries(SetupValidator.ESLINT_PLUGIN_MAP)) {
+          if (content.includes(prefix) && !(pkg in deps)) {
+            findings.push({
+              file: "package.json",
+              type: "warning",
+              message: `${pkg} is required by eslint.config.js (references "${prefix}" rules) but not installed`,
+              fix: `npm install --save-dev ${pkg}`,
+            });
+          }
+        }
+      } catch {
+        // If the config can't be read, skip dynamic check
       }
     }
   }

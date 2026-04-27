@@ -16,24 +16,29 @@ function linterDecision(name: string, overrides?: Partial<RuleDecision>): RuleDe
   };
 }
 
+/** Parse flat config output: strip "module.exports = " prefix and trailing ";\n" */
+function parseFlatConfig(result: string): unknown[] {
+  const json = result.replace(/^module\.exports = /, "").replace(/;\n$/, "");
+  return JSON.parse(json);
+}
+
 describe("generateEslintConfig", () => {
-  // 6. 无 linter 决策
   it("returns comment when no linter decisions", () => {
     const result = generateEslintConfig({ decisions: [] });
     expect(result).toBe("// No linter rules recommended");
   });
 
-  // 7. 单个 linter rule
-  it("produces valid JSON with a single rule", () => {
+  it("produces flat config array with a single rule", () => {
     const result = generateEslintConfig({
       decisions: [linterDecision("no-console-log")],
     });
-    const parsed = JSON.parse(result);
-    expect(parsed.rules["no-console"]).toBeDefined();
-    expect(parsed.rules["no-console"][0]).toBe("warn");
+    const parsed = parseFlatConfig(result);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed.length).toBe(1);
+    const config = parsed[0] as Record<string, unknown>;
+    expect((config.rules as Record<string, unknown>)["no-console"]).toBeDefined();
   });
 
-  // 8. 多个 linter rules
   it("includes all linter rules in output", () => {
     const decisions = [
       linterDecision("no-console-log"),
@@ -41,25 +46,27 @@ describe("generateEslintConfig", () => {
       linterDecision("type-annotations"),
     ];
     const result = generateEslintConfig({ decisions });
-    const parsed = JSON.parse(result);
-    expect(Object.keys(parsed.rules).length).toBe(3);
-    expect(parsed.rules["no-debugger"][0]).toBe("error");
+    const parsed = parseFlatConfig(result);
+    const config = parsed[0] as Record<string, unknown>;
+    const rules = config.rules as Record<string, unknown>;
+    expect(Object.keys(rules).length).toBe(3);
+    expect(rules["no-debugger"]).toEqual(["error"]);
   });
 
-  // 9. 合并 existingConfig
-  it("merges with existing config", () => {
+  it("merges with existing config (object form)", () => {
     const result = generateEslintConfig({
       decisions: [linterDecision("no-console-log")],
-      existingConfig: {
-        rules: { semi: ["error", "always"] },
-      },
+      existingConfig: { rules: { semi: ["error", "always"] } } as Record<string, unknown>,
     });
-    const parsed = JSON.parse(result);
-    expect(parsed.rules.semi).toEqual(["error", "always"]);
-    expect(parsed.rules["no-console"]).toBeDefined();
+    const parsed = parseFlatConfig(result);
+    // existing config is prepended, generated config is second
+    expect(parsed.length).toBe(2);
+    const existing = parsed[0] as Record<string, unknown>;
+    expect((existing.rules as Record<string, unknown>)["semi"]).toEqual(["error", "always"]);
+    const generated = parsed[1] as Record<string, unknown>;
+    expect((generated.rules as Record<string, unknown>)["no-console"]).toBeDefined();
   });
 
-  // ESLint rule mapping coverage
   it("maps all known rule names to ESLint configs", () => {
     const ruleNames = [
       "no-console-log", "no-direct-fetch", "no-magic-numbers",
@@ -69,16 +76,27 @@ describe("generateEslintConfig", () => {
     const decisions = ruleNames.map((name) => linterDecision(name));
     const result = generateEslintConfig({ decisions });
 
-    // These rules now map to ESLint rule names (not harness rule names)
     const expectedEslintRules = [
       "no-console", "no-restricted-imports", "no-magic-numbers",
-      "typescript-eslint/explicit-function-return-type",
-      "typescript-eslint/naming-convention", "no-debugger",
+      "@typescript-eslint/explicit-function-return-type",
+      "@typescript-eslint/naming-convention", "no-debugger",
       "max-lines", "no-process-env",
     ];
-    const parsed = JSON.parse(result);
+    const parsed = parseFlatConfig(result);
+    const config = parsed[0] as Record<string, unknown>;
+    const rules = config.rules as Record<string, unknown>;
     for (const esRule of expectedEslintRules) {
-      expect(parsed.rules[esRule]).toBeDefined();
+      expect(rules[esRule]).toBeDefined();
     }
+  });
+
+  it("handles linter_error severity correctly", () => {
+    const result = generateEslintConfig({
+      decisions: [linterDecision("secure-env-vars", { recommendedMedium: "linter_error" })],
+    });
+    const parsed = parseFlatConfig(result);
+    const config = parsed[0] as Record<string, unknown>;
+    const rules = config.rules as Record<string, unknown>;
+    expect(rules["no-process-env"]).toEqual(["error"]);
   });
 });
