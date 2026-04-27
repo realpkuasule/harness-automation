@@ -160,3 +160,4 @@
 {"timestamp": "2026-04-27T21:53:25+08:00", "type": "fix", "phase": 17, "description": "P17-1: 修复 OpenAPI validate_setup 描述中的 eslint.config.json 文件名"}
 {"timestamp": "2026-04-27T21:53:30+08:00", "type": "fix", "phase": 17, "description": "P17-2: 修复 usage-as-claude-code-skill.md 文档中的 eslint.config.json 文件名"}
 {"timestamp": "2026-04-27T21:53:30+08:00", "type": "fix", "phase": 17, "description": "P17-3: UNKNOWN_TOOL 错误返回结构化 HarnessError 替代 throw"}
+{"timestamp": "2026-04-27T22:28:07+08:00", "type": "feat", "phase": 17, "description": "release harness-automation v1.0.7"}
