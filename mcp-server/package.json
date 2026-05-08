@@ -1,11 +1,12 @@
 {
   "name": "@realpkuasule/harness-automation",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Harness Automation System - MCP Server for automated constraint configuration",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
-    "harness-automation": "./dist/index.js"
+    "harness-automation": "./dist/cli.js",
+    "harness-automation-mcp": "./dist/index.js"
   },
   "files": [
     "dist/",
@@ -33,7 +34,7 @@
   ],
   "license": "MIT",
   "scripts": {
-    "build": "tsc && cp src/rules.json dist/rules.json",
+    "build": "tsc && cp src/rules.json dist/rules.json && cp ../skill/SKILL.md dist/skill.md",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "lint": "eslint src/",

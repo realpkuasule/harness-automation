@@ -12,23 +12,29 @@
 
 ### 安装
 
-```bash
-# 方式一：访问 Harness 项目目录，运行安装脚本
-cd /path/to/your-project
-/path/to/harness/skill/install.sh --dir .
+**方式一：npx 一键安装（推荐）**
 
-# 方式二：如果已将 npx 包发布到 npm
+```bash
 npx @realpkuasule/harness-automation
 ```
 
-安装后，启动 Claude Code：
+npx 会自动完成：
+1. 全局安装包（`npm install -g`）
+2. 注册 MCP Server 到 Claude Code（`~/.claude.json`）
+3. 安装 Skill 文件（`~/.claude/skills/harness-automation/`）
+
+> 如果全局安装失败（权限问题），请手动运行 `npm install -g @realpkuasule/harness-automation` 后重新执行 npx。
+
+**方式二：从源码安装**
 
 ```bash
-cd /path/to/your-project
-claude
+cd /path/to/harness-automation
+./skill/install.sh --dir /path/to/your-project
 ```
 
-输入触发短语：
+### 使用
+
+安装后重新启动 Claude Code，在项目目录中输入触发短语：
 
 > "给我的项目建立约束体系"
 
