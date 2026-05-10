@@ -233,7 +233,7 @@ paths:
         输出中包含 installNote 字段，记录依赖安装耗时提示。
         适用于二次运行、CI 环境、有经验的用户。
         dryRun=true 时返回空 files 数组和 summary（不含 validation/errors）。
-        dryRun 模式下 summary 仅包含 files 和 decisions 字段，不包含 backupDir/recommendedActions/huskySetup。
+        dryRun 模式下 summary 仅包含 files 和 decisions 字段，不包含 backupDir / recommendedActions / huskySetup / permissions / installNote。
       operationId: initHarness
       tags: [核心流程]
       parameters:

@@ -195,3 +195,4 @@
 {"timestamp": "2026-05-10T14:06:18+08:00", "type": "docs", "phase": 9, "description": "P9-5: RuleMedium description 更新废弃别名说明"}
 {"timestamp": "2026-05-10T14:43:04+08:00", "type": "docs", "phase": 10, "description": "P10-1: confirm_decisions 增加 400 错误响应文档 (STATE_PHASE_MISMATCH)"}
 {"timestamp": "2026-05-10T14:43:04+08:00", "type": "docs", "phase": 10, "description": "P10-2: rollback 增加 400 错误响应文档 (ROLLBACK_FAILED)"}
+{"timestamp": "2026-05-10T14:50:23+08:00", "type": "docs", "phase": 10, "description": "P10-3: init_harness 端点描述补充 dryRun 排除字段列表（补全 permissions/installNote）"}
