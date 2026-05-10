@@ -196,3 +196,4 @@
 {"timestamp": "2026-05-10T14:43:04+08:00", "type": "docs", "phase": 10, "description": "P10-1: confirm_decisions 增加 400 错误响应文档 (STATE_PHASE_MISMATCH)"}
 {"timestamp": "2026-05-10T14:43:04+08:00", "type": "docs", "phase": 10, "description": "P10-2: rollback 增加 400 错误响应文档 (ROLLBACK_FAILED)"}
 {"timestamp": "2026-05-10T14:50:23+08:00", "type": "docs", "phase": 10, "description": "P10-3: init_harness 端点描述补充 dryRun 排除字段列表（补全 permissions/installNote）"}
+{"timestamp": "2026-05-10T14:51:42+08:00", "type": "milestone", "phase": 10, "description": "v1.1.0: Phase 10 OpenAPI 文档完善（400 错误响应补全 + 措辞修正），三轮累计 28 项修复"}

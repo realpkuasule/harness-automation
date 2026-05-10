@@ -13,7 +13,7 @@ info:
 
     设计文档: `docs/harness-automation-design.md` v3.0 (2026-04-22)
     实现差异在 schema 的 description 中标注。
-  version: "1.0.0"
+  version: "1.1.0"
   contact:
     name: Harness Automation Team
 
