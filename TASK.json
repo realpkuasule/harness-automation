@@ -1,0 +1,247 @@
+{
+  "tasks": [
+    {
+      "id": "P7-1",
+      "title": ".gitignore 全量覆盖→真合并",
+      "status": "completed",
+      "priority": "critical",
+      "phase": 7,
+      "description": "src/index.ts generateProjectFiles() 对 .gitignore 使用 writeFileSync 全覆盖而非追加。修复: 读取现有 .gitignore → 调用 generateGitignore(existingContent) → 追加到文件末尾。涉及: mcp-server/src/index.ts (L1374-1378), mcp-server/src/generators/gitignore.ts",
+      "ref": "improvement-20260510-1207.md P1-1"
+    },
+    {
+      "id": "P7-2",
+      "title": "CI workflow 备份缺失 & 覆盖策略",
+      "status": "completed",
+      "priority": "critical",
+      "phase": 7,
+      "description": "backupGeneratedFiles() candidates 列表含 ci.yml 但实际未备份。修复: (1) 验证 backup 路径正确性 (2) CI 文件用 merge 策略而非覆盖——检测已有 CI 时将 harness 步骤追加到现有 workflow (3) 增加备份日志。涉及: mcp-server/src/index.ts (L1399-1424), mcp-server/src/generators/ci.ts",
+      "ref": "improvement-20260510-1207.md P1-2"
+    },
+    {
+      "id": "P7-3",
+      "title": "package.json 智能合并（已有/新建两种场景）",
+      "status": "completed",
+      "priority": "high",
+      "phase": 7,
+      "description": "当前直接 writeFileSync 覆盖 package.json。修复: (1) 已存在时读取→合并 scripts/devDependencies/lint-staged→写回 (2) 不存在时创建最小化 package.json (3) backupGeneratedFiles() 加入 package.json。涉及: mcp-server/src/index.ts, mcp-server/src/generators/package_json.ts",
+      "ref": "improvement-20260510-1207.md P1-3"
+    },
+    {
+      "id": "P7-4",
+      "title": "移除 .lintstagedrc.json 冗余，统一到 package.json",
+      "status": "completed",
+      "priority": "medium",
+      "phase": 7,
+      "description": "harness 同时生成 .lintstagedrc.json 和 package.json lint-staged 字段造成重复。修复: 移除 generateProjectFiles() 中的 .lintstagedrc.json 生成(L1381-1390)，改为在 package.json 合并时追加 lint-staged 配置。已有 .lintstagedrc.json 时保留并提示。涉及: mcp-server/src/index.ts, mcp-server/src/generators/husky.ts",
+      "ref": "improvement-20260510-1207.md P1-4"
+    },
+    {
+      "id": "P7-5",
+      "title": "修复 ESLint 规则名: no-magic-numbers → @typescript-eslint/no-magic-numbers",
+      "status": "completed",
+      "priority": "high",
+      "phase": 7,
+      "description": "eslint.ts L39-41 映射 no-magic-numbers 缺 @typescript-eslint/ 前缀，规则静默失效。修复: 改为 @typescript-eslint/no-magic-numbers，增加 ignoreEnums/ignoreReadonlyClassProperties 选项。涉及: mcp-server/src/generators/eslint.ts",
+      "ref": "improvement-20260510-1207.md P2-1"
+    },
+    {
+      "id": "P7-6",
+      "title": "修复 no-process-env 规则不存在 → secure-env-vars 降级到 claude_md",
+      "status": "completed",
+      "priority": "high",
+      "phase": 7,
+      "description": "no-process-env 不是标准 ESLint 规则（来自已废弃的 eslint-plugin-node）。修复: (1) 从 eslint.ts 移除 no-process-env 映射 (2) rules.json 中 secure-env-vars 的 recommendedMedium 从 linter_error 改为 claude_md。涉及: mcp-server/src/generators/eslint.ts (L54-55), mcp-server/src/rules.json",
+      "ref": "improvement-20260510-1207.md P2-2"
+    },
+    {
+      "id": "P7-7",
+      "title": "ESLint 配置增加插件/解析器/文件范围声明",
+      "status": "completed",
+      "priority": "high",
+      "phase": 7,
+      "description": "生成的 eslint.config.js 是裸 rules 对象，缺 files/languageOptions.parser/plugins 字段。修复: generateEslintConfig() 生成完整 flat config 结构——包含 parser 声明、@typescript-eslint 插件引用、files glob、文件头 require 语句。涉及: mcp-server/src/generators/eslint.ts (L62-92)",
+      "ref": "improvement-20260510-1207.md P2-3"
+    },
+    {
+      "id": "P7-8",
+      "title": "Husky v9 兼容：移除已废弃的 _/husky.sh 引用",
+      "status": "completed",
+      "priority": "medium",
+      "phase": 7,
+      "description": "已修复。husky.ts 中 pre-commit/commit-msg 生成不再包含 . \"$(dirname \"$0\")/_/husky.sh\" 行（Husky v9 纯 shell 脚本模式）。generateHuskySetupInstructions() 改为建议 npx husky 而非 npx husky init。测试已更新。涉及: mcp-server/src/generators/husky.ts, mcp-server/src/generators/husky.test.ts",
+      "ref": "improvement-20260510-1207.md P3-1"
+    },
+    {
+      "id": "P7-9",
+      "title": "降低 naming-convention 规则噪音（Prisma 等第三方命名豁免）",
+      "status": "completed",
+      "priority": "medium",
+      "phase": 7,
+      "description": "目标项目 ESLint 产生 829 个 warnings 大多来自 naming-convention。修复: (1) 增加 filter 豁免 _count/_sum/_avg 等 Prisma 聚合字段 (2) argsIgnorePattern: \"^_\" 允许下划线前缀 (3) growth/mature 项目默认 warn。涉及: mcp-server/src/generators/eslint.ts, mcp-server/src/rules.json",
+      "ref": "improvement-20260510-1207.md P3-2"
+    },
+    {
+      "id": "P7-10",
+      "title": "依赖安装增加进度提示",
+      "status": "completed",
+      "priority": "low",
+      "phase": 7,
+      "description": "npm install 耗时 6 分钟无反馈。修复: init_harness 输出添加预估时间提示，返回 install 状态日志。涉及: mcp-server/src/index.ts, mcp-server/src/generators/package_json.ts",
+      "ref": "improvement-20260510-1207.md P3-3"
+    },
+    {
+      "id": "P7-11",
+      "title": "添加集成测试覆盖真实合并场景",
+      "status": "completed",
+      "priority": "low",
+      "phase": 7,
+      "description": "缺少端到端测试。添加: (1) .gitignore 已有内容时的合并测试 (2) 已有 eslint.config.js 合并测试 (3) 已有 CI workflow 合并测试 (4) monorepo 无根 package.json 的 init 测试。涉及: mcp-server/src/*.test.ts",
+      "ref": "improvement-20260510-1207.md P4-1"
+    },
+    {
+      "id": "P7-12",
+      "title": "validate_setup 增加规则有效性和依赖完整性检查",
+      "status": "completed",
+      "priority": "low",
+      "phase": 7,
+      "description": "当前只检查文件存在/shebang/语法。增加: (1) ESLint 规则名有效性检查（对照已知规则列表） (2) devDependencies 包含 ESLint 插件依赖检查 (3) lint-staged 重复配置检测。涉及: mcp-server/src/validators/setup_validator.ts",
+      "ref": "improvement-20260510-1207.md P4-2"
+    },
+    {
+      "id": "P8-1",
+      "title": "OpenAPI: InitHarnessSummary 增加 installNote 字段",
+      "status": "completed",
+      "priority": "critical",
+      "phase": 8,
+      "description": "Phase 7 P7-10 实现新增了 installNote 字段到 init_harness 响应，但 OpenAPI InitHarnessSummary schema 未同步。修复: 在 docs/api/openapi.yaml L2349-2388 InitHarnessSummary properties 中增加 installNote: { type: string, description: 依赖安装耗时提示 }。涉及: docs/api/openapi.yaml",
+      "ref": "full-fix-20260510-1309.md P0-1"
+    },
+    {
+      "id": "P8-2",
+      "title": "OpenAPI: ConfigFileResult.path description 移除 .lintstagedrc.json 引用",
+      "status": "completed",
+      "priority": "critical",
+      "phase": 8,
+      "description": "Phase 7 P7-4 移除了 .lintstagedrc.json 独立生成，但 OpenAPI ConfigFileResult.description 仍将其列为常见路径。修复: 更新 L1590 description，移除 .lintstagedrc.json，增加 package.json，注释 lint-staged 已合并。涉及: docs/api/openapi.yaml",
+      "ref": "full-fix-20260510-1309.md P0-2"
+    },
+    {
+      "id": "P8-3",
+      "title": "OpenAPI: generate_config description 移除 .lintstagedrc.json + 补充 P7 行为",
+      "status": "completed",
+      "priority": "critical",
+      "phase": 8,
+      "description": "合并 P0-3 和 P1-1: (1) L72-73 移除 .lintstagedrc.json 生成提及 (2) 追加 Phase 7 更新说明：.gitignore 真合并、ESLint 完整 flat config、no-process-env 移除、naming-convention Prisma 豁免。涉及: docs/api/openapi.yaml L71-80",
+      "ref": "full-fix-20260510-1309.md P0-3 + P1-1"
+    },
+    {
+      "id": "P8-4",
+      "title": "OpenAPI: init_harness description 补充 P7 智能合并与兼容变更",
+      "status": "completed",
+      "priority": "high",
+      "phase": 8,
+      "description": "补充: package.json 已有→合并/无→创建、CI workflow 跳过逻辑、Husky v9+ 纯 shell 格式、installNote。涉及: docs/api/openapi.yaml L222-228",
+      "ref": "full-fix-20260510-1309.md P1-2"
+    },
+    {
+      "id": "P8-5",
+      "title": "OpenAPI: validate_setup description 补充 P7 新增检查项",
+      "status": "completed",
+      "priority": "high",
+      "phase": 8,
+      "description": "补充: ESLint 规则名有效性检查、lint-staged 重复配置检测。涉及: docs/api/openapi.yaml L344-376",
+      "ref": "full-fix-20260510-1309.md P1-3"
+    },
+    {
+      "id": "P8-6",
+      "title": "代码注释: husky.ts generateLintStagedConfig 注释更新",
+      "status": "completed",
+      "priority": "high",
+      "phase": 8,
+      "description": "husky.ts L54 注释仍说 'Generate .lintstagedrc.json content'，应改为 'Generate lint-staged configuration content (used in package.json lint-staged field)'。涉及: mcp-server/src/generators/husky.ts L54",
+      "ref": "full-fix-20260510-1309.md P1-4"
+    },
+    {
+      "id": "P8-7",
+      "title": "代码注释: eslint.ts generateEslintConfig JSDoc 补充 Phase 7 变更",
+      "status": "completed",
+      "priority": "high",
+      "phase": 8,
+      "description": "eslint.ts L12-17 JSDoc 补充: Always generates full framework config (files/languageOptions/plugins)、不再映射 no-process-env、naming-convention 包含 Prisma 豁免。涉及: mcp-server/src/generators/eslint.ts L12-17",
+      "ref": "full-fix-20260510-1309.md P1-6"
+    },
+    {
+      "id": "P8-8",
+      "title": "OpenAPI: generate_config 错误响应文档补全",
+      "status": "completed",
+      "priority": "low",
+      "phase": 8,
+      "description": "generate_config 的 400 response 可返回 NO_DECISIONS/CONFIRM_REQUIRED 特定错误码，在路径 description 中补充可能的错误码。涉及: docs/api/openapi.yaml L105-110",
+      "ref": "full-fix-20260510-1309.md P2-1"
+    },
+    {
+      "id": "P9-1",
+      "title": "修正 installNote 在 OpenAPI InitHarnessSummary 中的位置（从 permissions 下移到顶层）",
+      "status": "completed",
+      "priority": "critical",
+      "phase": 9,
+      "description": "Schema 回归修复。Phase 8 P8-1 将 installNote 错误嵌套在 permissions 下，需移至 InitHarnessSummary 顶层与 permissions 平级。修复: 将 installNote 从 permissions.properties 移到 InitHarnessSummary.properties 顶层。涉及: docs/api/openapi.yaml L2384-2401",
+      "ref": "full-fix-20260510-1352.md P0-1"
+    },
+    {
+      "id": "P9-2",
+      "title": "rollback list 模式输出文档化（新增 RollbackListOutput）",
+      "status": "completed",
+      "priority": "high",
+      "phase": 9,
+      "description": "OpenAPI 缺失 rollback list=true 时的输出 Schema。新增 RollbackListOutput schema（backups 数组），将 rollback 200 response 改为 oneOf 引用 RollbackOutput 和 RollbackListOutput。涉及: docs/api/openapi.yaml L328-350",
+      "ref": "full-fix-20260510-1352.md P1-1"
+    },
+    {
+      "id": "P9-3",
+      "title": "init_harness dryRun 输出变体 Schema 标注",
+      "status": "completed",
+      "priority": "high",
+      "phase": 9,
+      "description": "dryRun=true 时返回精简 summary（仅 files + decisions，不含 backupDir/recommendedActions/huskySetup/permissions/installNote）且不含 validation/errors。更新 response description 明确标注 dryRun 和非 dryRun 的字段差异。涉及: docs/api/openapi.yaml L253-273",
+      "ref": "full-fix-20260510-1352.md P1-2"
+    },
+    {
+      "id": "P9-4",
+      "title": "RuleStats.category 标记为 optional",
+      "status": "completed",
+      "priority": "low",
+      "phase": 9,
+      "description": "OpenAPI RuleStats.category 未标记 optional，但实现中 category?: string。更新 description 说明仅在规则定义包含 category 时返回。涉及: docs/api/openapi.yaml L1912, mcp-server/src/analytics/rule_analytics.ts L15",
+      "ref": "full-fix-20260510-1352.md P2-1"
+    },
+    {
+      "id": "P9-5",
+      "title": "RuleMedium 废弃别名描述更新",
+      "status": "completed",
+      "priority": "low",
+      "phase": 9,
+      "description": "linter 和 settings.json 为历史别名，当前 generate_config 仅生成 linter_warn/linter_error 和 settings。更新 RuleMedium description 说明废弃别名不再被生成。涉及: docs/api/openapi.yaml L1005-1023",
+      "ref": "full-fix-20260510-1352.md P2-2"
+    },
+    {
+      "id": "P10-1",
+      "title": "confirm_decisions 增加 400 错误响应文档 (STATE_PHASE_MISMATCH)",
+      "status": "completed",
+      "priority": "low",
+      "phase": 10,
+      "description": "OpenAPI confirm_decisions 路径仅定义 200 响应，缺少 400 错误响应。实现中当 phase 不是 evaluated/confirmed/generated/validated 时返回 STATE_PHASE_MISMATCH 错误。修复: 在 responses 中增加 400 响应，引用 HarnessError schema，description 说明 STATE_PHASE_MISMATCH 错误码。涉及: docs/api/openapi.yaml L302-321",
+      "ref": "full-fix-20260510-1412.md P3-1"
+    },
+    {
+      "id": "P10-2",
+      "title": "rollback 增加 400 错误响应文档 (ROLLBACK_FAILED)",
+      "status": "completed",
+      "priority": "low",
+      "phase": 10,
+      "description": "OpenAPI rollback 路径仅定义 200 响应（oneOf），缺少 400 错误响应。实现中当备份目录不存在/无可用备份/指定备份不存在时返回 ROLLBACK_FAILED 错误。修复: 在 responses 中增加 400 响应，引用 HarnessError schema，description 说明 ROLLBACK_FAILED 错误码。涉及: docs/api/openapi.yaml L348-358",
+      "ref": "full-fix-20260510-1412.md P3-2"
+    }
+  ]
+}

@@ -72,13 +72,17 @@ paths:
       summary: 根据规则决策生成配置文件
       description: >
         生成 CLAUDE.md、ESLint 配置、.claude/settings.json、.gitignore、
-        .lintstagedrc.json 等核心配置文件。
+        package.json、.husky/ hooks、.github/workflows/ci.yml 等核心配置文件。
         ESLint 配置输出为 Flat Config 格式（根据项目 type 字段
         自动选择 CommonJS 或 ESM）。
         文件名 eslint.config.js，兼容 ESLint v9+。
         写文件前自动备份现有文件到 .harness/backups/{timestamp}/。
         dryRun=true 时只计算预览内容，不执行写操作。
         注意：实现中 decisions 字段名与设计的 recommendations 不同。
+        Phase 7 更新：.gitignore 支持 true merge（追加方式合并）；
+        ESLint 生成完整 flat config（files、languageOptions、plugins）；
+        不再映射 no-process-env 规则（标准 ESLint 中不存在）；
+        naming-convention 新增 Prisma 聚合字段豁免。
       operationId: generateConfig
       tags: [核心流程]
       parameters:
@@ -103,7 +107,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/GenerateConfigOutput"
         "400":
-          description: 输入校验失败或无决策
+          description: 输入校验失败或无决策。可能的错误码：NO_DECISIONS（无可用决策且无状态）、FILE_WRITE_ERROR（文件写入失败）
           content:
             application/json:
               schema:
@@ -223,6 +227,10 @@ paths:
         快捷入口：跳过交互，内部依次调用 evaluate_rules → 自动确认决策 →
         generate_config → validate_setup。支持 preset 嵌套参数简化调用。
         额外生成：.husky/ Git hooks、.github/workflows/ci.yml CI 流水线、commitlint.config.js、package.json 依赖检查与合并。
+        package.json 支持智能合并（已存在则合并依赖，不存在则新建）；
+        CI 工作流文件已存在时自动跳过（不覆盖）；
+        Husky 配置使用 v9+ 纯 shell 脚本格式（不含 _/husky.sh 引用）；
+        输出中包含 installNote 字段，记录依赖安装耗时提示。
         适用于二次运行、CI 环境、有经验的用户。
         dryRun=true 时返回空 files 数组和 summary（不含 validation/errors）。
         dryRun 模式下 summary 仅包含 files 和 decisions 字段，不包含 backupDir/recommendedActions/huskySetup。
@@ -244,7 +252,11 @@ paths:
               $ref: "#/components/schemas/InitHarnessInput"
       responses:
         "200":
-          description: 初始化结果（含生成摘要和验证结果）
+          description: >
+            初始化结果。非 dryRun 模式返回完整的 files / summary / validation / errors；
+            dryRun=true 时仅返回 files（空数组）和 summary（仅含 files 和 decisions 字段，
+            不含 backupDir / recommendedActions / huskySetup / permissions / installNote），
+            且不含 validation 和 errors 字段。
           content:
             application/json:
               schema:
@@ -307,6 +319,12 @@ paths:
                         type: object
                         additionalProperties:
                           type: integer
+        "400":
+          description: 状态不合法。当前 phase 不是 evaluated/confirmed/generated/validated 时返回 STATE_PHASE_MISMATCH。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HarnessError"
 
   /tools/rollback:
     post:
@@ -335,11 +353,21 @@ paths:
               $ref: "#/components/schemas/RollbackInput"
       responses:
         "200":
-          description: 回滚结果
+          description: >
+            回滚结果。当 list=true 时返回 RollbackListOutput（备份列表），
+            否则返回 RollbackOutput（恢复结果）。
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RollbackOutput"
+                oneOf:
+                  - $ref: "#/components/schemas/RollbackOutput"
+                  - $ref: "#/components/schemas/RollbackListOutput"
+        "400":
+          description: 回滚失败。可能的错误码：ROLLBACK_FAILED（备份目录不存在 / 无可用备份 / 指定备份不存在）。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HarnessError"
 
   /tools/validate_setup:
     post:
@@ -351,6 +379,8 @@ paths:
         .github/workflows/ci.yml、package.json、.harness/state.json），
         并自动检查 package.json 中的 devDependencies 完整性。
         支持选择性跳过语法检查或权限检查。
+        Phase 7 新增：ESLint 规则名有效性检查（检测 eslint.config.js 中是否存在未知规则名）；
+        lint-staged 重复配置检测（同时检查 package.json 和 .lintstagedrc.json，提示冗余）。
       operationId: validateSetup
       tags: [核心流程]
       parameters:
@@ -1009,8 +1039,10 @@ components:
         - settings.json
       description: >
         规则介质类型（约束强度递减）。
-        前 8 个为推荐值；后 3 个为向后兼容别名，新代码应避免使用。
-        设计 v3.0 中为 8 值枚举（不含废弃别名）。
+        前 8 个为推荐值；后 3 个为向后兼容别名。
+        注意：`linter` 和 `settings.json` 为历史别名，
+        当前 generate_config 仅生成 `linter_warn`/`linter_error` 和 `settings`。
+        新代码和新规则应避免使用废弃别名。
 
     TechStack:
       type: string
@@ -1587,8 +1619,8 @@ components:
           description: >
             配置文件的相对路径。常见值：CLAUDE.md、eslint.config.js、
             .claude/settings.json、.gitignore、.husky/pre-commit、
-            .husky/commit-msg、.github/workflows/ci.yml、.lintstagedrc.json、
-            commitlint.config.js。
+            .husky/commit-msg、.github/workflows/ci.yml、package.json、
+            commitlint.config.js。lint-staged 配置现已合并到 package.json 的 lint-staged 字段中。
         content:
           type: string
           description: dry_run 模式时返回内容预览
@@ -1718,6 +1750,24 @@ components:
           items:
             type: string
           nullable: true
+
+    RollbackListOutput:
+      type: object
+      description: rollback list=true 时的响应（备份列表）
+      properties:
+        backups:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              files:
+                type: array
+                items:
+                  type: string
+              createdAt:
+                type: string
 
     ValidateSetupOutput:
       type: object
@@ -1900,6 +1950,7 @@ components:
           type: boolean
         category:
           type: string
+          description: 规则分类。可选字段，仅当规则定义中包含 category 时返回。
 
     AdapterResult:
       type: object
@@ -2386,6 +2437,9 @@ components:
               items:
                 type: string
               description: 建议加入 allowlist 的 MCP 工具列表
+        installNote:
+          type: string
+          description: 依赖安装耗时提示
 
     RuleExportData:
       type: object

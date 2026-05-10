@@ -168,3 +168,30 @@
 {"timestamp": "2026-04-28T00:08:21+08:00", "type": "feat", "phase": 18, "description": "P18-5: CI 工作流增加 projectPhase 感知，prototype 阶段无显式 ci 规则时跳过"}
 {"timestamp": "2026-04-28T00:08:21+08:00", "type": "feat", "phase": 18, "description": "P18-6: init_harness 输出权限配置补全提示（permissions 建议工具列表）"}
 {"timestamp": "2026-04-28T00:29:37+08:00", "type": "feat", "phase": 18, "description": "release harness-automation v1.0.8"}
+{"timestamp": "2026-05-10T13:00:14+08:00", "type": "fix", "phase": 7, "description": "P7-1: .gitignore true merge — 读取现有 .gitignore 后追加而非覆盖"}
+{"timestamp": "2026-05-10T13:00:14+08:00", "type": "fix", "phase": 7, "description": "P7-2: CI workflow 备份修复 — 已有 CI 时跳过覆盖，增加备份日志"}
+{"timestamp": "2026-05-10T13:00:14+08:00", "type": "fix", "phase": 7, "description": "P7-3: package.json 智能合并 — 已有/新建两种场景"}
+{"timestamp": "2026-05-10T13:00:14+08:00", "type": "fix", "phase": 7, "description": "P7-4: 移除 .lintstagedrc.json 冗余，统一到 package.json lint-staged 字段"}
+{"timestamp": "2026-05-10T13:00:14+08:00", "type": "fix", "phase": 7, "description": "P7-5: ESLint no-magic-numbers 规则名加 @typescript-eslint/ 前缀"}
+{"timestamp": "2026-05-10T13:00:14+08:00", "type": "fix", "phase": 7, "description": "P7-6: 移除不存在的 no-process-env 规则，secure-env-vars 降级到 claude_md"}
+{"timestamp": "2026-05-10T13:00:14+08:00", "type": "feat", "phase": 7, "description": "P7-7: ESLint config 增加完整 plugins/parser/files 声明"}
+{"timestamp": "2026-05-10T13:00:14+08:00", "type": "fix", "phase": 7, "description": "P7-8: Husky v9 兼容 — 移除已废弃 _/husky.sh 引用"}
+{"timestamp": "2026-05-10T13:00:14+08:00", "type": "fix", "phase": 7, "description": "P7-9: naming-convention 规则增加 Prisma 等第三方命名豁免"}
+{"timestamp": "2026-05-10T13:00:14+08:00", "type": "feat", "phase": 7, "description": "P7-10: init_harness 增加依赖安装时间提示"}
+{"timestamp": "2026-05-10T13:00:14+08:00", "type": "feat", "phase": 7, "description": "P7-11: 增加 .gitignore/CI/package.json 合并场景集成测试"}
+{"timestamp": "2026-05-10T13:00:14+08:00", "type": "feat", "phase": 7, "description": "P7-12: validate_setup 增加 ESLint 规则有效性/依赖完整性/重复配置检查"}
+{"timestamp": "2026-05-10T13:28:13+08:00", "type": "docs", "phase": 8, "description": "P8-1: OpenAPI InitHarnessSummary 增加 installNote 字段"}
+{"timestamp": "2026-05-10T13:28:13+08:00", "type": "docs", "phase": 8, "description": "P8-2: OpenAPI ConfigFileResult 移除 .lintstagedrc.json 引用"}
+{"timestamp": "2026-05-10T13:28:13+08:00", "type": "docs", "phase": 8, "description": "P8-3: OpenAPI generate_config description 移除 .lintstagedrc.json + 补充 P7 行为"}
+{"timestamp": "2026-05-10T13:28:13+08:00", "type": "docs", "phase": 8, "description": "P8-4: OpenAPI init_harness description 补充 P7 智能合并与兼容变更"}
+{"timestamp": "2026-05-10T13:28:13+08:00", "type": "docs", "phase": 8, "description": "P8-5: OpenAPI validate_setup description 补充 P7 新增检查项"}
+{"timestamp": "2026-05-10T13:28:13+08:00", "type": "docs", "phase": 8, "description": "P8-6: husky.ts generateLintStagedConfig 注释更新"}
+{"timestamp": "2026-05-10T13:28:13+08:00", "type": "docs", "phase": 8, "description": "P8-7: eslint.ts generateEslintConfig JSDoc 补充 Phase 7 变更"}
+{"timestamp": "2026-05-10T13:28:13+08:00", "type": "docs", "phase": 8, "description": "P8-8: OpenAPI generate_config 错误响应文档补全"}
+{"timestamp": "2026-05-10T14:06:18+08:00", "type": "docs", "phase": 9, "description": "P9-1: 修正 installNote 在 InitHarnessSummary 中的位置（从 permissions 下移到顶层）"}
+{"timestamp": "2026-05-10T14:06:18+08:00", "type": "docs", "phase": 9, "description": "P9-2: rollback list 模式输出文档化（新增 RollbackListOutput schema）"}
+{"timestamp": "2026-05-10T14:06:18+08:00", "type": "docs", "phase": 9, "description": "P9-3: init_harness response description 标注 dryRun 变体字段差异"}
+{"timestamp": "2026-05-10T14:06:18+08:00", "type": "docs", "phase": 9, "description": "P9-4: RuleStats.category 标记为 optional（仅当包含时返回）"}
+{"timestamp": "2026-05-10T14:06:18+08:00", "type": "docs", "phase": 9, "description": "P9-5: RuleMedium description 更新废弃别名说明"}
+{"timestamp": "2026-05-10T14:43:04+08:00", "type": "docs", "phase": 10, "description": "P10-1: confirm_decisions 增加 400 错误响应文档 (STATE_PHASE_MISMATCH)"}
+{"timestamp": "2026-05-10T14:43:04+08:00", "type": "docs", "phase": 10, "description": "P10-2: rollback 增加 400 错误响应文档 (ROLLBACK_FAILED)"}
