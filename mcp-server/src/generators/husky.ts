@@ -28,20 +28,20 @@ export function generateHuskyConfig(config: HuskyConfig): Record<string, string>
   if (!hasRelevantRules) return hooks;
 
   // pre-commit hook: run lint-staged on staged files
+  // Husky v9+ hooks are plain shell scripts — no _/husky.sh sourcing needed.
   if (!hooks["pre-commit"]) {
     hooks["pre-commit"] = [
       "#!/bin/sh",
-      ". \"$(dirname \"$0\")/_/husky.sh\"",
       "",
       "npx lint-staged",
     ].join("\n");
   }
 
   // commit-msg hook: commitlint
+  // Husky v9+ hooks are plain shell scripts — no _/husky.sh sourcing needed.
   if (!hooks["commit-msg"]) {
     hooks["commit-msg"] = [
       "#!/bin/sh",
-      ". \"$(dirname \"$0\")/_/husky.sh\"",
       "",
       "npx --no -- commitlint --edit $1",
     ].join("\n");
@@ -51,7 +51,7 @@ export function generateHuskyConfig(config: HuskyConfig): Record<string, string>
 }
 
 /**
- * Generate .lintstagedrc.json content.
+ * Generate lint-staged configuration content (used in package.json "lint-staged" field).
  * Configures lint-staged to run ESLint on staged JS/TS files.
  */
 export function generateLintStagedConfig(): string {
@@ -75,13 +75,19 @@ export function generateCommitlintConfig(): string {
 
 /**
  * Generate the .husky directory structure instructions.
+ *
+ * Husky v9+ does not require `npx husky init` — hooks are plain shell scripts.
+ * `npx husky init` would overwrite harness-generated hooks with stub content,
+ * so we use `npx husky` (which just sets core.hooksPath) instead.
  */
 export function generateHuskySetupInstructions(): string {
   return [
     "# Husky Setup",
-    "Run the following to enable git hooks:",
+    "Hooks have been created under .husky/. To activate them:",
     "",
-    "  npx husky init",
+    "  npx husky",
     "  chmod +x .husky/pre-commit .husky/commit-msg",
+    "",
+    "Do NOT run `npx husky init` — it would overwrite harness-generated hooks.",
   ].join("\n");
 }

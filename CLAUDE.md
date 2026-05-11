@@ -14,8 +14,9 @@ Harness Automation System 是一个基于 MCP (Model Context Protocol) 的自动
 - **ESLint + typescript-eslint** (代码规范)
 
 ## 协作
-- 任务看板: "./docs/TASK.json"。
-- 变更记录: "./docs/CHANGELOG.jsonl"
+
+- 任务看板: "TASK.json"。
+- 变更记录: "CHANGELOG.jsonl"
 
 ## 项目管理脚本
 

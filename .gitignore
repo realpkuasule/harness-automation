@@ -4,5 +4,7 @@ dist/
 __pycache__/
 *.pyc
 tmp.md
+docs/tmp
 coverage/
 *.lcov.info
+supplement-info.md

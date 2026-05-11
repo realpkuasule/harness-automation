@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, writeFileSync, rmSync, existsSync, chmodSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, chmodSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { DecisionEngine } from "../engine.js";
@@ -10,6 +10,7 @@ import { generateSettingsJson } from "../generators/settings_json.js";
 import { generateGitignore } from "../generators/gitignore.js";
 import { generateCiWorkflow } from "../generators/ci.js";
 import { generateHuskyConfig } from "../generators/husky.js";
+import { mergeDependencies } from "../generators/package_json.js";
 import { SetupValidator } from "../validators/setup_validator.js";
 import type { RuleDecision } from "../types.js";
 
@@ -288,5 +289,131 @@ describe("integration: full harness flow", () => {
     const stateManager = new StateManager(tmpDir);
     const state = stateManager.load();
     expect(state.phase).toBeNull();
+  });
+
+  // ================================================================
+  // Merge scenario tests
+  // ================================================================
+
+  it(".gitignore merge preserves existing entries and does not duplicate", () => {
+    // Pre-create .gitignore with existing content
+    const existingContent = "node_modules\n.env\ndist/";
+    write(join(tmpDir, ".gitignore"), existingContent);
+
+    // Call generateGitignore with existing content — filter out dupes
+    const additions = generateGitignore(existingContent);
+    // Build the final merged content like generateProjectFiles does
+    const finalContent = additions.trim()
+      ? `${existingContent.replace(/\n$/, "")}\n${additions}`
+      : existingContent;
+    write(join(tmpDir, ".gitignore"), finalContent);
+
+    const result = readFileSync(join(tmpDir, ".gitignore"), "utf-8");
+    // Verify existing entries are preserved
+    expect(result).toContain("node_modules");
+    expect(result).toContain(".env");
+    expect(result).toContain("dist/");
+    // Verify new harness entries are present
+    expect(result).toContain(".harness/state.json");
+    expect(result).toContain(".harness/backups/");
+    // Verify harness entries appear exactly once
+    const harnessStateMatches = result.match(/\.harness\/state\.json/g);
+    expect(harnessStateMatches).toHaveLength(1);
+    const harnessBackupMatches = result.match(/\.harness\/backups\//g);
+    expect(harnessBackupMatches).toHaveLength(1);
+    // Verify the section header
+    expect(result).toContain("# Harness Automation System");
+  });
+
+  it("CI workflow generation skips if file already exists", () => {
+    const engine = new DecisionEngine();
+    const output = engine.evaluate(TS_INPUT);
+
+    // Pre-create CI workflow with custom content
+    const customCi = "name: My Custom CI\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest";
+    write(join(tmpDir, ".github", "workflows", "ci.yml"), customCi);
+
+    // Simulate the skip logic from init_harness in index.ts
+    const ciFilePath = join(tmpDir, ".github/workflows/ci.yml");
+    let ciAction: string;
+    if (existsSync(ciFilePath)) {
+      ciAction = "skipped";
+    } else {
+      const ciContent = generateCiWorkflow({ decisions: output.decisions, techStack: "typescript" });
+      ciAction = ciContent.trim() ? "created" : "skipped";
+    }
+
+    expect(ciAction).toBe("skipped");
+
+    // Verify the original custom content is untouched
+    const content = readFileSync(ciFilePath, "utf-8");
+    expect(content).toBe(customCi);
+    // Harness CI content should NOT be present
+    expect(content).not.toContain("Harness CI");
+  });
+
+  it("package.json mergeDependencies preserves existing and adds new without duplication", () => {
+    // Pre-create a package.json with some existing devDependencies and scripts
+    const existingPkg: Record<string, unknown> = {
+      name: "test-project",
+      scripts: {
+        lint: "eslint .",
+        test: "vitest run",
+      },
+      devDependencies: {
+        eslint: "^8.0.0",
+        prettier: "^3.0.0",
+      },
+    };
+    write(join(tmpDir, "package.json"), JSON.stringify(existingPkg));
+
+    // Create decisions that need additional deps (commitlint and husky)
+    const decisions: RuleDecision[] = [
+      {
+        ruleId: "commit-message-convention",
+        ruleName: "commit-message-convention",
+        recommendedMedium: "hook",
+        alternativeMedia: [],
+        confidence: 0.9,
+        reasons: [],
+        cognitiveLayerRequired: false,
+        cognitiveSkillTriggers: [],
+      },
+      {
+        ruleId: "lint-before-commit",
+        ruleName: "lint-before-commit",
+        recommendedMedium: "hook",
+        alternativeMedia: [],
+        confidence: 0.9,
+        reasons: [],
+        cognitiveLayerRequired: false,
+        cognitiveSkillTriggers: [],
+      },
+    ];
+
+    const result = mergeDependencies({ decisions, existingPackageJson: existingPkg });
+
+    // Existing devDependencies are preserved
+    expect(result.merged.eslint).toBe("^8.0.0");
+    expect(result.merged.prettier).toBe("^3.0.0");
+    // Existing ones are NOT in missing list
+    expect(result.missing).not.toContain("eslint");
+    expect(result.missing).not.toContain("prettier");
+    // New required deps are added (from RULE_DEPS)
+    expect(result.merged["@commitlint/cli"]).toBe("*");
+    expect(result.merged["@commitlint/config-conventional"]).toBe("*");
+    expect(result.merged["husky"]).toBe("*");
+    expect(result.merged["lint-staged"]).toBe("*");
+    // New deps appear in missing list
+    expect(result.missing).toContain("@commitlint/cli");
+    expect(result.missing).toContain("@commitlint/config-conventional");
+    expect(result.missing).toContain("husky");
+    expect(result.missing).toContain("lint-staged");
+    // No duplicates — each dep appears exactly once in merged
+    const mergedKeys = Object.keys(result.merged);
+    const uniqueKeys = new Set(mergedKeys);
+    expect(mergedKeys.length).toBe(uniqueKeys.size);
+    // suggestedCommands is populated
+    expect(result.suggestedCommands.length).toBeGreaterThan(0);
   });
 });

@@ -293,6 +293,44 @@ export class SetupValidator {
     "@typescript-eslint/": "@typescript-eslint/eslint-plugin",
   };
 
+  /** Known built-in ESLint core rules (subset) */
+  private static readonly KNOWN_ESLINT_CORE_RULES = new Set([
+    "no-console",
+    "no-debugger",
+    "no-restricted-imports",
+    "max-lines",
+    "no-alert",
+    "no-eval",
+    "no-var",
+    "prefer-const",
+    "eqeqeq",
+    "strict",
+    "no-unused-vars",
+  ]);
+
+  /** Known @typescript-eslint rules (subset) */
+  private static readonly KNOWN_TS_ESLINT_RULES = new Set([
+    "@typescript-eslint/no-magic-numbers",
+    "@typescript-eslint/explicit-function-return-type",
+    "@typescript-eslint/naming-convention",
+    "@typescript-eslint/no-unused-vars",
+    "@typescript-eslint/no-explicit-any",
+    "@typescript-eslint/ban-ts-comment",
+    "@typescript-eslint/consistent-type-imports",
+  ]);
+
+  /**
+   * Combined known rule set: core + @typescript-eslint + any rule prefixed by known plugins.
+   * A rule is considered "known" if it is in the known set OR has a prefix matching a known plugin.
+   */
+  private static isKnownRule(ruleName: string): boolean {
+    if (SetupValidator.KNOWN_ESLINT_CORE_RULES.has(ruleName)) return true;
+    if (SetupValidator.KNOWN_TS_ESLINT_RULES.has(ruleName)) return true;
+    // Any @typescript-eslint/ rule is considered known (we check the plugin separately)
+    if (ruleName.startsWith("@typescript-eslint/")) return true;
+    return false;
+  }
+
   private _checkDependencies(findings: ValidationFinding[]): void {
     const pkgPath = join(this.options.projectDir, "package.json");
     if (!existsSync(pkgPath)) return;
@@ -331,19 +369,93 @@ export class SetupValidator {
     if (existsSync(eslintConfigPath)) {
       try {
         const content = readFileSync(eslintConfigPath, "utf-8");
-        for (const [prefix, pkg] of Object.entries(SetupValidator.ESLINT_PLUGIN_MAP)) {
-          if (content.includes(prefix) && !(pkg in deps)) {
+        for (const [prefix, pkgName] of Object.entries(SetupValidator.ESLINT_PLUGIN_MAP)) {
+          if (content.includes(prefix) && !(pkgName in deps)) {
             findings.push({
               file: "package.json",
               type: "warning",
-              message: `${pkg} is required by eslint.config.js (references "${prefix}" rules) but not installed`,
-              fix: `npm install --save-dev ${pkg}`,
+              message: `${pkgName} is required by eslint.config.js (references "${prefix}" rules) but not installed`,
+              fix: `npm install --save-dev ${pkgName}`,
             });
           }
         }
       } catch {
         // If the config can't be read, skip dynamic check
       }
+    }
+
+    // 3. ESLint rule name validity check
+    this._checkEslintRuleNames(findings);
+
+    // 4. lint-staged duplicate config detection
+    this._checkLintStagedDuplication(findings);
+  }
+
+  /**
+   * Check eslint.config.js for unknown rule names.
+   * Parses the config file for `"rule-name":` patterns and flags unknown rules as warnings.
+   */
+  private _checkEslintRuleNames(findings: ValidationFinding[]): void {
+    const eslintConfigPath = join(this.options.projectDir, "eslint.config.js");
+    if (!existsSync(eslintConfigPath)) return;
+
+    try {
+      const content = readFileSync(eslintConfigPath, "utf-8");
+      // Match `"rule-name":` or `"@scope/rule-name":` patterns in the config string
+      const rulePattern = /"((?:@[\w-]+\/)?[\w-]+)":/g;
+      let match: RegExpExecArray | null;
+      const foundRules = new Set<string>();
+
+      // Keys that appear in ESLint flat config but are NOT rule names
+      const NON_RULE_KEYS = new Set([
+        "files", "ignores", "languageOptions", "parser", "parserOptions",
+        "ecmaVersion", "sourceType", "plugins", "rules", "settings",
+        "linterOptions", "processor", "name",
+      ]);
+
+      while ((match = rulePattern.exec(content)) !== null) {
+        const ruleName = match[1];
+        if (NON_RULE_KEYS.has(ruleName) || foundRules.has(ruleName)) continue;
+        foundRules.add(ruleName);
+        if (!SetupValidator.isKnownRule(ruleName)) {
+          findings.push({
+            file: "eslint.config.js",
+            type: "warning",
+            message: `Unknown ESLint rule referenced: "${ruleName}" — verify rule name or install required plugin`,
+            fix: `Check that "${ruleName}" is a valid ESLint/core rule or from an installed plugin`,
+          });
+        }
+      }
+    } catch {
+      // If the config can't be read, skip the check
+    }
+  }
+
+  /**
+   * Check if lint-staged config exists in BOTH package.json and .lintstagedrc.json.
+   * If both exist, add an info finding suggesting removal of .lintstagedrc.json.
+   */
+  private _checkLintStagedDuplication(findings: ValidationFinding[]): void {
+    const hasPackageJsonLintStaged = (() => {
+      const pkgPath = join(this.options.projectDir, "package.json");
+      if (!existsSync(pkgPath)) return false;
+      try {
+        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+        return typeof pkg === "object" && pkg !== null && "lint-staged" in pkg;
+      } catch {
+        return false;
+      }
+    })();
+
+    const hasLintstagedRc = existsSync(join(this.options.projectDir, ".lintstagedrc.json"));
+
+    if (hasPackageJsonLintStaged && hasLintstagedRc) {
+      findings.push({
+        file: ".lintstagedrc.json",
+        type: "info",
+        message: "lint-staged config is duplicated in package.json and .lintstagedrc.json — .lintstagedrc.json can be removed",
+        fix: "Remove .lintstagedrc.json and keep lint-staged config in package.json only",
+      });
     }
   }
 }

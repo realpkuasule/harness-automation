@@ -217,8 +217,8 @@
     "cost": 1,
     "feedbackSpeed": 2,
     "frequency": 3,
-    "recommendedMedium": "claude_md",
-    "alternativeMedium": ["hook", "ci"],
+    "recommendedMedium": "linter_error",
+    "alternativeMedium": ["hook", "ci", "claude_md"],
     "techStack": ["typescript", "javascript", "python", "go", "java"],
     "evidence": "硬编码的敏感信息构成安全风险。环境变量是管理配置的行业标准做法。",
     "errorMessage": {

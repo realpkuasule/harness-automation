@@ -13,7 +13,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CHANGELOG_FILE = ROOT / "docs" / "CHANGELOG.jsonl"
+CHANGELOG_FILE = ROOT / "CHANGELOG.jsonl"
 
 TZ = timezone(timedelta(hours=8))
 

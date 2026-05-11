@@ -17,7 +17,7 @@ import { generateClaudeMd } from "./generators/claude_md.js";
 import { generateEslintConfig } from "./generators/eslint.js";
 import { generateSettingsJson } from "./generators/settings_json.js";
 import { generateGitignore } from "./generators/gitignore.js";
-import { generateHuskyConfig, generateHuskySetupInstructions, generateLintStagedConfig, generateCommitlintConfig } from "./generators/husky.js";
+import { generateHuskyConfig, generateHuskySetupInstructions, generateCommitlintConfig } from "./generators/husky.js";
 import { generateCiWorkflow } from "./generators/ci.js";
 import { mergeDependencies } from "./generators/package_json.js";
 import { checkDependencies } from "./deps.js";
@@ -530,14 +530,20 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         });
       }
 
-      // 3f. CI workflow
-      const ciContent = generateCiWorkflow({ decisions, techStack: input.techStack[0], projectPhase: input.projectPhase });
-      if (ciContent.trim()) {
-        files.push({
-          path: ".github/workflows/ci.yml",
-          content: ciContent,
-          action: "created",
-        });
+      // 3f. CI workflow — skip if already exists (don't overwrite existing CI)
+      const ciFilePath = join(input.projectDir, ".github/workflows/ci.yml");
+      if (existsSync(ciFilePath)) {
+        console.error(`CI workflow already exists at .github/workflows/ci.yml — skipping to avoid overwriting`);
+        files.push({ path: ".github/workflows/ci.yml", content: "", action: "skipped" });
+      } else {
+        const ciContent = generateCiWorkflow({ decisions, techStack: input.techStack[0], projectPhase: input.projectPhase });
+        if (ciContent.trim()) {
+          files.push({
+            path: ".github/workflows/ci.yml",
+            content: ciContent,
+            action: "created",
+          });
+        }
       }
 
       // Check if commitlint config should be generated (when commit-msg hook exists)
@@ -553,7 +559,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         }
       }
 
-      // 3g. Package dependency check
+      // 3g. Package dependency check + package.json merge
       const depCheck = checkDependencies(input.projectDir);
       const depInfo: Record<string, unknown> | null = depCheck.missing.length > 0 || depCheck.outdated.length > 0
         ? {
@@ -563,11 +569,95 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
           }
         : null;
 
-      if (depInfo) {
-        const depMerge = mergeDependencies({ decisions });
-        if (depMerge.missing.length > 0) {
-          depInfo.suggestedCommands = depMerge.suggestedCommands;
+      // 3h. Package.json smart merge
+      const packageJsonPath = join(input.projectDir, "package.json");
+      const hasLintStageRelevant = decisions.some(
+        (d) =>
+          d.recommendedMedium === "linter_error" ||
+          d.recommendedMedium === "linter_warn" ||
+          d.recommendedMedium === "linter" ||
+          d.recommendedMedium === "hook",
+      );
+      const lintStagedConfig = hasLintStageRelevant
+        ? {
+            "*.{js,jsx,ts,tsx}": ["eslint --fix --max-warnings=0"],
+            "*.{json,md,yaml,yml}": ["prettier --write"],
+          }
+        : null;
+
+      if (existsSync(packageJsonPath)) {
+        // Read existing package.json, merge devDependencies and lint-staged
+        try {
+          const existingRaw = readFileSync(packageJsonPath, "utf-8");
+          const existingPkg = JSON.parse(existingRaw);
+          const depMerge = mergeDependencies({ decisions, existingPackageJson: existingPkg });
+          if (depInfo) {
+            if (depMerge.missing.length > 0) {
+              depInfo.suggestedCommands = depMerge.suggestedCommands;
+            }
+          }
+          // If any packages are actually needed, merge them in
+          const mergedDevDeps: Record<string, string> = {
+            ...(existingPkg.devDependencies || {}),
+          };
+          let hasChanges = false;
+          for (const dep of depMerge.missing) {
+            mergedDevDeps[dep] = "*";
+            hasChanges = true;
+          }
+          if (hasChanges || lintStagedConfig) {
+            if (hasChanges) {
+              existingPkg.devDependencies = mergedDevDeps;
+            }
+            if (lintStagedConfig) {
+              existingPkg["lint-staged"] = lintStagedConfig;
+            }
+            files.push({
+              path: "package.json",
+              content: JSON.stringify(existingPkg, null, 2) + "\n",
+              action: "merged",
+            });
+          }
+        } catch {
+          // If reading/parsing fails, log and skip
+          console.error("Failed to read or parse existing package.json — skipping merge");
         }
+      } else {
+        // Create minimal package.json
+        const depMerge = mergeDependencies({ decisions });
+        if (depInfo) {
+          if (depMerge.missing.length > 0) {
+            depInfo.suggestedCommands = depMerge.suggestedCommands;
+          }
+        }
+        const dirName = input.projectDir.split("/").filter(Boolean).pop() || "project";
+        const newPkg: Record<string, unknown> = {
+          name: dirName,
+          private: true,
+          type: "module",
+          scripts: {},
+        };
+        if (depMerge.missing.length > 0) {
+          const devDeps: Record<string, string> = {};
+          for (const dep of depMerge.missing) {
+            devDeps[dep] = "*";
+          }
+          newPkg.devDependencies = devDeps;
+        }
+        if (lintStagedConfig) {
+          newPkg["lint-staged"] = lintStagedConfig;
+        }
+        files.push({
+          path: "package.json",
+          content: JSON.stringify(newPkg, null, 2) + "\n",
+          action: "created",
+        });
+      }
+
+      // Log a note if .lintstagedrc.json already exists (can be removed in favor of package.json)
+      const lintstagedrcPath = join(input.projectDir, ".lintstagedrc.json");
+      if (existsSync(lintstagedrcPath)) {
+        console.error(".lintstagedrc.json exists — lint-staged config is now in package.json; .lintstagedrc.json can be removed");
       }
 
       const fileSummary = {
@@ -613,6 +703,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
           ? generateHuskySetupInstructions()
           : null,
         permissions: permissionHint,
+        installNote: "Installing dependencies may take 2-5 minutes depending on network speed and package count",
       };
 
       const output = { files, summary, errors };
@@ -1371,23 +1462,30 @@ function generateProjectFiles(
   // 3. settings.json
   files.push({ path: ".claude/settings.json", content: generateSettingsJson({ decisions }), action: "created" });
 
-  // 4. .gitignore additions
-  const gitignoreAdditions = generateGitignore();
+  // 4. .gitignore true merge
+  let existingGitignore: string | undefined;
+  if (projectDir) {
+    const gitignorePath = join(projectDir, ".gitignore");
+    try {
+      if (existsSync(gitignorePath)) {
+        existingGitignore = readFileSync(gitignorePath, "utf-8");
+      }
+    } catch {
+      // If reading fails, proceed without existing content
+    }
+  }
+  const gitignoreAdditions = generateGitignore(existingGitignore);
   if (gitignoreAdditions.trim()) {
-    files.push({ path: ".gitignore", content: gitignoreAdditions, action: "merged" });
+    const finalContent = existingGitignore
+      ? `${existingGitignore.replace(/\n$/, "")}\n${gitignoreAdditions}`
+      : gitignoreAdditions;
+    files.push({ path: ".gitignore", content: finalContent, action: "merged" });
+  } else if (existingGitignore) {
+    // File exists but no new entries to add — still include it so backup/restore works
+    files.push({ path: ".gitignore", content: existingGitignore, action: "skipped" });
   }
 
-  // 5. lint-staged config (if any linter or hook rules)
-  const hasLintStageRelevant = decisions.some(
-    (d) =>
-      d.recommendedMedium === "linter_error" ||
-      d.recommendedMedium === "linter_warn" ||
-      d.recommendedMedium === "linter" ||
-      d.recommendedMedium === "hook",
-  );
-  if (hasLintStageRelevant) {
-    files.push({ path: ".lintstagedrc.json", content: generateLintStagedConfig(), action: "created" });
-  }
+  // Note: lint-staged config is now merged into package.json (not a standalone file)
 
   return files;
 }
@@ -1404,6 +1502,9 @@ function backupGeneratedFiles(projectDir: string): string | null {
     ".husky/pre-commit",
     ".husky/commit-msg",
     ".github/workflows/ci.yml",
+    ".gitignore",
+    "package.json",
+    ".lintstagedrc.json",
   ];
 
   const toBackup = candidates.filter((f) => existsSync(join(projectDir, f)));
@@ -1420,6 +1521,7 @@ function backupGeneratedFiles(projectDir: string): string | null {
     cpSync(src, dest, { force: true, recursive: true });
   }
 
+  console.error(`Backing up ${toBackup.length} files to ${backupDir}`);
   return backupDir;
 }
 

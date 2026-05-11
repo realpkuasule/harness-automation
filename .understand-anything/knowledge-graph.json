@@ -1,0 +1,4108 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "@realpkuasule/harness-automation",
+    "languages": [
+      "go",
+      "java",
+      "javascript",
+      "json",
+      "markdown",
+      "python",
+      "shell",
+      "typescript",
+      "yaml"
+    ],
+    "frameworks": ["ESLint", "GitHub Actions", "Husky", "MCP SDK", "TypeScript", "Vitest", "Zod"],
+    "description": "Harness Automation System - MCP Server for automated constraint configuration",
+    "analyzedAt": "2026-05-05T17:28:07.260Z",
+    "gitCommitHash": "14f1765bc2ea3168a64006200bbddf930aa0e7f9"
+  },
+  "nodes": [
+    {
+      "id": "pipeline:.github/workflows/ci.yml",
+      "type": "pipeline",
+      "name": "ci.yml",
+      "filePath": ".github/workflows/ci.yml",
+      "summary": "Root-level GitHub Actions CI workflow triggered on push/PR to main; runs lint, type-check, build, and test jobs for the monorepo.",
+      "tags": ["ci-cd", "deployment", "infrastructure"],
+      "complexity": "simple"
+    },
+    {
+      "id": "pipeline:.github/workflows/publish.yml",
+      "type": "pipeline",
+      "name": "publish.yml",
+      "filePath": ".github/workflows/publish.yml",
+      "summary": "GitHub Actions workflow for publishing to npm; triggers on version tags (v*) and pushes to main, automates the release process.",
+      "tags": ["ci-cd", "deployment", "publishing"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:.husky/pre-commit",
+      "type": "file",
+      "name": "pre-commit",
+      "filePath": ".husky/pre-commit",
+      "summary": "Git pre-commit hook that prevents commits with lint violations, acting as a process-interception guardrail.",
+      "tags": ["git-hook", "validation", "infrastructure"],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:CLAUDE.md",
+      "type": "document",
+      "name": "CLAUDE.md",
+      "filePath": "CLAUDE.md",
+      "summary": "Project-level CLAUDE.md providing an overview of the Harness Automation System, the tech stack, directory structure, common commands, and architectural principles for LLM agents.",
+      "tags": ["documentation", "entry-point", "project-overview", "llm-instructions"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "README.md",
+      "summary": "Project README with quick-start guide, installation instructions, architecture overview, 16 built-in rules listing, and development commands.",
+      "tags": ["documentation", "entry-point", "getting-started", "overview"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:WHY.md",
+      "type": "document",
+      "name": "WHY.md",
+      "filePath": "WHY.md",
+      "summary": "Philosophical essay explaining the motivation behind the Harness project, covering concepts of constraint convergence, two-speed development, the bank-and-river metaphor, and why automated guardrails matter in the LLM era.",
+      "tags": ["documentation", "philosophy", "design-rationale", "project-vision"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:check_design_completeness.py",
+      "type": "file",
+      "name": "check_design_completeness.py",
+      "filePath": "check_design_completeness.py",
+      "summary": "Python script that validates design document completeness by checking for required sections, MCP tool definitions, rule database coverage, and decision engine implementation details.",
+      "tags": ["validation", "design-review", "script", "quality-assurance"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:CHANGELOG.jsonl",
+      "type": "file",
+      "name": "CHANGELOG.jsonl",
+      "filePath": "CHANGELOG.jsonl",
+      "summary": "JSONL changelog tracking all feature additions, fixes, and version releases in a structured machine-readable format.",
+      "tags": ["changelog", "version-history", "data"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:TASK.json",
+      "type": "file",
+      "name": "TASK.json",
+      "filePath": "TASK.json",
+      "summary": "Structured task tracking board in JSON format, organizing the project's implementation phases and individual tasks with status, priority, and dependencies.",
+      "tags": ["project-management", "task-tracking", "data", "planning"],
+      "complexity": "complex"
+    },
+    {
+      "id": "endpoint:docs/api/openapi.yaml",
+      "type": "endpoint",
+      "name": "openapi.yaml",
+      "filePath": "docs/api/openapi.yaml",
+      "summary": "OpenAPI 3.0 specification defining all 22 MCP tools and their input/output schemas, serving as the canonical API contract for the Harness Automation MCP server.",
+      "tags": ["api-schema", "specification", "openapi", "mcp-tools"],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:docs/harness-automation-design-v2.0-backup.md",
+      "type": "document",
+      "name": "harness-automation-design-v2.0-backup.md",
+      "filePath": "docs/harness-automation-design-v2.0-backup.md",
+      "summary": "Backup copy of the v2.0 design document containing the original 12-section system design with MCP server tools, state management, error handling, and decision engine specifications.",
+      "tags": ["documentation", "design", "backup", "architecture"],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:docs/harness-automation-design.md",
+      "type": "document",
+      "name": "harness-automation-design.md",
+      "filePath": "docs/harness-automation-design.md",
+      "summary": "Primary design document (v2.0+) with 14 sections covering system overview, MCP server design, state management, decision engine, rule database, config generators, Skill design, A/B testing, and cognitive layer integration.",
+      "tags": ["documentation", "design", "architecture", "specification"],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:docs/harness-design-comparison.md",
+      "type": "document",
+      "name": "harness-design-comparison.md",
+      "filePath": "docs/harness-design-comparison.md",
+      "summary": "Comparative analysis between the original Harness concept document and the detailed design specification, identifying gaps in cognitive skills integration, A/B testing, and suitability assessment.",
+      "tags": ["documentation", "design-review", "gap-analysis", "comparison"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:docs/preparing-npm.md",
+      "type": "document",
+      "name": "preparing-npm.md",
+      "filePath": "docs/preparing-npm.md",
+      "summary": "Step-by-step guide for preparing an npm account, creating access tokens, configuring GitHub Secrets, and publishing the harness-automation package to the npm registry.",
+      "tags": ["documentation", "deployment", "npm", "publishing"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:docs/reference.md",
+      "type": "document",
+      "name": "reference.md",
+      "filePath": "docs/reference.md",
+      "summary": "Comprehensive reference guide covering the five-media constraint system, the four-question decision flow, real-world rule implementation examples, reverse cases, error message design, A/B testing, and minimal viable harness patterns.",
+      "tags": ["documentation", "reference", "guide", "best-practices"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:docs/usage-as-claude-code-skill.md",
+      "type": "document",
+      "name": "usage-as-claude-code-skill.md",
+      "filePath": "docs/usage-as-claude-code-skill.md",
+      "summary": "Usage guide for running Harness Automation as a Claude Code Skill, covering installation, the 10-step workflow, cognitive layer skills, and troubleshooting FAQs.",
+      "tags": ["documentation", "usage-guide", "claude-code", "skill"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:mcp-server/.claude/settings.json",
+      "type": "config",
+      "name": "settings.json",
+      "filePath": "mcp-server/.claude/settings.json",
+      "summary": "Claude Code settings configuring format-on-save behavior for the mcp-server project.",
+      "tags": ["configuration", "editor", "formatting"],
+      "complexity": "simple"
+    },
+    {
+      "id": "pipeline:mcp-server/.github/workflows/ci.yml",
+      "type": "pipeline",
+      "name": "ci.yml",
+      "filePath": "mcp-server/.github/workflows/ci.yml",
+      "summary": "MCP-server-specific CI workflow triggered on push/PR; runs lint, type check, build, and test for the mcp-server package in isolation.",
+      "tags": ["ci-cd", "testing", "infrastructure"],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:mcp-server/.npmignore",
+      "type": "config",
+      "name": ".npmignore",
+      "filePath": "mcp-server/.npmignore",
+      "summary": "NPM publish exclusion list preventing source TypeScript files, test fixtures, config files, and intermediate directories from being included in the published package.",
+      "tags": ["configuration", "npm", "packaging", "build-system"],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:mcp-server/CLAUDE.md",
+      "type": "document",
+      "name": "CLAUDE.md",
+      "filePath": "mcp-server/CLAUDE.md",
+      "summary": "MCP-server-specific CLAUDE.md defining cognitive rules (prefer-early-return, no-duplicate-code, error-handling) and reference patterns for LLM agents operating on the mcp-server codebase.",
+      "tags": ["documentation", "coding-standards", "cognitive-rules", "llm-instructions"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/eslint.config.js",
+      "type": "file",
+      "name": "eslint.config.js",
+      "filePath": "mcp-server/eslint.config.js",
+      "summary": "ESLint configuration file for the mcp-server package, enforcing TypeScript strict mode with typescript-eslint rules.",
+      "tags": ["configuration", "linting", "code-quality", "typescript"],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:mcp-server/package.json",
+      "type": "config",
+      "name": "package.json",
+      "filePath": "mcp-server/package.json",
+      "summary": "Package manifest for @realpkuasule/harness-automation defining the MCP server binary entry point, npm scripts (build/dev/lint/test), dependencies (MCP SDK, Zod), and dev tooling (ESLint, Vitest, TypeScript).",
+      "tags": ["configuration", "npm", "build-system", "dependencies"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:mcp-server/skill/SKILL.md",
+      "type": "document",
+      "name": "SKILL.md",
+      "filePath": "mcp-server/skill/SKILL.md",
+      "summary": "Claude Code Skill definition file specifying the 11-step harness automation workflow, including state recovery, information collection, rule evaluation, decision confirmation, config generation, validation, and error recovery guidance.",
+      "tags": ["documentation", "skill-definition", "workflow", "claude-code"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/__fixtures__/go/good.go",
+      "type": "file",
+      "name": "good.go",
+      "filePath": "mcp-server/src/__fixtures__/go/good.go",
+      "summary": "Go test fixture demonstrating clean, rule-compliant code with a simple add function and a fetchData function using named constants.",
+      "tags": ["test", "fixture", "go", "example"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/__fixtures__/go/magic-numbers.go",
+      "type": "file",
+      "name": "magic-numbers.go",
+      "filePath": "mcp-server/src/__fixtures__/go/magic-numbers.go",
+      "summary": "Go test fixture containing intentional magic-number violations (no-magic-numbers rule) used for scanner validation testing.",
+      "tags": ["test", "fixture", "go", "violation-example"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/__fixtures__/java/debugger-statement.java",
+      "type": "file",
+      "name": "debugger-statement.java",
+      "filePath": "mcp-server/src/__fixtures__/java/debugger-statement.java",
+      "summary": "Java test fixture containing an intentional System.out.println debug statement violation, used to validate the no-debugger rule scanner.",
+      "tags": ["test", "fixture", "java", "violation-example"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/__fixtures__/java/good.java",
+      "type": "file",
+      "name": "good.java",
+      "filePath": "mcp-server/src/__fixtures__/java/good.java",
+      "summary": "Java test fixture demonstrating rule-compliant code with a Good class containing a properly named constant (MAX_RETRIES), a fetchData method with error handling, and a helper fetch method.",
+      "tags": ["test", "fixture", "java", "example"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:check_design_completeness.py:check_sections",
+      "type": "function",
+      "name": "check_sections",
+      "filePath": "check_design_completeness.py",
+      "lineRange": [15, 41],
+      "summary": "Validates that all required design document sections are present in the content, reporting which sections are present and which are missing.",
+      "tags": ["validation", "design-review"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:check_design_completeness.py:check_mcp_tools",
+      "type": "function",
+      "name": "check_mcp_tools",
+      "filePath": "check_design_completeness.py",
+      "lineRange": [43, 63],
+      "summary": "Checks the design document for required MCP tool definitions, identifying missing tools from the expected tool inventory.",
+      "tags": ["validation", "mcp-tools", "design-review"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:check_design_completeness.py:check_rule_database",
+      "type": "function",
+      "name": "check_rule_database",
+      "filePath": "check_design_completeness.py",
+      "lineRange": [65, 84],
+      "summary": "Validates that the rule database section specifies data structure, frequency mapping, and built-in rules with examples.",
+      "tags": ["validation", "rule-database", "design-review"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:check_design_completeness.py:check_decision_engine",
+      "type": "function",
+      "name": "check_decision_engine",
+      "filePath": "check_design_completeness.py",
+      "lineRange": [86, 101],
+      "summary": "Verifies that the decision engine section describes the four-question judgment flow implementation and expects the main function names (evaluate_rules, detect_conflicts, make_decision).",
+      "tags": ["validation", "decision-engine", "design-review"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:check_design_completeness.py:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "check_design_completeness.py",
+      "lineRange": [103, 171],
+      "summary": "Entry point for the design completeness checker; reads the design document, orchestrates all check functions, formats results with pass/fail status, and computes an overall completeness percentage.",
+      "tags": ["entry-point", "orchestration", "validation"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:mcp-server/src/__fixtures__/java/debugger-statement.java:DebuggerExample",
+      "type": "class",
+      "name": "DebuggerExample",
+      "filePath": "mcp-server/src/__fixtures__/java/debugger-statement.java",
+      "lineRange": [1, 13],
+      "summary": "Java test fixture class containing intentional rule violations (debug output via System.out.println in findBug) used to verify the no-debugger scanner detection.",
+      "tags": ["test", "fixture", "java", "violation-example"],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:mcp-server/src/__fixtures__/java/good.java:Good",
+      "type": "class",
+      "name": "Good",
+      "filePath": "mcp-server/src/__fixtures__/java/good.java",
+      "lineRange": [1, 21],
+      "summary": "Java test fixture class demonstrating rule-compliant patterns: properly named static constants, extracted helper methods, and error handling in data fetching.",
+      "tags": ["test", "fixture", "java", "example"],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:mcp-server/src/__fixtures__/mixed/.harness/scan-cache.json",
+      "type": "config",
+      "name": "scan-cache.json",
+      "filePath": "mcp-server/src/__fixtures__/mixed/.harness/scan-cache.json",
+      "summary": "Harness scan cache for the mixed fixture project, storing version, project directory, last scan timestamp, and scan entries used in scanner testing.",
+      "tags": ["configuration", "cache", "fixture", "scanner"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:mcp-server/src/__fixtures__/mixed/package.json",
+      "type": "config",
+      "name": "package.json",
+      "filePath": "mcp-server/src/__fixtures__/mixed/package.json",
+      "summary": "Minimal package.json for the mixed fixture project, defining a private package with only a devDependencies section for scanner testing.",
+      "tags": ["configuration", "fixture", "dependencies"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/__fixtures__/mixed/src/index.ts",
+      "type": "file",
+      "name": "index.ts",
+      "filePath": "mcp-server/src/__fixtures__/mixed/src/index.ts",
+      "summary": "Mixed fixture TypeScript entry point that imports from a local utils module, fetches data, and processes it -- exercises TypeScript scanning rules.",
+      "tags": ["fixture", "entry-point", "scanner-test"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/__fixtures__/mixed/src/utils.py",
+      "type": "file",
+      "name": "utils.py",
+      "filePath": "mcp-server/src/__fixtures__/mixed/src/utils.py",
+      "summary": "Python fixture utility exporting a process_data function that logs and inspects data -- exercises Python scanning rules in a mixed-language project.",
+      "tags": ["fixture", "utility", "scanner-test", "python"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/__fixtures__/mixed/src/utils.ts",
+      "type": "file",
+      "name": "utils.ts",
+      "filePath": "mcp-server/src/__fixtures__/mixed/src/utils.ts",
+      "summary": "Minimal TypeScript fixture exporting a processData stringification helper -- used by the mixed fixture entry point for import resolution testing.",
+      "tags": ["fixture", "utility", "scanner-test"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/__fixtures__/python/console-logs.py",
+      "type": "file",
+      "name": "console-logs.py",
+      "filePath": "mcp-server/src/__fixtures__/python/console-logs.py",
+      "summary": "Python fixture containing functions with intentional console logging violations -- used to test the no-console-logs scanner rule for Python.",
+      "tags": ["fixture", "scanner-test", "python", "violation"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/__fixtures__/python/good.py",
+      "type": "file",
+      "name": "good.py",
+      "filePath": "mcp-server/src/__fixtures__/python/good.py",
+      "summary": "Python fixture with well-structured functions including error handling and HTTP requests -- serves as a clean baseline for scanner rule validation.",
+      "tags": ["fixture", "scanner-test", "python", "baseline"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/__fixtures__/scanner_fixtures.test.ts",
+      "type": "file",
+      "name": "scanner_fixtures.test.ts",
+      "filePath": "mcp-server/src/__fixtures__/scanner_fixtures.test.ts",
+      "summary": "Test helpers for scanner fixtures providing fixturePath and readFixture utilities to load TypeScript and Python fixture files for scanner tests.",
+      "tags": ["test", "fixture", "scanner", "utility"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/__fixtures__/typescript/console-logs.ts",
+      "type": "file",
+      "name": "console-logs.ts",
+      "filePath": "mcp-server/src/__fixtures__/typescript/console-logs.ts",
+      "summary": "TypeScript fixture with processItems and handleError functions using console.log/debug/warn/error -- exercises the no-console-logs scanner detection.",
+      "tags": ["fixture", "scanner-test", "violation"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/__fixtures__/typescript/debugger-statement.ts",
+      "type": "file",
+      "name": "debugger-statement.ts",
+      "filePath": "mcp-server/src/__fixtures__/typescript/debugger-statement.ts",
+      "summary": "TypeScript fixture containing debugger statements and console logs in complexCalculation and findBug functions -- tests no-debugger scanner rule.",
+      "tags": ["fixture", "scanner-test", "violation"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/__fixtures__/typescript/good.ts",
+      "type": "file",
+      "name": "good.ts",
+      "filePath": "mcp-server/src/__fixtures__/typescript/good.ts",
+      "summary": "Clean TypeScript fixture exporting add, MAX_RETRIES constant, and fetchData with proper error handling -- serves as a violation-free baseline.",
+      "tags": ["fixture", "scanner-test", "baseline"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/__fixtures__/typescript/large-file.ts",
+      "type": "file",
+      "name": "large-file.ts",
+      "filePath": "mcp-server/src/__fixtures__/typescript/large-file.ts",
+      "summary": "Auto-generated fixture with 50+ single-line stub functions (fn0-fn50) designed to trigger file-size and function-count scanner thresholds.",
+      "tags": ["fixture", "scanner-test", "auto-generated", "violation"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/__fixtures__/typescript/magic-numbers.ts",
+      "type": "file",
+      "name": "magic-numbers.ts",
+      "filePath": "mcp-server/src/__fixtures__/typescript/magic-numbers.ts",
+      "summary": "TypeScript fixture with calculateScore, getTimeout, and paginate functions using hardcoded numeric literals -- exercises no-magic-numbers scanner rule.",
+      "tags": ["fixture", "scanner-test", "violation"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/__tests__/e2e-automated.test.ts",
+      "type": "file",
+      "name": "e2e-automated.test.ts",
+      "filePath": "mcp-server/src/__tests__/e2e-automated.test.ts",
+      "summary": "Comprehensive end-to-end test suite that creates an MCP server via InMemoryTransport, invokes all tools (evaluate, scan, generate, validate, query), and verifies generated files -- tests the full automation pipeline.",
+      "tags": ["test", "e2e", "integration", "mcp", "automation"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/__tests__/integration.test.ts",
+      "type": "file",
+      "name": "integration.test.ts",
+      "filePath": "mcp-server/src/__tests__/integration.test.ts",
+      "summary": "Integration tests validating the decision engine, state management, all configuration generators, and the setup validator work together correctly.",
+      "tags": ["test", "integration", "engine", "generators"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/__tests__/skill-workflow.test.ts",
+      "type": "file",
+      "name": "skill-workflow.test.ts",
+      "filePath": "mcp-server/src/__tests__/skill-workflow.test.ts",
+      "summary": "Workflow simulation tests that exercise the full MCP tool chain (evaluate_rules, confirm_decisions, generate_config, validate_setup) mimicking a real Skill session.",
+      "tags": ["test", "e2e", "workflow", "mcp", "skill"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/ab_test/analyzer.ts",
+      "type": "file",
+      "name": "analyzer.ts",
+      "filePath": "mcp-server/src/ab_test/analyzer.ts",
+      "summary": "A/B test analysis entry point that delegates to the manager's analyzeTest function and formats summary results with statistical tallies.",
+      "tags": ["ab-testing", "analysis", "entry-point"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/ab_test/manager.ts",
+      "type": "file",
+      "name": "manager.ts",
+      "filePath": "mcp-server/src/ab_test/manager.ts",
+      "summary": "Core A/B testing manager that handles test lifecycle -- loading, starting, collecting data points, analyzing with statistical comparison, and expiration checks.",
+      "tags": ["ab-testing", "service", "statistics"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/adapters/rule_adapter.test.ts",
+      "type": "file",
+      "name": "rule_adapter.test.ts",
+      "filePath": "mcp-server/src/adapters/rule_adapter.test.ts",
+      "summary": "Tests for the RuleAdapter class covering upgrade recommendations, downgrade adjustments, same-medium decisions, missing rules, and threshold edge cases.",
+      "tags": ["test", "rule-adapter", "analytics"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/adapters/rule_adapter.ts",
+      "type": "file",
+      "name": "rule_adapter.ts",
+      "filePath": "mcp-server/src/adapters/rule_adapter.ts",
+      "summary": "RuleAdapter class that analyzes rule usage statistics and recommends medium upgrades or downgrades based on fix rates, bypass rates, and estimated impact.",
+      "tags": ["rule-adapter", "analytics", "recommendations"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/analytics/rule_analytics.test.ts",
+      "type": "file",
+      "name": "rule_analytics.test.ts",
+      "filePath": "mcp-server/src/analytics/rule_analytics.test.ts",
+      "summary": "Tests for RuleAnalytics covering collection of decisions into history, usage recording, stat calculation with fix/bypass rates, and history rotation.",
+      "tags": ["test", "analytics", "statistics"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/analytics/rule_analytics.ts",
+      "type": "file",
+      "name": "rule_analytics.ts",
+      "filePath": "mcp-server/src/analytics/rule_analytics.ts",
+      "summary": "RuleAnalytics class that collects engine decision snapshots, records usage events, computes per-rule fix/bypass/trigger statistics, and persists history with rotation.",
+      "tags": ["analytics", "statistics", "service"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/cognitive_layer/orchestrator.ts",
+      "type": "file",
+      "name": "orchestrator.ts",
+      "filePath": "mcp-server/src/cognitive_layer/orchestrator.ts",
+      "summary": "Cognitive layer orchestrator that loads rule configurations, routes requests to diagnostic/educational/decision-support skills, and determines when to auto-trigger cognitive interventions.",
+      "tags": ["cognitive-layer", "orchestrator", "routing"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/cognitive_layer/skills/decision_support.ts",
+      "type": "file",
+      "name": "decision_support.ts",
+      "filePath": "mcp-server/src/cognitive_layer/skills/decision_support.ts",
+      "summary": "Decision support cognitive skill that evaluates candidate media against weighted criteria (project phase, team size, tech stack) and produces scored recommendations.",
+      "tags": ["cognitive-layer", "decision-support", "scoring"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/cognitive_layer/skills/diagnostic.ts",
+      "type": "file",
+      "name": "diagnostic.ts",
+      "filePath": "mcp-server/src/cognitive_layer/skills/diagnostic.ts",
+      "summary": "Diagnostic cognitive skill that identifies rule violations in code patterns by analyzing code snippets against known rule patterns with context descriptions.",
+      "tags": ["cognitive-layer", "diagnostic", "analysis"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/cognitive_layer/skills/educational.ts",
+      "type": "file",
+      "name": "educational.ts",
+      "filePath": "mcp-server/src/cognitive_layer/skills/educational.ts",
+      "summary": "Educational cognitive skill that generates learning content about rules based on topic and experience level, explaining rationale and best practices.",
+      "tags": ["cognitive-layer", "educational", "learning"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/deps.test.ts",
+      "type": "file",
+      "name": "deps.test.ts",
+      "filePath": "mcp-server/src/deps.test.ts",
+      "summary": "Unit tests for dependency management module verifying package.json parsing, missing dependency detection, version conflict identification, and dependency merge logic.",
+      "tags": ["test", "dependencies", "package-management"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/__tests__/e2e-automated.test.ts:createTestHarness",
+      "type": "function",
+      "name": "createTestHarness",
+      "filePath": "mcp-server/src/__tests__/e2e-automated.test.ts",
+      "lineRange": [21, 32],
+      "summary": "Creates an MCP server-client pair using InMemoryTransport for end-to-end testing, returning client, server, and a temp directory.",
+      "tags": ["test-helper", "mcp", "setup"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/__tests__/e2e-automated.test.ts:writeGeneratedFiles",
+      "type": "function",
+      "name": "writeGeneratedFiles",
+      "filePath": "mcp-server/src/__tests__/e2e-automated.test.ts",
+      "lineRange": [52, 65],
+      "summary": "Writes generated configuration files to a temp directory from tool results, handling nested paths and executable permissions.",
+      "tags": ["test-helper", "filesystem", "config"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/__tests__/skill-workflow.test.ts:createTestHarness",
+      "type": "function",
+      "name": "createTestHarness",
+      "filePath": "mcp-server/src/__tests__/skill-workflow.test.ts",
+      "lineRange": [18, 28],
+      "summary": "Creates an MCP server-client pair via InMemoryTransport for skill workflow testing, returning client, server, and a temp directory.",
+      "tags": ["test-helper", "mcp", "setup"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/__tests__/skill-workflow.test.ts:writeGeneratedFiles",
+      "type": "function",
+      "name": "writeGeneratedFiles",
+      "filePath": "mcp-server/src/__tests__/skill-workflow.test.ts",
+      "lineRange": [45, 54],
+      "summary": "Writes generated config files from tool results to a temp directory for skill-workflow e2e verification.",
+      "tags": ["test-helper", "filesystem", "config"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:mcp-server/src/ab_test/analyzer.ts:analyzeABResults",
+      "type": "function",
+      "name": "analyzeABResults",
+      "filePath": "mcp-server/src/ab_test/analyzer.ts",
+      "lineRange": [9, 24],
+      "summary": "MCP tool handler that analyzes A/B test results by delegating to the manager, returning a formatted summary with recommendations and statistical breakdown.",
+      "tags": ["ab-testing", "analysis", "mcp-tool"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/ab_test/manager.ts:loadTests",
+      "type": "function",
+      "name": "loadTests",
+      "filePath": "mcp-server/src/ab_test/manager.ts",
+      "lineRange": [24, 32],
+      "summary": "Loads persisted A/B tests from the project's .harness/ab-tests.json file, returning an empty array if the file does not exist.",
+      "tags": ["ab-testing", "persistence"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:mcp-server/src/ab_test/manager.ts:saveTests",
+      "type": "function",
+      "name": "saveTests",
+      "filePath": "mcp-server/src/ab_test/manager.ts",
+      "lineRange": [34, 38],
+      "summary": "Persists the A/B tests array to .harness/ab-tests.json, creating the directory if needed.",
+      "tags": ["ab-testing", "persistence"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:mcp-server/src/ab_test/manager.ts:startABTest",
+      "type": "function",
+      "name": "startABTest",
+      "filePath": "mcp-server/src/ab_test/manager.ts",
+      "lineRange": [40, 91],
+      "summary": "Creates a new A/B test with baseline and test media configurations, validates for duplicates, checks expiration, sets duration, and persists the test record.",
+      "tags": ["ab-testing", "lifecycle", "validation"],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:mcp-server/src/ab_test/manager.ts:collectDataPoint",
+      "type": "function",
+      "name": "collectDataPoint",
+      "filePath": "mcp-server/src/ab_test/manager.ts",
+      "lineRange": [93, 107],
+      "summary": "Appends a metrics data point (trigger count, fix rate, bypass count) to an active A/B test and persists the update.",
+      "tags": ["ab-testing", "metrics", "data-collection"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/ab_test/manager.ts:analyzeTest",
+      "type": "function",
+      "name": "analyzeTest",
+      "filePath": "mcp-server/src/ab_test/manager.ts",
+      "lineRange": [109, 119],
+      "summary": "Entry point for analyzing one or all A/B tests, filtering by active/expired status and delegating statistical analysis to analyzeSingleTest.",
+      "tags": ["ab-testing", "analysis", "entry-point"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/ab_test/manager.ts:analyzeSingleTest",
+      "type": "function",
+      "name": "analyzeSingleTest",
+      "filePath": "mcp-server/src/ab_test/manager.ts",
+      "lineRange": [121, 160],
+      "summary": "Performs statistical analysis on a single A/B test's data points, computing averages and determining if the test medium outperforms baseline with a recommendation.",
+      "tags": ["ab-testing", "statistics", "analysis"],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:mcp-server/src/adapters/rule_adapter.test.ts:makeAnalytics",
+      "type": "function",
+      "name": "makeAnalytics",
+      "filePath": "mcp-server/src/adapters/rule_adapter.test.ts",
+      "lineRange": [5, 37],
+      "summary": "Test factory that creates a RuleAnalytics instance with mock state data for testing rule adaptation scenarios.",
+      "tags": ["test-helper", "factory", "analytics"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/adapters/rule_adapter.ts:estimateImpact",
+      "type": "function",
+      "name": "estimateImpact",
+      "filePath": "mcp-server/src/adapters/rule_adapter.ts",
+      "lineRange": [65, 88],
+      "summary": "Estimates the projected impact of changing a rule's medium by calculating fix rate gain/drop and bypass rate drop/rise from historical statistics.",
+      "tags": ["analytics", "impact-analysis", "prediction"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:mcp-server/src/adapters/rule_adapter.ts:RuleAdapter",
+      "type": "class",
+      "name": "RuleAdapter",
+      "filePath": "mcp-server/src/adapters/rule_adapter.ts",
+      "lineRange": [94, 231],
+      "summary": "Analyzes rule usage statistics to recommend medium upgrades or downgrades, using fix rates and bypass rates to determine optimal strictness levels per rule.",
+      "tags": ["rule-adapter", "recommendations", "analytics"],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:mcp-server/src/analytics/rule_analytics.test.ts:makeState",
+      "type": "function",
+      "name": "makeState",
+      "filePath": "mcp-server/src/analytics/rule_analytics.test.ts",
+      "lineRange": [8, 54],
+      "summary": "Test factory that creates a mock Harness state object with engine output decisions for testing RuleAnalytics collection and stat computation.",
+      "tags": ["test-helper", "factory", "state"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:mcp-server/src/analytics/rule_analytics.ts:RuleAnalytics",
+      "type": "class",
+      "name": "RuleAnalytics",
+      "filePath": "mcp-server/src/analytics/rule_analytics.ts",
+      "lineRange": [51, 258],
+      "summary": "Collects rule decision history snapshots, records usage events, and computes per-rule statistics (trigger rate, fix rate, bypass rate) with history rotation and persistence.",
+      "tags": ["analytics", "statistics", "service", "persistence"],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:mcp-server/src/cognitive_layer/orchestrator.ts:processCognitiveRequest",
+      "type": "function",
+      "name": "processCognitiveRequest",
+      "filePath": "mcp-server/src/cognitive_layer/orchestrator.ts",
+      "lineRange": [39, 77],
+      "summary": "Routes cognitive skill requests (diagnostic, educational, decision-support) to the appropriate handler based on skill type, loading rules and executing the corresponding skill.",
+      "tags": ["cognitive-layer", "routing", "orchestration"],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:mcp-server/src/cognitive_layer/orchestrator.ts:shouldAutoTrigger",
+      "type": "function",
+      "name": "shouldAutoTrigger",
+      "filePath": "mcp-server/src/cognitive_layer/orchestrator.ts",
+      "lineRange": [89, 108],
+      "summary": "Determines whether to auto-trigger a cognitive intervention based on recent recommendation history, checking for repeated same-medium recommendations as a stall signal.",
+      "tags": ["cognitive-layer", "auto-trigger", "heuristic"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/cognitive_layer/skills/decision_support.ts:executeDecisionSupport",
+      "type": "function",
+      "name": "executeDecisionSupport",
+      "filePath": "mcp-server/src/cognitive_layer/skills/decision_support.ts",
+      "lineRange": [39, 149],
+      "summary": "Evaluates candidate media against weighted project criteria (phase, team size, tech stack), generating scored pros/cons and producing a ranked recommendation list.",
+      "tags": ["cognitive-layer", "decision-support", "scoring", "evaluation"],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:mcp-server/src/cognitive_layer/skills/diagnostic.ts:executeDiagnostic",
+      "type": "function",
+      "name": "executeDiagnostic",
+      "filePath": "mcp-server/src/cognitive_layer/skills/diagnostic.ts",
+      "lineRange": [18, 37],
+      "summary": "Runs diagnostic analysis on a code pattern against rule configurations, identifying potential violations and returning structured diagnostic output.",
+      "tags": ["cognitive-layer", "diagnostic", "analysis"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:mcp-server/src/cognitive_layer/skills/educational.ts:executeEducational",
+      "type": "function",
+      "name": "executeEducational",
+      "filePath": "mcp-server/src/cognitive_layer/skills/educational.ts",
+      "lineRange": [17, 45],
+      "summary": "Generates educational content about a rule's rationale, best practices, and alternative media options tailored to the specified topic and experience level.",
+      "tags": ["cognitive-layer", "educational", "learning"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/deps.ts",
+      "type": "file",
+      "name": "deps.ts",
+      "filePath": "mcp-server/src/deps.ts",
+      "summary": "Dependency health checker that detects missing packages, package manager type, and outdated dependencies in a Node.js project.",
+      "tags": ["dependency-management", "utility", "package-management", "validators"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/engine.test.ts",
+      "type": "file",
+      "name": "engine.test.ts",
+      "filePath": "mcp-server/src/engine.test.ts",
+      "summary": "Comprehensive unit tests for the DecisionEngine class covering rule filtering, evaluation, conflict detection, and medium normalization.",
+      "tags": ["test", "decision-engine", "unit-test", "coverage"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/engine.ts",
+      "type": "file",
+      "name": "engine.ts",
+      "filePath": "mcp-server/src/engine.ts",
+      "summary": "Core decision engine that loads rule definitions from rules.json, evaluates project constraints against a four-question framework, and produces ranked rule decisions with confidence scores.",
+      "tags": ["decision-engine", "core-logic", "rule-evaluation", "constraint-analysis"],
+      "complexity": "complex",
+      "languageNotes": "Implements a multi-stage decision pipeline: tech stack filtering, formalizability check, cost adjustment, frequency estimation, special-case handling, and confidence calculation."
+    },
+    {
+      "id": "file:mcp-server/src/error_optimization/evaluator.ts",
+      "type": "file",
+      "name": "evaluator.ts",
+      "filePath": "mcp-server/src/error_optimization/evaluator.ts",
+      "summary": "Tracks and evaluates the effectiveness of error message suggestions, persisting user ratings and usage statistics to .harness/error_message_evaluations.json.",
+      "tags": ["error-optimization", "evaluation", "analytics", "feedback"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/error_optimization/generator.ts",
+      "type": "file",
+      "name": "generator.ts",
+      "filePath": "mcp-server/src/error_optimization/generator.ts",
+      "summary": "Generates structured error message suggestions by matching rule violations against predefined templates and rendering context-aware output with why/whatInstead/reference sections.",
+      "tags": ["error-optimization", "template-rendering", "code-generation", "message-formatting"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/error_optimization/templates.ts",
+      "type": "file",
+      "name": "templates.ts",
+      "filePath": "mcp-server/src/error_optimization/templates.ts",
+      "summary": "Repository of predefined error message templates organized by rule ID, providing the data store for the error optimization subsystem with query-by-ID and query-by-scenario lookup functions.",
+      "tags": ["error-optimization", "template-definitions", "data", "reference-data"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/generators/ci.test.ts",
+      "type": "file",
+      "name": "ci.test.ts",
+      "filePath": "mcp-server/src/generators/ci.test.ts",
+      "summary": "Unit tests for the CI workflow generator verifying correct GitHub Actions YAML output structure.",
+      "tags": ["test", "ci-cd", "unit-test"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/generators/ci.ts",
+      "type": "file",
+      "name": "ci.ts",
+      "filePath": "mcp-server/src/generators/ci.ts",
+      "summary": "Generates a GitHub Actions CI workflow YAML that runs linting and testing on push to main branches and pull requests.",
+      "tags": ["ci-cd", "configuration-generator", "deployment", "github-actions"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/generators/claude_md.test.ts",
+      "type": "file",
+      "name": "claude_md.test.ts",
+      "filePath": "mcp-server/src/generators/claude_md.test.ts",
+      "summary": "Unit tests verifying that the CLAUDE.md generator correctly formats cognitive rules, soft rules, and reference rules into proper markdown sections.",
+      "tags": ["test", "unit-test", "documentation-generator"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/generators/claude_md.ts",
+      "type": "file",
+      "name": "claude_md.ts",
+      "filePath": "mcp-server/src/generators/claude_md.ts",
+      "summary": "Generates a CLAUDE.md file from rule decisions, organizing rules into cognitive, soft, and reference sections with appropriate markdown headings and guidance.",
+      "tags": ["configuration-generator", "documentation", "markdown", "rule-export"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/generators/eslint.test.ts",
+      "type": "file",
+      "name": "eslint.test.ts",
+      "filePath": "mcp-server/src/generators/eslint.test.ts",
+      "summary": "Unit tests for the ESLint config generator validating flat config structure, rule mappings, and plugin integration.",
+      "tags": ["test", "linting", "unit-test"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/generators/eslint.ts",
+      "type": "file",
+      "name": "eslint.ts",
+      "filePath": "mcp-server/src/generators/eslint.ts",
+      "summary": "Generates an ESLint flat config (eslint.config.js) from rule decisions, mapping Harness rule IDs to ESLint rule names with appropriate severity levels.",
+      "tags": ["configuration-generator", "linting", "eslint", "code-quality"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/generators/gitignore.test.ts",
+      "type": "file",
+      "name": "gitignore.test.ts",
+      "filePath": "mcp-server/src/generators/gitignore.test.ts",
+      "summary": "Unit tests verifying that the .gitignore generator appends Harness-specific entries without duplicating existing patterns.",
+      "tags": ["test", "unit-test"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/generators/gitignore.ts",
+      "type": "file",
+      "name": "gitignore.ts",
+      "filePath": "mcp-server/src/generators/gitignore.ts",
+      "summary": "Generates or appends Harness-related entries to .gitignore, ensuring .harness/ and generated artifacts are excluded from version control.",
+      "tags": ["configuration-generator", "utility", "git"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/generators/husky.test.ts",
+      "type": "file",
+      "name": "husky.test.ts",
+      "filePath": "mcp-server/src/generators/husky.test.ts",
+      "summary": "Unit tests for the Husky configuration generator validating pre-commit hook content and lint-staged configuration.",
+      "tags": ["test", "git-hooks", "unit-test"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/generators/husky.ts",
+      "type": "file",
+      "name": "husky.ts",
+      "filePath": "mcp-server/src/generators/husky.ts",
+      "summary": "Generates Husky Git hook configuration including pre-commit linting hooks, commitlint setup, and lint-staged integration for automated quality gates.",
+      "tags": ["configuration-generator", "git-hooks", "husky", "lint-staged"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/generators/package_json.test.ts",
+      "type": "file",
+      "name": "package_json.test.ts",
+      "filePath": "mcp-server/src/generators/package_json.test.ts",
+      "summary": "Unit tests for the package.json dependency merger verifying correct merging of scripts and devDependencies sections.",
+      "tags": ["test", "unit-test", "package-management"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/generators/package_json.ts",
+      "type": "file",
+      "name": "package_json.ts",
+      "filePath": "mcp-server/src/generators/package_json.ts",
+      "summary": "Merges required Harness dependencies and scripts into the project's package.json, adding devDependencies for linting, formatting, and Git hooks tooling.",
+      "tags": ["configuration-generator", "dependency-management", "package-management"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/generators/settings_json.test.ts",
+      "type": "file",
+      "name": "settings_json.test.ts",
+      "filePath": "mcp-server/src/generators/settings_json.test.ts",
+      "summary": "Unit tests for the settings.json generator verifying Claude Code hook and permission configurations are correctly structured.",
+      "tags": ["test", "unit-test"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/generators/settings_json.ts",
+      "type": "file",
+      "name": "settings_json.ts",
+      "filePath": "mcp-server/src/generators/settings_json.ts",
+      "summary": "Generates a Claude Code settings.json with automated hooks and permissions derived from rule decisions, configuring the IDE-level constraint enforcement.",
+      "tags": ["configuration-generator", "claude-code", "hooks"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:mcp-server/src/index.test.ts",
+      "type": "file",
+      "name": "index.test.ts",
+      "filePath": "mcp-server/src/index.test.ts",
+      "summary": "Extensive integration and unit tests for the MCP server entry point covering all tool handlers, state transitions, configuration generation, and error handling paths.",
+      "tags": ["test", "integration-test", "entry-point", "coverage"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/index.ts",
+      "type": "file",
+      "name": "index.ts",
+      "filePath": "mcp-server/src/index.ts",
+      "summary": "MCP server entry point that registers all tools, wires up the decision engine with generators, scanners, validators, and analytics modules, and handles the full lifecycle of Harness constraint automation.",
+      "tags": ["entry-point", "mcp-server", "server-factory", "tool-registration", "orchestration"],
+      "complexity": "complex",
+      "languageNotes": "Registers 20+ MCP tools via zod-to-json-schema, coordinates 18+ internal modules, and implements atomic file backup before generation."
+    },
+    {
+      "id": "file:mcp-server/src/io/rule_io.test.ts",
+      "type": "file",
+      "name": "rule_io.test.ts",
+      "filePath": "mcp-server/src/io/rule_io.test.ts",
+      "summary": "Unit tests for the RuleIO class covering export serialization, import deserialization, preset loading with tech stack filtering, and round-trip integrity.",
+      "tags": ["test", "unit-test", "serialization"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/io/rule_io.ts",
+      "type": "file",
+      "name": "rule_io.ts",
+      "filePath": "mcp-server/src/io/rule_io.ts",
+      "summary": "Rule import/export module providing portable JSON serialization of rule configurations, built-in preset management, and filesystem persistence to .harness/exports/.",
+      "tags": ["import-export", "serialization", "utility", "preset-management"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/performance.test.ts",
+      "type": "file",
+      "name": "performance.test.ts",
+      "filePath": "mcp-server/src/performance.test.ts",
+      "summary": "Performance benchmark tests measuring the MCP server tool execution times under load, verifying response times stay within acceptable thresholds.",
+      "tags": ["test", "performance", "benchmark"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:mcp-server/src/rules.json",
+      "type": "config",
+      "name": "rules.json",
+      "filePath": "mcp-server/src/rules.json",
+      "summary": "Master rule definition database containing 20+ constraint rules with metadata (ID, category, formalizability, cost, recommended medium, evidence, error messages).",
+      "tags": ["configuration", "rule-definitions", "data", "constraint-rules"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/scanners/claude_extractor.test.ts",
+      "type": "file",
+      "name": "claude_extractor.test.ts",
+      "filePath": "mcp-server/src/scanners/claude_extractor.test.ts",
+      "summary": "Unit tests for the CLAUDE.md extractor verifying correct parsing of markdown sections, rule categories, and medium annotations from existing configuration files.",
+      "tags": ["test", "unit-test", "scanner"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/deps.ts:checkDependencies",
+      "type": "function",
+      "name": "checkDependencies",
+      "filePath": "mcp-server/src/deps.ts",
+      "lineRange": [27, 122],
+      "summary": "Scans a Node.js project directory to detect missing dependencies, identify the package manager, and check for outdated packages, returning a comprehensive DepCheckResult.",
+      "tags": ["dependency-management", "validation", "package-health"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/deps.ts:suggestInstall",
+      "type": "function",
+      "name": "suggestInstall",
+      "filePath": "mcp-server/src/deps.ts",
+      "lineRange": [139, 151],
+      "summary": "Generates a package-manager-specific installation command string for a given dependency name.",
+      "tags": ["dependency-management", "utility", "cli"],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:mcp-server/src/engine.ts:DecisionEngine",
+      "type": "class",
+      "name": "DecisionEngine",
+      "filePath": "mcp-server/src/engine.ts",
+      "lineRange": [134, 415],
+      "summary": "Core engine that evaluates rule applicability, runs decisions through a multi-stage pipeline (formalizability check, cost adjustment, frequency estimation, special cases), detects conflicts, and produces final rule decisions with confidence scores.",
+      "tags": ["decision-engine", "core-logic", "rule-evaluation", "pipeline"],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:mcp-server/src/error_optimization/evaluator.ts:ErrorMessageEvaluator",
+      "type": "class",
+      "name": "ErrorMessageEvaluator",
+      "filePath": "mcp-server/src/error_optimization/evaluator.ts",
+      "lineRange": [29, 130],
+      "summary": "Collects and analyzes user feedback on error message suggestions, persisting evaluation records and computing aggregate statistics (ratings, helpfulness rates, template usage) for continuous improvement.",
+      "tags": ["error-optimization", "evaluation", "feedback", "analytics"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/error_optimization/generator.ts:generateErrorSuggestion",
+      "type": "function",
+      "name": "generateErrorSuggestion",
+      "filePath": "mcp-server/src/error_optimization/generator.ts",
+      "lineRange": [37, 96],
+      "summary": "Matches an error context (rule ID, scenario, code snippet) against the template repository and generates structured error messages with location, explanation, and fix guidance.",
+      "tags": ["error-optimization", "template-rendering", "message-generation"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/generators/ci.ts:generateCiWorkflow",
+      "type": "function",
+      "name": "generateCiWorkflow",
+      "filePath": "mcp-server/src/generators/ci.ts",
+      "lineRange": [16, 94],
+      "summary": "Produces a GitHub Actions workflow YAML string that runs linting and testing on push and pull request events for the main branch.",
+      "tags": ["ci-cd", "configuration-generator", "github-actions", "yaml"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:mcp-server/src/generators/claude_md.ts:generateClaudeMd",
+      "type": "function",
+      "name": "generateClaudeMd",
+      "filePath": "mcp-server/src/generators/claude_md.ts",
+      "lineRange": [12, 101],
+      "summary": "Assembles a CLAUDE.md file from evaluated rule decisions, categorizing rules into cognitive, soft, and reference tiers with formatted markdown sections and usage instructions.",
+      "tags": ["configuration-generator", "documentation", "markdown", "rule-export"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:mcp-server/src/generators/eslint.ts:generateEslintConfig",
+      "type": "function",
+      "name": "generateEslintConfig",
+      "filePath": "mcp-server/src/generators/eslint.ts",
+      "lineRange": [18, 93],
+      "summary": "Constructs an ESLint flat configuration object from rule decisions, mapping Harness rule IDs to corresponding ESLint rules with correct severity levels and plugin imports.",
+      "tags": ["configuration-generator", "linting", "eslint", "code-quality"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:mcp-server/src/generators/husky.ts:generateHuskyConfig",
+      "type": "function",
+      "name": "generateHuskyConfig",
+      "filePath": "mcp-server/src/generators/husky.ts",
+      "lineRange": [15, 51],
+      "summary": "Produces a Husky pre-commit hook script that runs lint-staged and validates staged files before allowing commits.",
+      "tags": ["configuration-generator", "git-hooks", "husky", "pre-commit"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:mcp-server/src/generators/package_json.ts:mergeDependencies",
+      "type": "function",
+      "name": "mergeDependencies",
+      "filePath": "mcp-server/src/generators/package_json.ts",
+      "lineRange": [31, 63],
+      "summary": "Merges required devDependencies and scripts into an existing package.json object, deduplicating entries and preserving existing configuration.",
+      "tags": ["configuration-generator", "dependency-management", "merge"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:mcp-server/src/generators/settings_json.ts:generateSettingsJson",
+      "type": "function",
+      "name": "generateSettingsJson",
+      "filePath": "mcp-server/src/generators/settings_json.ts",
+      "lineRange": [11, 36],
+      "summary": "Builds a Claude Code settings.json configuration with automated hooks and permissions based on the medium assignments in rule decisions.",
+      "tags": ["configuration-generator", "claude-code", "hooks", "permissions"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:mcp-server/src/index.ts:createServer",
+      "type": "function",
+      "name": "createServer",
+      "filePath": "mcp-server/src/index.ts",
+      "lineRange": [75, 1264],
+      "summary": "Factory function that instantiates and configures the MCP server, registers all 20+ tool handlers with Zod schema validation, and wires up the complete harness automation pipeline.",
+      "tags": ["entry-point", "mcp-server", "server-factory", "tool-registration"],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:mcp-server/src/index.ts:enrichPartialDecisions",
+      "type": "function",
+      "name": "enrichPartialDecisions",
+      "filePath": "mcp-server/src/index.ts",
+      "lineRange": [1295, 1348],
+      "summary": "Enriches partial scan results with full rule definitions by merging identified patterns with the complete rules.json dataset for comprehensive evaluation.",
+      "tags": ["data-enrichment", "rule-matching", "scanning"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/index.ts:generateProjectFiles",
+      "type": "function",
+      "name": "generateProjectFiles",
+      "filePath": "mcp-server/src/index.ts",
+      "lineRange": [1354, 1393],
+      "summary": "Orchestrates the generation of all project configuration files (CLAUDE.md, ESLint, settings.json, .gitignore, CI, Husky, package.json) from final rule decisions.",
+      "tags": ["orchestration", "configuration-generation", "file-writing"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/index.ts:backupGeneratedFiles",
+      "type": "function",
+      "name": "backupGeneratedFiles",
+      "filePath": "mcp-server/src/index.ts",
+      "lineRange": [1399, 1424],
+      "summary": "Creates timestamped backups of existing configuration files before generating new ones, enabling safe rollback via the rollback tool.",
+      "tags": ["backup", "safety", "rollback", "file-management"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:mcp-server/src/io/rule_io.ts:RuleIO",
+      "type": "class",
+      "name": "RuleIO",
+      "filePath": "mcp-server/src/io/rule_io.ts",
+      "lineRange": [151, 268],
+      "summary": "Handles portable export and import of rule configurations as JSON files, manages built-in preset templates with tech stack filtering, and provides filesystem read/write operations for the .harness/exports/ directory.",
+      "tags": ["import-export", "serialization", "preset-management", "filesystem"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/scanners/claude_extractor.ts",
+      "type": "file",
+      "name": "claude_extractor.ts",
+      "filePath": "mcp-server/src/scanners/claude_extractor.ts",
+      "summary": "Extracts rule definitions from CLAUDE.md files by parsing markdown headings, inferring constraint media types, and converting parsed entries into structured RuleDefinition objects for the decision engine.",
+      "tags": ["scanner", "markdown-parser", "rule-extraction", "claude-md"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/scanners/code_scanner.test.ts",
+      "type": "file",
+      "name": "code_scanner.test.ts",
+      "filePath": "mcp-server/src/scanners/code_scanner.test.ts",
+      "summary": "Unit tests for the CodeScanner class covering file collection, pattern detection (console, debugger, magic numbers, untyped any, async-without-try-catch), and scan aggregation logic.",
+      "tags": ["test", "scanner", "unit-test", "vitest"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/scanners/code_scanner.ts",
+      "type": "file",
+      "name": "code_scanner.ts",
+      "filePath": "mcp-server/src/scanners/code_scanner.ts",
+      "summary": "Core code scanner that detects anti-patterns in TypeScript/JavaScript source files including console.log, debugger statements, direct fetch, magic numbers, untyped any, and async functions without try-catch. Supports incremental caching and config-only scanning modes.",
+      "tags": ["scanner", "static-analysis", "pattern-detection", "cache", "code-quality"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/scanners/integration.test.ts",
+      "type": "file",
+      "name": "integration.test.ts",
+      "filePath": "mcp-server/src/scanners/integration.test.ts",
+      "summary": "Integration tests for the scan-and-evaluate pipeline, verifying that code scanning results influence decision engine recommendations for constraint media upgrades and downgrades.",
+      "tags": ["test", "integration-test", "scanner", "decisions", "vitest"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/scanners/integration.ts",
+      "type": "file",
+      "name": "integration.ts",
+      "filePath": "mcp-server/src/scanners/integration.ts",
+      "summary": "Orchestrates the scan-evaluate pipeline by combining CodeScanner pattern detection, CLAUDE.md rule extraction, and DecisionEngine evaluation into a unified workflow that adjusts rule medium recommendations based on scan findings.",
+      "tags": ["integration", "orchestration", "scanner", "decision-engine", "pipeline"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/scanners/scan_cache.test.ts",
+      "type": "file",
+      "name": "scan_cache.test.ts",
+      "filePath": "mcp-server/src/scanners/scan_cache.test.ts",
+      "summary": "Unit tests for the ScanCache class covering cache save/load, stale file detection, entry merging, and hash-based change tracking for incremental scanning performance.",
+      "tags": ["test", "cache", "unit-test", "vitest"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/scanners/scan_cache.ts",
+      "type": "file",
+      "name": "scan_cache.ts",
+      "filePath": "mcp-server/src/scanners/scan_cache.ts",
+      "summary": "File-based caching layer for incremental code scanning that stores file hashes and scan timestamps, identifies stale files requiring re-scan, and merges new findings with cached results to avoid redundant analysis.",
+      "tags": ["cache", "incremental-scan", "persistence", "performance"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/state.test.ts",
+      "type": "file",
+      "name": "state.test.ts",
+      "filePath": "mcp-server/src/state.test.ts",
+      "summary": "Unit tests for the StateManager covering state machine transitions through the harness lifecycle phases (evaluated, confirmed, generated, validated), persistence, resume capability, and rollback backup tracking.",
+      "tags": ["test", "state-machine", "persistence", "unit-test", "vitest"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/state.ts",
+      "type": "file",
+      "name": "state.ts",
+      "filePath": "mcp-server/src/state.ts",
+      "summary": "Manages the harness setup lifecycle state machine with JSON persistence, supporting phase transitions, rollback backups, and checkpoint-based resume so operations can continue after interruption.",
+      "tags": ["state-machine", "persistence", "lifecycle", "rollback"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/suitability/assessor.ts",
+      "type": "file",
+      "name": "assessor.ts",
+      "filePath": "mcp-server/src/suitability/assessor.ts",
+      "summary": "Assesses whether a project is suitable for applying the Harness constraint system by evaluating Git history, file structure, dependency management, and test coverage against readiness criteria.",
+      "tags": ["suitability", "assessment", "readiness-check", "project-analysis"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/types.ts",
+      "type": "file",
+      "name": "types.ts",
+      "filePath": "mcp-server/src/types.ts",
+      "summary": "Central type definitions and Zod validation schemas for all MCP tool inputs and internal data structures including the RuleMedium enum, state machine types, and RuleDecision model used throughout the harness automation system.",
+      "tags": ["type-definition", "validation", "zod-schema", "shared-types", "contracts"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:mcp-server/src/validators/setup_validator.test.ts",
+      "type": "file",
+      "name": "setup_validator.test.ts",
+      "filePath": "mcp-server/src/validators/setup_validator.test.ts",
+      "summary": "Unit tests for the SetupValidator covering syntax validation of generated config files, file permission checks, and dependency integrity verification after harness configuration generation.",
+      "tags": ["test", "validation", "unit-test", "vitest", "setup"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:mcp-server/src/validators/setup_validator.ts",
+      "type": "file",
+      "name": "setup_validator.ts",
+      "filePath": "mcp-server/src/validators/setup_validator.ts",
+      "summary": "Validates generated Harness configuration files by checking JSON/YAML/JS syntax correctness, file existence and permissions, and dependency integrity (e.g., ESLint plugin availability) with detailed per-file reporting.",
+      "tags": ["validation", "configuration", "syntax-check", "dependency-check", "permissions"],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:mcp-server/tests/auto-tests/report-1.0.1.md",
+      "type": "document",
+      "name": "report-1.0.1.md",
+      "filePath": "mcp-server/tests/auto-tests/report-1.0.1.md",
+      "summary": "Automated test report for v1.0.1 covering 304 test cases across 23 test files with 100% pass rate, Vitest coverage metrics, and per-module pass/fail breakdown including the new E2E automated test suite.",
+      "tags": ["testing", "report", "coverage", "vitest", "quality"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:mcp-server/tests/user-tests/manual-e2e-1.0.1.md",
+      "type": "document",
+      "name": "manual-e2e-1.0.1.md",
+      "filePath": "mcp-server/tests/user-tests/manual-e2e-1.0.1.md",
+      "summary": "Manual end-to-end walkthrough guide for v1.0.1 that steps through creating a test project, running the full harness pipeline (assess, evaluate, confirm, generate, validate), and verifying each generated configuration file.",
+      "tags": ["testing", "e2e", "manual-test", "walkthrough", "documentation"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:skill/SKILL.md",
+      "type": "document",
+      "name": "SKILL.md",
+      "filePath": "skill/SKILL.md",
+      "summary": "Harness Automation skill definition and workflow guide documenting the 7-step interactive process (suitability assessment through validation) with MCP tool invocations and user-facing decision flows.",
+      "tags": ["skill-definition", "workflow", "documentation", "mcp", "user-guide"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:supplement-info.md",
+      "type": "document",
+      "name": "supplement-info.md",
+      "filePath": "supplement-info.md",
+      "summary": "Personal engineering philosophy notes on programming as a convergence process, principles for API design consistency, testing strategy preferences, and reflections on code review and AI-assisted development.",
+      "tags": ["documentation", "philosophy", "engineering-principles", "personal-notes"],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:tests/user-tests/test-20260427-2231.md",
+      "type": "document",
+      "name": "test-20260427-2231.md",
+      "filePath": "tests/user-tests/test-20260427-2231.md",
+      "summary": "Manual testing guide for Harness v1.0.7 covering items that cannot be automatically tested: npm publish workflow, Claude Code integration, state persistence, A/B testing, rollback verification, and error message optimization.",
+      "tags": ["testing", "manual-test", "releasetesting", "documentation", "integration"],
+      "complexity": "complex"
+    },
+    {
+      "id": "config:mcp-server/tsconfig.json",
+      "type": "config",
+      "name": "tsconfig.json",
+      "filePath": "mcp-server/tsconfig.json",
+      "summary": "TypeScript compiler configuration for the MCP server targeting ES2022 with strict mode, Node module resolution, and source maps enabled for debugging.",
+      "tags": ["configuration", "typescript", "build-system", "strict-mode"],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:mcp-server/vitest.config.ts",
+      "type": "config",
+      "name": "vitest.config.ts",
+      "filePath": "mcp-server/vitest.config.ts",
+      "summary": "Vitest test runner configuration with V8 coverage provider, 80% branch/function and 72% line/statement thresholds, excluding the generators directory from coverage reporting.",
+      "tags": ["configuration", "testing", "vitest", "coverage", "quality-gate"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:scripts/changelog.py",
+      "type": "file",
+      "name": "changelog.py",
+      "filePath": "scripts/changelog.py",
+      "summary": "CLI utility for managing the project changelog stored as JSONL, supporting add, list, and search operations on change entries with type (feat/fix) and phase attribution.",
+      "tags": ["cli", "changelog", "utility", "admin-script"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:scripts/task.py",
+      "type": "file",
+      "name": "task.py",
+      "filePath": "scripts/task.py",
+      "summary": "CLI utility for managing the project task board stored as JSON, supporting list, show, update, and summary operations with phase and status filtering for the kanban workflow.",
+      "tags": ["cli", "task-board", "utility", "kanban", "admin-script"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:skill/install.sh",
+      "type": "file",
+      "name": "install.sh",
+      "filePath": "skill/install.sh",
+      "summary": "Installation script that sets up @realpkuasule/harness-automation as a Claude Code MCP server by installing the npm package globally and registering it in the Claude Code settings file with colored progress output.",
+      "tags": ["installer", "shell", "mcp", "deployment", "setup"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:skill/install.test.sh",
+      "type": "file",
+      "name": "install.test.sh",
+      "filePath": "skill/install.test.sh",
+      "summary": "Test script that validates the install.sh behavior in an isolated temporary directory, checking that the MCP server is correctly installed, registered in settings, and produces expected output when executed.",
+      "tags": ["test", "shell", "installer", "integration-test"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:mcp-server/src/scanners/claude_extractor.ts:ClaudeExtractor",
+      "type": "class",
+      "name": "ClaudeExtractor",
+      "filePath": "mcp-server/src/scanners/claude_extractor.ts",
+      "lineRange": [44, 161],
+      "summary": "Parses CLAUDE.md markdown files to extract structured rule definitions, inferring constraint media types from rule descriptions and producing RuleDefinition arrays for the decision engine.",
+      "tags": ["markdown-parser", "rule-extraction", "claude-md", "scanner"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:mcp-server/src/scanners/code_scanner.ts:CodeScanner",
+      "type": "class",
+      "name": "CodeScanner",
+      "filePath": "mcp-server/src/scanners/code_scanner.ts",
+      "lineRange": [161, 421],
+      "summary": "Orchestrates codebase scanning by collecting source files, running multiple pattern detectors across file content, and aggregating results. Supports full, cached, and config-only scanning strategies with directory exclusion control.",
+      "tags": ["scanner", "static-analysis", "orchestrator", "pattern-detection", "cache"],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:mcp-server/src/scanners/scan_cache.ts:ScanCache",
+      "type": "class",
+      "name": "ScanCache",
+      "filePath": "mcp-server/src/scanners/scan_cache.ts",
+      "lineRange": [30, 175],
+      "summary": "Manages a JSON-based scan cache that stores file content hashes and timestamps, enabling incremental re-scanning by identifying stale files and merging fresh findings with existing cached results.",
+      "tags": ["cache", "incremental", "persistence", "hash-tracking"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:mcp-server/src/state.ts:StateManager",
+      "type": "class",
+      "name": "StateManager",
+      "filePath": "mcp-server/src/state.ts",
+      "lineRange": [14, 161],
+      "summary": "Persists and transitions the harness setup lifecycle state machine through phases (evaluated, confirmed, generated, validated), supports rollback with automatic backups, and enables checkpoint-based resume after interruption.",
+      "tags": ["state-machine", "persistence", "lifecycle", "rollback", "checkpoint"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:mcp-server/src/validators/setup_validator.ts:SetupValidator",
+      "type": "class",
+      "name": "SetupValidator",
+      "filePath": "mcp-server/src/validators/setup_validator.ts",
+      "lineRange": [67, 349],
+      "summary": "Validates generated harness configuration by checking file syntax (JSON/YAML/JS), file permissions, and dependency availability (e.g., ESLint plugins), producing per-file pass/fail results with detailed error messages.",
+      "tags": ["validation", "configuration", "syntax-check", "dependency-check"],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:mcp-server/src/scanners/code_scanner.ts:findMagicNumbers",
+      "type": "function",
+      "name": "findMagicNumbers",
+      "filePath": "mcp-server/src/scanners/code_scanner.ts",
+      "lineRange": [100, 115],
+      "summary": "Detects numeric literals in source code (excluding common values like 0, 1, -1) that should be extracted as named constants, filtering out declarations and return statements.",
+      "tags": ["pattern-detection", "magic-numbers", "code-quality", "static-analysis"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/scanners/code_scanner.ts:findUntypedAny",
+      "type": "function",
+      "name": "findUntypedAny",
+      "filePath": "mcp-server/src/scanners/code_scanner.ts",
+      "lineRange": [117, 140],
+      "summary": "Detects use of TypeScript `any` type annotations that violate strict typing rules, including function parameters, return types, and variable declarations with explicit exclusions for common patterns.",
+      "tags": ["pattern-detection", "typescript", "type-safety", "static-analysis", "any-type"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/scanners/code_scanner.ts:findAsyncWithoutTryCatch",
+      "type": "function",
+      "name": "findAsyncWithoutTryCatch",
+      "filePath": "mcp-server/src/scanners/code_scanner.ts",
+      "lineRange": [142, 155],
+      "summary": "Detects async functions that lack proper try-catch or .catch() error handling, flagging potential unhandled promise rejections for robustness improvement.",
+      "tags": ["pattern-detection", "error-handling", "async", "code-quality", "static-analysis"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/scanners/integration.ts:scanAndEvaluate",
+      "type": "function",
+      "name": "scanAndEvaluate",
+      "filePath": "mcp-server/src/scanners/integration.ts",
+      "lineRange": [28, 83],
+      "summary": "Runs the complete scan-evaluate pipeline: scans codebase for violations, extracts existing CLAUDE.md rules, evaluates rule decisions through the engine, and adjusts recommendations based on scan findings.",
+      "tags": ["orchestration", "pipeline", "scanner", "decision-engine", "integration"],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:mcp-server/src/scanners/integration.ts:adjustDecisionsByScan",
+      "type": "function",
+      "name": "adjustDecisionsByScan",
+      "filePath": "mcp-server/src/scanners/integration.ts",
+      "lineRange": [89, 114],
+      "summary": "Adjusts rule decision medium recommendations based on scan findings, upgrading severity when violations are detected and downgrading when no violations found, with confidence-aware thresholds.",
+      "tags": ["decision-adjustment", "scanner", "medium-upgrade", "confidence"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/suitability/assessor.ts:assessSuitability",
+      "type": "function",
+      "name": "assessSuitability",
+      "filePath": "mcp-server/src/suitability/assessor.ts",
+      "lineRange": [24, 63],
+      "summary": "Entry point for project suitability assessment that orchestrates Git history, file structure, dependency, and test coverage analysis to produce a composite suitability score and recommendation.",
+      "tags": ["suitability", "assessment", "orchestrator", "entry-point"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/suitability/assessor.ts:assessGitHistory",
+      "type": "function",
+      "name": "assessGitHistory",
+      "filePath": "mcp-server/src/suitability/assessor.ts",
+      "lineRange": [65, 104],
+      "summary": "Evaluates project maturity and activity through Git history analysis including commit count, age, and recent commit recency as part of the suitability assessment.",
+      "tags": ["suitability", "git-analysis", "project-maturity"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/suitability/assessor.ts:assessFileStructure",
+      "type": "function",
+      "name": "assessFileStructure",
+      "filePath": "mcp-server/src/suitability/assessor.ts",
+      "lineRange": [106, 157],
+      "summary": "Analyzes project directory structure for recognizable patterns (package.json, tsconfig, source dirs, test dirs) to assess project organization quality and alignment with harness assumptions.",
+      "tags": ["suitability", "file-structure", "project-analysis"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/suitability/assessor.ts:assessDependencies",
+      "type": "function",
+      "name": "assessDependencies",
+      "filePath": "mcp-server/src/suitability/assessor.ts",
+      "lineRange": [184, 216],
+      "summary": "Checks for presence of project dependency manifests (package.json/package-lock.json) and identifies key tooling dependencies (TypeScript, ESLint, Vitest) relevant to harness integration.",
+      "tags": ["suitability", "dependency-check", "tooling"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:mcp-server/src/suitability/assessor.ts:assessTestFiles",
+      "type": "function",
+      "name": "assessTestFiles",
+      "filePath": "mcp-server/src/suitability/assessor.ts",
+      "lineRange": [218, 254],
+      "summary": "Scans for test file presence and estimates test coverage adequacy as a suitability factor, recommending test additions when coverage appears insufficient.",
+      "tags": ["suitability", "test-coverage", "quality-assessment"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:scripts/changelog.py:cmd_add",
+      "type": "function",
+      "name": "cmd_add",
+      "filePath": "scripts/changelog.py",
+      "lineRange": [41, 57],
+      "summary": "Adds a new changelog entry to the JSONL file with type (feat/fix), phase number, and description, validating input format before appending.",
+      "tags": ["cli", "changelog", "jsonl", "command"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:scripts/changelog.py:cmd_list",
+      "type": "function",
+      "name": "cmd_list",
+      "filePath": "scripts/changelog.py",
+      "lineRange": [60, 68],
+      "summary": "Lists recent changelog entries from the JSONL file with optional count limit, displaying each entry with its timestamp, type, phase, and description.",
+      "tags": ["cli", "changelog", "jsonl", "command"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:scripts/changelog.py:cmd_search",
+      "type": "function",
+      "name": "cmd_search",
+      "filePath": "scripts/changelog.py",
+      "lineRange": [71, 83],
+      "summary": "Searches changelog entries by keyword matching against descriptions, returning matching entries with their full metadata for traceability.",
+      "tags": ["cli", "changelog", "search", "command"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:scripts/task.py:cmd_list",
+      "type": "function",
+      "name": "cmd_list",
+      "filePath": "scripts/task.py",
+      "lineRange": [31, 54],
+      "summary": "Lists task board entries with optional status and phase filtering, displaying task ID, title, status, phase, and priority in a tabular format.",
+      "tags": ["cli", "task-board", "kanban", "command"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:scripts/task.py:cmd_show",
+      "type": "function",
+      "name": "cmd_show",
+      "filePath": "scripts/task.py",
+      "lineRange": [57, 69],
+      "summary": "Shows detailed information for a single task by ID including its full description, status, phase, priority, and associated metadata.",
+      "tags": ["cli", "task-board", "command"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:scripts/task.py:cmd_update",
+      "type": "function",
+      "name": "cmd_update",
+      "filePath": "scripts/task.py",
+      "lineRange": [72, 89],
+      "summary": "Updates a task's status (pending, in_progress, completed) by task ID, persisting the change to the task board JSON file with validation.",
+      "tags": ["cli", "task-board", "kanban", "command", "state-update"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:scripts/task.py:cmd_summary",
+      "type": "function",
+      "name": "cmd_summary",
+      "filePath": "scripts/task.py",
+      "lineRange": [92, 107],
+      "summary": "Generates a summary report of the task board showing counts by status and priority, providing a high-level overview of project progress.",
+      "tags": ["cli", "task-board", "reporting", "summary", "command"],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:check_design_completeness.py",
+      "target": "function:check_design_completeness.py:check_sections",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:check_design_completeness.py",
+      "target": "function:check_design_completeness.py:check_mcp_tools",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:check_design_completeness.py",
+      "target": "function:check_design_completeness.py:check_rule_database",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:check_design_completeness.py",
+      "target": "function:check_design_completeness.py:check_decision_engine",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:check_design_completeness.py",
+      "target": "function:check_design_completeness.py:main",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/__fixtures__/java/debugger-statement.java",
+      "target": "class:mcp-server/src/__fixtures__/java/debugger-statement.java:DebuggerExample",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/__fixtures__/java/good.java",
+      "target": "class:mcp-server/src/__fixtures__/java/good.java:Good",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "document:CLAUDE.md",
+      "target": "document:README.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:CLAUDE.md",
+      "target": "document:docs/reference.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:README.md",
+      "target": "document:WHY.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:README.md",
+      "target": "document:docs/usage-as-claude-code-skill.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/harness-automation-design.md",
+      "target": "document:docs/harness-automation-design-v2.0-backup.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/harness-automation-design.md",
+      "target": "document:docs/harness-design-comparison.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/harness-automation-design.md",
+      "target": "file:check_design_completeness.py",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/reference.md",
+      "target": "document:WHY.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/usage-as-claude-code-skill.md",
+      "target": "document:mcp-server/skill/SKILL.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:mcp-server/skill/SKILL.md",
+      "target": "config:mcp-server/package.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:mcp-server/CLAUDE.md",
+      "target": "document:CLAUDE.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:mcp-server/package.json",
+      "target": "config:mcp-server/.npmignore",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:mcp-server/package.json",
+      "target": "file:mcp-server/eslint.config.js",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "pipeline:.github/workflows/publish.yml",
+      "target": "config:mcp-server/package.json",
+      "type": "triggers",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "pipeline:.github/workflows/publish.yml",
+      "target": "config:mcp-server/.npmignore",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "pipeline:.github/workflows/publish.yml",
+      "target": "document:docs/preparing-npm.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "pipeline:.github/workflows/ci.yml",
+      "target": "pipeline:mcp-server/.github/workflows/ci.yml",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "pipeline:mcp-server/.github/workflows/ci.yml",
+      "target": "config:mcp-server/package.json",
+      "type": "triggers",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "endpoint:docs/api/openapi.yaml",
+      "target": "config:mcp-server/package.json",
+      "type": "defines_schema",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "document:docs/preparing-npm.md",
+      "target": "pipeline:.github/workflows/publish.yml",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:.husky/pre-commit",
+      "target": "config:mcp-server/package.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:.husky/pre-commit",
+      "target": "file:mcp-server/eslint.config.js",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:mcp-server/.claude/settings.json",
+      "target": "config:mcp-server/package.json",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "document:mcp-server/skill/SKILL.md",
+      "target": "document:docs/usage-as-claude-code-skill.md",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:TASK.json",
+      "target": "document:docs/harness-automation-design.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__fixtures__/go/good.go",
+      "target": "file:mcp-server/src/__fixtures__/java/good.java",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__fixtures__/go/magic-numbers.go",
+      "target": "file:mcp-server/src/__fixtures__/go/good.go",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__fixtures__/java/debugger-statement.java",
+      "target": "file:mcp-server/src/__fixtures__/java/good.java",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:check_design_completeness.py",
+      "target": "document:docs/harness-automation-design.md",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/e2e-automated.test.ts",
+      "target": "function:mcp-server/src/__tests__/e2e-automated.test.ts:createTestHarness",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/e2e-automated.test.ts",
+      "target": "function:mcp-server/src/__tests__/e2e-automated.test.ts:writeGeneratedFiles",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/skill-workflow.test.ts",
+      "target": "function:mcp-server/src/__tests__/skill-workflow.test.ts:createTestHarness",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/skill-workflow.test.ts",
+      "target": "function:mcp-server/src/__tests__/skill-workflow.test.ts:writeGeneratedFiles",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/analyzer.ts",
+      "target": "function:mcp-server/src/ab_test/analyzer.ts:analyzeABResults",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/manager.ts",
+      "target": "function:mcp-server/src/ab_test/manager.ts:loadTests",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/manager.ts",
+      "target": "function:mcp-server/src/ab_test/manager.ts:saveTests",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/manager.ts",
+      "target": "function:mcp-server/src/ab_test/manager.ts:startABTest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/manager.ts",
+      "target": "function:mcp-server/src/ab_test/manager.ts:collectDataPoint",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/manager.ts",
+      "target": "function:mcp-server/src/ab_test/manager.ts:analyzeTest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/manager.ts",
+      "target": "function:mcp-server/src/ab_test/manager.ts:analyzeSingleTest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/adapters/rule_adapter.test.ts",
+      "target": "function:mcp-server/src/adapters/rule_adapter.test.ts:makeAnalytics",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/adapters/rule_adapter.ts",
+      "target": "function:mcp-server/src/adapters/rule_adapter.ts:estimateImpact",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/adapters/rule_adapter.ts",
+      "target": "class:mcp-server/src/adapters/rule_adapter.ts:RuleAdapter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/analytics/rule_analytics.test.ts",
+      "target": "function:mcp-server/src/analytics/rule_analytics.test.ts:makeState",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/analytics/rule_analytics.ts",
+      "target": "class:mcp-server/src/analytics/rule_analytics.ts:RuleAnalytics",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/orchestrator.ts",
+      "target": "function:mcp-server/src/cognitive_layer/orchestrator.ts:processCognitiveRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/orchestrator.ts",
+      "target": "function:mcp-server/src/cognitive_layer/orchestrator.ts:shouldAutoTrigger",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/skills/decision_support.ts",
+      "target": "function:mcp-server/src/cognitive_layer/skills/decision_support.ts:executeDecisionSupport",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/skills/diagnostic.ts",
+      "target": "function:mcp-server/src/cognitive_layer/skills/diagnostic.ts:executeDiagnostic",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/skills/educational.ts",
+      "target": "function:mcp-server/src/cognitive_layer/skills/educational.ts:executeEducational",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/analyzer.ts",
+      "target": "function:mcp-server/src/ab_test/analyzer.ts:analyzeABResults",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/manager.ts",
+      "target": "function:mcp-server/src/ab_test/manager.ts:loadTests",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/manager.ts",
+      "target": "function:mcp-server/src/ab_test/manager.ts:saveTests",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/manager.ts",
+      "target": "function:mcp-server/src/ab_test/manager.ts:startABTest",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/manager.ts",
+      "target": "function:mcp-server/src/ab_test/manager.ts:collectDataPoint",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/manager.ts",
+      "target": "function:mcp-server/src/ab_test/manager.ts:analyzeTest",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/adapters/rule_adapter.ts",
+      "target": "class:mcp-server/src/adapters/rule_adapter.ts:RuleAdapter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/analytics/rule_analytics.ts",
+      "target": "class:mcp-server/src/analytics/rule_analytics.ts:RuleAnalytics",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/orchestrator.ts",
+      "target": "function:mcp-server/src/cognitive_layer/orchestrator.ts:processCognitiveRequest",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/orchestrator.ts",
+      "target": "function:mcp-server/src/cognitive_layer/orchestrator.ts:shouldAutoTrigger",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/skills/decision_support.ts",
+      "target": "function:mcp-server/src/cognitive_layer/skills/decision_support.ts:executeDecisionSupport",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/skills/diagnostic.ts",
+      "target": "function:mcp-server/src/cognitive_layer/skills/diagnostic.ts:executeDiagnostic",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/skills/educational.ts",
+      "target": "function:mcp-server/src/cognitive_layer/skills/educational.ts:executeEducational",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/__fixtures__/mixed/src/index.ts",
+      "target": "file:mcp-server/src/__fixtures__/mixed/src/utils.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/__fixtures__/scanner_fixtures.test.ts",
+      "target": "file:mcp-server/src/scanners/code_scanner.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/__fixtures__/scanner_fixtures.test.ts",
+      "target": "file:mcp-server/src/engine.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/e2e-automated.test.ts",
+      "target": "file:mcp-server/src/index.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/engine.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/state.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/generators/claude_md.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/generators/eslint.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/generators/settings_json.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/generators/gitignore.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/generators/ci.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/generators/husky.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/validators/setup_validator.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/skill-workflow.test.ts",
+      "target": "file:mcp-server/src/index.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/analyzer.ts",
+      "target": "file:mcp-server/src/ab_test/manager.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/analyzer.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/ab_test/manager.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/adapters/rule_adapter.test.ts",
+      "target": "file:mcp-server/src/adapters/rule_adapter.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/adapters/rule_adapter.test.ts",
+      "target": "file:mcp-server/src/analytics/rule_analytics.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/adapters/rule_adapter.ts",
+      "target": "file:mcp-server/src/analytics/rule_analytics.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/adapters/rule_adapter.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/analytics/rule_analytics.test.ts",
+      "target": "file:mcp-server/src/analytics/rule_analytics.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/analytics/rule_analytics.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/analytics/rule_analytics.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/orchestrator.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/orchestrator.ts",
+      "target": "file:mcp-server/src/cognitive_layer/skills/diagnostic.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/orchestrator.ts",
+      "target": "file:mcp-server/src/cognitive_layer/skills/educational.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/orchestrator.ts",
+      "target": "file:mcp-server/src/cognitive_layer/skills/decision_support.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/skills/decision_support.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/skills/diagnostic.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/cognitive_layer/skills/educational.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/deps.test.ts",
+      "target": "file:mcp-server/src/deps.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/__fixtures__/scanner_fixtures.test.ts",
+      "target": "file:mcp-server/src/scanners/code_scanner.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__fixtures__/scanner_fixtures.test.ts",
+      "target": "file:mcp-server/src/engine.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/e2e-automated.test.ts",
+      "target": "file:mcp-server/src/index.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/skill-workflow.test.ts",
+      "target": "file:mcp-server/src/index.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/engine.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/state.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/generators/claude_md.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/generators/eslint.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/generators/settings_json.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/generators/gitignore.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/generators/ci.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/generators/husky.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/validators/setup_validator.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/__tests__/integration.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/adapters/rule_adapter.test.ts",
+      "target": "file:mcp-server/src/adapters/rule_adapter.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/adapters/rule_adapter.test.ts",
+      "target": "file:mcp-server/src/analytics/rule_analytics.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/analytics/rule_analytics.test.ts",
+      "target": "file:mcp-server/src/analytics/rule_analytics.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/analytics/rule_analytics.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/deps.test.ts",
+      "target": "file:mcp-server/src/deps.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "function:mcp-server/src/ab_test/analyzer.ts:analyzeABResults",
+      "target": "function:mcp-server/src/ab_test/manager.ts:analyzeTest",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:mcp-server/src/cognitive_layer/orchestrator.ts:processCognitiveRequest",
+      "target": "function:mcp-server/src/cognitive_layer/skills/diagnostic.ts:executeDiagnostic",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:mcp-server/src/cognitive_layer/orchestrator.ts:processCognitiveRequest",
+      "target": "function:mcp-server/src/cognitive_layer/skills/educational.ts:executeEducational",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:mcp-server/src/cognitive_layer/orchestrator.ts:processCognitiveRequest",
+      "target": "function:mcp-server/src/cognitive_layer/skills/decision_support.ts:executeDecisionSupport",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "config:mcp-server/src/__fixtures__/mixed/.harness/scan-cache.json",
+      "target": "file:mcp-server/src/__fixtures__/scanner_fixtures.test.ts",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:mcp-server/src/__fixtures__/mixed/package.json",
+      "target": "file:mcp-server/src/__fixtures__/mixed/src/index.ts",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:mcp-server/src/deps.ts",
+      "target": "function:mcp-server/src/deps.ts:checkDependencies",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/deps.ts",
+      "target": "function:mcp-server/src/deps.ts:suggestInstall",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/deps.ts",
+      "target": "function:mcp-server/src/deps.ts:checkDependencies",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/deps.ts",
+      "target": "function:mcp-server/src/deps.ts:suggestInstall",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/engine.test.ts",
+      "target": "file:mcp-server/src/engine.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/engine.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/engine.ts",
+      "target": "file:mcp-server/src/engine.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/engine.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/engine.ts",
+      "target": "file:mcp-server/src/state.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/engine.ts",
+      "target": "file:mcp-server/src/deps.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/engine.ts",
+      "target": "class:mcp-server/src/engine.ts:DecisionEngine",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/engine.ts",
+      "target": "class:mcp-server/src/engine.ts:DecisionEngine",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/error_optimization/evaluator.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/error_optimization/evaluator.ts",
+      "target": "file:mcp-server/src/error_optimization/templates.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/error_optimization/evaluator.ts",
+      "target": "class:mcp-server/src/error_optimization/evaluator.ts:ErrorMessageEvaluator",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/error_optimization/evaluator.ts",
+      "target": "class:mcp-server/src/error_optimization/evaluator.ts:ErrorMessageEvaluator",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/error_optimization/generator.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/error_optimization/generator.ts",
+      "target": "file:mcp-server/src/error_optimization/templates.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/error_optimization/generator.ts",
+      "target": "function:mcp-server/src/error_optimization/generator.ts:generateErrorSuggestion",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/error_optimization/generator.ts",
+      "target": "function:mcp-server/src/error_optimization/generator.ts:generateErrorSuggestion",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/generators/ci.test.ts",
+      "target": "file:mcp-server/src/generators/ci.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/ci.ts",
+      "target": "file:mcp-server/src/generators/ci.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/generators/ci.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/ci.ts",
+      "target": "function:mcp-server/src/generators/ci.ts:generateCiWorkflow",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/generators/ci.ts",
+      "target": "function:mcp-server/src/generators/ci.ts:generateCiWorkflow",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/generators/claude_md.test.ts",
+      "target": "file:mcp-server/src/generators/claude_md.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/claude_md.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/claude_md.ts",
+      "target": "file:mcp-server/src/generators/claude_md.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/generators/claude_md.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/claude_md.ts",
+      "target": "function:mcp-server/src/generators/claude_md.ts:generateClaudeMd",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/generators/claude_md.ts",
+      "target": "function:mcp-server/src/generators/claude_md.ts:generateClaudeMd",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/generators/eslint.test.ts",
+      "target": "file:mcp-server/src/generators/eslint.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/eslint.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/eslint.ts",
+      "target": "file:mcp-server/src/generators/eslint.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/generators/eslint.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/eslint.ts",
+      "target": "function:mcp-server/src/generators/eslint.ts:generateEslintConfig",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/generators/eslint.ts",
+      "target": "function:mcp-server/src/generators/eslint.ts:generateEslintConfig",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/generators/gitignore.test.ts",
+      "target": "file:mcp-server/src/generators/gitignore.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/gitignore.ts",
+      "target": "file:mcp-server/src/generators/gitignore.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/generators/husky.test.ts",
+      "target": "file:mcp-server/src/generators/husky.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/husky.ts",
+      "target": "file:mcp-server/src/generators/husky.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/generators/husky.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/husky.ts",
+      "target": "function:mcp-server/src/generators/husky.ts:generateHuskyConfig",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/generators/husky.ts",
+      "target": "function:mcp-server/src/generators/husky.ts:generateHuskyConfig",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/generators/package_json.test.ts",
+      "target": "file:mcp-server/src/generators/package_json.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/package_json.ts",
+      "target": "file:mcp-server/src/generators/package_json.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/generators/package_json.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/package_json.ts",
+      "target": "function:mcp-server/src/generators/package_json.ts:mergeDependencies",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/generators/package_json.ts",
+      "target": "function:mcp-server/src/generators/package_json.ts:mergeDependencies",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/generators/settings_json.test.ts",
+      "target": "file:mcp-server/src/generators/settings_json.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/settings_json.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/settings_json.ts",
+      "target": "file:mcp-server/src/generators/settings_json.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/generators/settings_json.ts",
+      "target": "function:mcp-server/src/generators/settings_json.ts:generateSettingsJson",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/generators/settings_json.ts",
+      "target": "function:mcp-server/src/generators/settings_json.ts:generateSettingsJson",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/index.test.ts",
+      "target": "file:mcp-server/src/index.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/index.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/engine.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/state.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/deps.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/generators/claude_md.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/generators/eslint.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/generators/settings_json.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/generators/gitignore.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/generators/ci.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/generators/husky.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/generators/package_json.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/validators/setup_validator.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/scanners/code_scanner.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/scanners/integration.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/scanners/claude_extractor.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/adapters/rule_adapter.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/analytics/rule_analytics.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/io/rule_io.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/cognitive_layer/orchestrator.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/ab_test/manager.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/ab_test/analyzer.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/suitability/assessor.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/scanners/scan_cache.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/error_optimization/evaluator.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/error_optimization/generator.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/error_optimization/templates.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "function:mcp-server/src/index.ts:createServer",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "function:mcp-server/src/index.ts:enrichPartialDecisions",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "function:mcp-server/src/index.ts:generateProjectFiles",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "function:mcp-server/src/index.ts:backupGeneratedFiles",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "function:mcp-server/src/index.ts:createServer",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/io/rule_io.test.ts",
+      "target": "file:mcp-server/src/io/rule_io.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/io/rule_io.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/io/rule_io.ts",
+      "target": "file:mcp-server/src/io/rule_io.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/io/rule_io.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/io/rule_io.ts",
+      "target": "file:mcp-server/src/state.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/io/rule_io.ts",
+      "target": "class:mcp-server/src/io/rule_io.ts:RuleIO",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/io/rule_io.ts",
+      "target": "class:mcp-server/src/io/rule_io.ts:RuleIO",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/performance.test.ts",
+      "target": "file:mcp-server/src/index.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/index.ts",
+      "target": "file:mcp-server/src/performance.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/scanners/claude_extractor.test.ts",
+      "target": "file:mcp-server/src/scanners/claude_extractor.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/claude_extractor.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "config:mcp-server/src/rules.json",
+      "target": "file:mcp-server/src/engine.ts",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:mcp-server/src/scanners/claude_extractor.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/code_scanner.test.ts",
+      "target": "file:mcp-server/src/scanners/code_scanner.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/code_scanner.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/code_scanner.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/code_scanner.ts",
+      "target": "file:mcp-server/src/scanners/scan_cache.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/integration.test.ts",
+      "target": "file:mcp-server/src/scanners/integration.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/integration.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/integration.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/integration.ts",
+      "target": "file:mcp-server/src/scanners/code_scanner.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/integration.ts",
+      "target": "file:mcp-server/src/scanners/claude_extractor.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/integration.ts",
+      "target": "file:mcp-server/src/engine.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/scan_cache.test.ts",
+      "target": "file:mcp-server/src/scanners/scan_cache.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/state.test.ts",
+      "target": "file:mcp-server/src/state.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/state.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/suitability/assessor.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/validators/setup_validator.test.ts",
+      "target": "file:mcp-server/src/validators/setup_validator.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/validators/setup_validator.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/validators/setup_validator.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/validators/setup_validator.ts",
+      "target": "file:mcp-server/src/deps.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/claude_extractor.ts",
+      "target": "class:mcp-server/src/scanners/claude_extractor.ts:ClaudeExtractor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/scanners/code_scanner.ts",
+      "target": "class:mcp-server/src/scanners/code_scanner.ts:CodeScanner",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/scanners/code_scanner.ts",
+      "target": "function:mcp-server/src/scanners/code_scanner.ts:findMagicNumbers",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/scanners/code_scanner.ts",
+      "target": "function:mcp-server/src/scanners/code_scanner.ts:findUntypedAny",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/scanners/code_scanner.ts",
+      "target": "function:mcp-server/src/scanners/code_scanner.ts:findAsyncWithoutTryCatch",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/scanners/integration.ts",
+      "target": "function:mcp-server/src/scanners/integration.ts:scanAndEvaluate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/scanners/integration.ts",
+      "target": "function:mcp-server/src/scanners/integration.ts:adjustDecisionsByScan",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/scanners/scan_cache.ts",
+      "target": "class:mcp-server/src/scanners/scan_cache.ts:ScanCache",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/state.ts",
+      "target": "class:mcp-server/src/state.ts:StateManager",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/suitability/assessor.ts",
+      "target": "function:mcp-server/src/suitability/assessor.ts:assessSuitability",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/suitability/assessor.ts",
+      "target": "function:mcp-server/src/suitability/assessor.ts:assessGitHistory",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/suitability/assessor.ts",
+      "target": "function:mcp-server/src/suitability/assessor.ts:assessFileStructure",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/suitability/assessor.ts",
+      "target": "function:mcp-server/src/suitability/assessor.ts:assessDependencies",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/suitability/assessor.ts",
+      "target": "function:mcp-server/src/suitability/assessor.ts:assessTestFiles",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/validators/setup_validator.ts",
+      "target": "class:mcp-server/src/validators/setup_validator.ts:SetupValidator",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:scripts/changelog.py",
+      "target": "function:scripts/changelog.py:cmd_add",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:scripts/changelog.py",
+      "target": "function:scripts/changelog.py:cmd_list",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:scripts/changelog.py",
+      "target": "function:scripts/changelog.py:cmd_search",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:scripts/task.py",
+      "target": "function:scripts/task.py:cmd_list",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:scripts/task.py",
+      "target": "function:scripts/task.py:cmd_show",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:scripts/task.py",
+      "target": "function:scripts/task.py:cmd_update",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:scripts/task.py",
+      "target": "function:scripts/task.py:cmd_summary",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:mcp-server/src/scanners/claude_extractor.ts",
+      "target": "class:mcp-server/src/scanners/claude_extractor.ts:ClaudeExtractor",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/scanners/code_scanner.ts",
+      "target": "class:mcp-server/src/scanners/code_scanner.ts:CodeScanner",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/scanners/integration.ts",
+      "target": "function:mcp-server/src/scanners/integration.ts:scanAndEvaluate",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/scanners/integration.ts",
+      "target": "function:mcp-server/src/scanners/integration.ts:adjustDecisionsByScan",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/scanners/scan_cache.ts",
+      "target": "class:mcp-server/src/scanners/scan_cache.ts:ScanCache",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/state.ts",
+      "target": "class:mcp-server/src/state.ts:StateManager",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/suitability/assessor.ts",
+      "target": "function:mcp-server/src/suitability/assessor.ts:assessSuitability",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/validators/setup_validator.ts",
+      "target": "class:mcp-server/src/validators/setup_validator.ts:SetupValidator",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:mcp-server/src/scanners/integration.ts:scanAndEvaluate",
+      "target": "class:mcp-server/src/scanners/code_scanner.ts:CodeScanner",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:mcp-server/src/scanners/integration.ts:scanAndEvaluate",
+      "target": "class:mcp-server/src/scanners/claude_extractor.ts:ClaudeExtractor",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:mcp-server/src/scanners/integration.ts:scanAndEvaluate",
+      "target": "file:mcp-server/src/engine.ts",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:mcp-server/src/suitability/assessor.ts:assessSuitability",
+      "target": "function:mcp-server/src/suitability/assessor.ts:assessGitHistory",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:mcp-server/src/suitability/assessor.ts:assessSuitability",
+      "target": "function:mcp-server/src/suitability/assessor.ts:assessFileStructure",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:mcp-server/src/suitability/assessor.ts:assessSuitability",
+      "target": "function:mcp-server/src/suitability/assessor.ts:assessDependencies",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:mcp-server/src/suitability/assessor.ts:assessSuitability",
+      "target": "function:mcp-server/src/suitability/assessor.ts:assessTestFiles",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:mcp-server/src/scanners/code_scanner.ts",
+      "target": "file:mcp-server/src/scanners/code_scanner.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/scanners/integration.ts",
+      "target": "file:mcp-server/src/scanners/integration.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/scanners/scan_cache.ts",
+      "target": "file:mcp-server/src/scanners/scan_cache.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/state.ts",
+      "target": "file:mcp-server/src/state.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:mcp-server/src/validators/setup_validator.ts",
+      "target": "file:mcp-server/src/validators/setup_validator.test.ts",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:skill/install.sh",
+      "target": "file:skill/install.test.sh",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:mcp-server/tsconfig.json",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:mcp-server/vitest.config.ts",
+      "target": "file:mcp-server/src/scanners/code_scanner.test.ts",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "document:mcp-server/tests/auto-tests/report-1.0.1.md",
+      "target": "file:mcp-server/src/scanners/code_scanner.test.ts",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:mcp-server/tests/user-tests/manual-e2e-1.0.1.md",
+      "target": "file:mcp-server/src/scanners/integration.ts",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:skill/SKILL.md",
+      "target": "file:mcp-server/src/scanners/integration.ts",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:supplement-info.md",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:tests/user-tests/test-20260427-2231.md",
+      "target": "file:mcp-server/src/validators/setup_validator.ts",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:skill/install.sh",
+      "target": "file:mcp-server/src/scanners/integration.ts",
+      "type": "deploys",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:skill/install.test.sh",
+      "target": "file:skill/install.sh",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:mcp-server/src/error_optimization/templates.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/ci.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/husky.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/package_json.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/generators/settings_json.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/performance.test.ts",
+      "target": "file:mcp-server/src/engine.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/performance.test.ts",
+      "target": "file:mcp-server/src/generators/ci.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/performance.test.ts",
+      "target": "file:mcp-server/src/generators/claude_md.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/performance.test.ts",
+      "target": "file:mcp-server/src/scanners/code_scanner.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/performance.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/integration.test.ts",
+      "target": "file:mcp-server/src/scanners/code_scanner.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/scan_cache.test.ts",
+      "target": "file:mcp-server/src/scanners/code_scanner.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/scanners/scan_cache.ts",
+      "target": "file:mcp-server/src/scanners/code_scanner.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:mcp-server/src/state.test.ts",
+      "target": "file:mcp-server/src/types.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ],
+  "layers": [
+    {
+      "id": "layer:core",
+      "name": "Core Engine",
+      "description": "MCP server entry point, decision engine, state management, type definitions with Zod schemas, dependency checking, and project-level ESLint enforcement — the foundational files imported by all other modules.",
+      "nodeIds": [
+        "file:mcp-server/src/index.ts",
+        "file:mcp-server/src/engine.ts",
+        "file:mcp-server/src/state.ts",
+        "file:mcp-server/src/types.ts",
+        "file:mcp-server/src/deps.ts",
+        "file:mcp-server/eslint.config.js"
+      ]
+    },
+    {
+      "id": "layer:service",
+      "name": "Service Modules",
+      "description": "Business logic modules implementing harness features: config generators (CLAUDE.md, ESLint, settings.json, gitignore, husky, CI, package.json), code scanners, setup validators, rule analytics, adaptive rule adjustments, A/B testing, cognitive layer skills, error message optimization, suitability assessment, and rules import/export.",
+      "nodeIds": [
+        "file:mcp-server/src/ab_test/analyzer.ts",
+        "file:mcp-server/src/ab_test/manager.ts",
+        "file:mcp-server/src/adapters/rule_adapter.ts",
+        "file:mcp-server/src/analytics/rule_analytics.ts",
+        "file:mcp-server/src/cognitive_layer/orchestrator.ts",
+        "file:mcp-server/src/cognitive_layer/skills/decision_support.ts",
+        "file:mcp-server/src/cognitive_layer/skills/diagnostic.ts",
+        "file:mcp-server/src/cognitive_layer/skills/educational.ts",
+        "file:mcp-server/src/error_optimization/evaluator.ts",
+        "file:mcp-server/src/error_optimization/generator.ts",
+        "file:mcp-server/src/error_optimization/templates.ts",
+        "file:mcp-server/src/generators/ci.ts",
+        "file:mcp-server/src/generators/claude_md.ts",
+        "file:mcp-server/src/generators/eslint.ts",
+        "file:mcp-server/src/generators/gitignore.ts",
+        "file:mcp-server/src/generators/husky.ts",
+        "file:mcp-server/src/generators/package_json.ts",
+        "file:mcp-server/src/generators/settings_json.ts",
+        "file:mcp-server/src/io/rule_io.ts",
+        "file:mcp-server/src/scanners/claude_extractor.ts",
+        "file:mcp-server/src/scanners/code_scanner.ts",
+        "file:mcp-server/src/scanners/integration.ts",
+        "file:mcp-server/src/scanners/scan_cache.ts",
+        "file:mcp-server/src/suitability/assessor.ts",
+        "file:mcp-server/src/validators/setup_validator.ts"
+      ]
+    },
+    {
+      "id": "layer:test",
+      "name": "Tests and Fixtures",
+      "description": "All unit tests, integration tests, E2E tests, performance tests, multi-language scanner test fixtures (Go, Java, Python, TypeScript, mixed), test configuration data, and manual/automated test reports.",
+      "nodeIds": [
+        "file:mcp-server/src/adapters/rule_adapter.test.ts",
+        "file:mcp-server/src/analytics/rule_analytics.test.ts",
+        "file:mcp-server/src/deps.test.ts",
+        "file:mcp-server/src/engine.test.ts",
+        "file:mcp-server/src/generators/ci.test.ts",
+        "file:mcp-server/src/generators/claude_md.test.ts",
+        "file:mcp-server/src/generators/eslint.test.ts",
+        "file:mcp-server/src/generators/gitignore.test.ts",
+        "file:mcp-server/src/generators/husky.test.ts",
+        "file:mcp-server/src/generators/package_json.test.ts",
+        "file:mcp-server/src/generators/settings_json.test.ts",
+        "file:mcp-server/src/index.test.ts",
+        "file:mcp-server/src/io/rule_io.test.ts",
+        "file:mcp-server/src/performance.test.ts",
+        "file:mcp-server/src/scanners/claude_extractor.test.ts",
+        "file:mcp-server/src/scanners/code_scanner.test.ts",
+        "file:mcp-server/src/scanners/integration.test.ts",
+        "file:mcp-server/src/scanners/scan_cache.test.ts",
+        "file:mcp-server/src/state.test.ts",
+        "file:mcp-server/src/validators/setup_validator.test.ts",
+        "file:mcp-server/src/__tests__/e2e-automated.test.ts",
+        "file:mcp-server/src/__tests__/integration.test.ts",
+        "file:mcp-server/src/__tests__/skill-workflow.test.ts",
+        "file:mcp-server/src/__fixtures__/go/good.go",
+        "file:mcp-server/src/__fixtures__/go/magic-numbers.go",
+        "file:mcp-server/src/__fixtures__/java/debugger-statement.java",
+        "file:mcp-server/src/__fixtures__/java/good.java",
+        "file:mcp-server/src/__fixtures__/mixed/src/index.ts",
+        "file:mcp-server/src/__fixtures__/mixed/src/utils.py",
+        "file:mcp-server/src/__fixtures__/mixed/src/utils.ts",
+        "file:mcp-server/src/__fixtures__/python/console-logs.py",
+        "file:mcp-server/src/__fixtures__/python/good.py",
+        "file:mcp-server/src/__fixtures__/scanner_fixtures.test.ts",
+        "file:mcp-server/src/__fixtures__/typescript/console-logs.ts",
+        "file:mcp-server/src/__fixtures__/typescript/debugger-statement.ts",
+        "file:mcp-server/src/__fixtures__/typescript/good.ts",
+        "file:mcp-server/src/__fixtures__/typescript/large-file.ts",
+        "file:mcp-server/src/__fixtures__/typescript/magic-numbers.ts",
+        "config:mcp-server/src/__fixtures__/mixed/.harness/scan-cache.json",
+        "config:mcp-server/src/__fixtures__/mixed/package.json",
+        "document:mcp-server/tests/auto-tests/report-1.0.1.md",
+        "document:mcp-server/tests/user-tests/manual-e2e-1.0.1.md",
+        "document:tests/user-tests/test-20260427-2231.md"
+      ]
+    },
+    {
+      "id": "layer:config",
+      "name": "Configuration",
+      "description": "Package manifest, TypeScript compiler settings, Vitest test runner config, NPM publish exclusions, Claude Code editor settings, and the built-in rules database that drives rule evaluation and constraint decisions.",
+      "nodeIds": [
+        "config:mcp-server/.claude/settings.json",
+        "config:mcp-server/.npmignore",
+        "config:mcp-server/package.json",
+        "config:mcp-server/src/rules.json",
+        "config:mcp-server/tsconfig.json",
+        "config:mcp-server/vitest.config.ts"
+      ]
+    },
+    {
+      "id": "layer:infrastructure",
+      "name": "CI/CD and Infrastructure",
+      "description": "GitHub Actions workflows for continuous integration (lint, type-check, build, test) and npm publishing, plus a git pre-commit hook enforcing lint-checks before commits.",
+      "nodeIds": [
+        "pipeline:.github/workflows/ci.yml",
+        "pipeline:.github/workflows/publish.yml",
+        "pipeline:mcp-server/.github/workflows/ci.yml",
+        "file:.husky/pre-commit"
+      ]
+    },
+    {
+      "id": "layer:documentation",
+      "name": "Documentation",
+      "description": "Project README, philosophical design rationale, full system design specification (v2.0+), design comparison analysis, comprehensive reference guide, Claude Code skill usage guide, npm publishing guide, project-level and package-level CLAUDE.md agent instructions, changelog, task tracker, and the OpenAPI 3.0 API specification defining all 22 MCP tools.",
+      "nodeIds": [
+        "document:CLAUDE.md",
+        "document:README.md",
+        "document:WHY.md",
+        "document:supplement-info.md",
+        "document:mcp-server/CLAUDE.md",
+        "document:mcp-server/skill/SKILL.md",
+        "document:docs/harness-automation-design-v2.0-backup.md",
+        "document:docs/harness-automation-design.md",
+        "document:docs/harness-design-comparison.md",
+        "document:docs/preparing-npm.md",
+        "document:docs/reference.md",
+        "document:docs/usage-as-claude-code-skill.md",
+        "file:CHANGELOG.jsonl",
+        "file:TASK.json",
+        "endpoint:docs/api/openapi.yaml"
+      ]
+    },
+    {
+      "id": "layer:skill",
+      "name": "Claude Code Skill",
+      "description": "The Claude Code skill definition file specifying the 11-step harness automation workflow, plus the skill installation shell script and its associated test.",
+      "nodeIds": ["document:skill/SKILL.md", "file:skill/install.sh", "file:skill/install.test.sh"]
+    },
+    {
+      "id": "layer:utility",
+      "name": "Project Utilities",
+      "description": "Standalone Python scripts for project management: design document completeness validation, structured changelog management, and JSON-based task board tracking.",
+      "nodeIds": [
+        "file:check_design_completeness.py",
+        "file:scripts/changelog.py",
+        "file:scripts/task.py"
+      ]
+    }
+  ],
+  "tour": [
+    {
+      "order": 1,
+      "title": "Project Overview & Philosophy",
+      "description": "The README introduces the Harness Automation System -- an MCP-based tool that automatically builds constraint configurations for software projects. It covers quick-start installation, the 16 built-in rules, and the architecture overview. The WHY.md document explains the philosophy: constraint convergence, the bank-and-river metaphor for automated guardrails, and why two-speed development (code speed vs. constraint speed) matters in the LLM era. Together they establish the 'what' and 'why' before diving into implementation.",
+      "nodeIds": ["document:README.md", "document:WHY.md"]
+    },
+    {
+      "order": 2,
+      "title": "MCP Server Entry Point",
+      "description": "The main entry point bootstraps the entire MCP server, registering all 22 tools and wiring up the decision engine with generators, scanners, validators, and analytics modules. With a fan-out of 33 (the highest in the codebase), this file is the single integration hub -- it imports every major subsystem and orchestrates the full Harness lifecycle from rule evaluation to config generation to validation. Understanding this file gives you a bird's-eye view of every component in the system.",
+      "nodeIds": ["file:mcp-server/src/index.ts"],
+      "languageLesson": "MCP servers in TypeScript use the @modelcontextprotocol/sdk to define tools via server.setRequestHandler(CallToolRequestSchema, handler). Each tool has a name, description, and inputSchema (Zod schema) -- the SDK handles JSON-RPC serialization automatically."
+    },
+    {
+      "order": 3,
+      "title": "Core Foundation: Types, Engine, and State",
+      "description": "Building on the entry point from Step 2, these three core files form the system's backbone. types.ts (fan-in of 47 -- the highest in the entire codebase) defines all Zod schemas and TypeScript interfaces used across every module. engine.ts implements the four-question decision flow that evaluates rules and determines constraint media. state.ts manages the .harness/state.json persistence layer, enabling the system to pause and resume across sessions. Together they establish the shared vocabulary, decision logic, and state machine that all other modules depend on.",
+      "nodeIds": [
+        "file:mcp-server/src/types.ts",
+        "file:mcp-server/src/engine.ts",
+        "file:mcp-server/src/state.ts"
+      ],
+      "languageLesson": "Zod schemas serve dual purpose in this codebase: runtime validation of tool inputs AND TypeScript type inference via z.infer<>. This eliminates the need to maintain separate type definitions and validation logic."
+    },
+    {
+      "order": 4,
+      "title": "Configuration Generators: From Decisions to Files",
+      "description": "Once the engine decides which rules apply at which media, these generators produce the actual configuration files. claude_md.ts generates CLAUDE.md agent instructions, eslint.ts produces ESLint flat configs with typescript-eslint rules, settings_json.ts writes Claude Code settings with hooks, and gitignore.ts appends entries for generated directories like .harness/. Each generator follows the same pattern: receive rule decisions, render a template, and write to disk.",
+      "nodeIds": [
+        "file:mcp-server/src/generators/claude_md.ts",
+        "file:mcp-server/src/generators/eslint.ts",
+        "file:mcp-server/src/generators/settings_json.ts",
+        "file:mcp-server/src/generators/gitignore.ts"
+      ]
+    },
+    {
+      "order": 5,
+      "title": "Infrastructure Generators: CI, Hooks, and Dependencies",
+      "description": "Extending the generation pattern from Step 4, these generators produce infrastructure-level configuration. ci.ts creates GitHub Actions workflow YAML files with lint/type-check/build/test jobs, husky.ts generates git pre-commit hooks that enforce constraints before commits land in the repository, and package_json.ts merges required devDependencies (like ESLint plugins) into the project's package.json. These generators turn decisions into operational guardrails.",
+      "nodeIds": [
+        "file:mcp-server/src/generators/ci.ts",
+        "file:mcp-server/src/generators/husky.ts",
+        "file:mcp-server/src/generators/package_json.ts"
+      ],
+      "languageLesson": "GitHub Actions YAML uses 'on' triggers for event-driven execution, 'jobs' for parallel work units, and 'steps' for sequential commands. The generator must produce valid YAML with proper indentation -- a 2-space error breaks the entire workflow."
+    },
+    {
+      "order": 6,
+      "title": "Code Scanning System",
+      "description": "With the generators understood, the scanning system answers the question: what rule violations actually exist in the user's codebase? code_scanner.ts is the main scanner class (fan-in of 9) that detects patterns like magic numbers, untyped any, console.log statements, and missing try-catch around async calls. integration.ts bridges scanning results with the decision engine, adjusting rule decisions based on real-world findings. claude_extractor.ts parses existing CLAUDE.md files for rule patterns, and scan_cache.ts provides incremental scanning to avoid re-scanning unchanged files.",
+      "nodeIds": [
+        "file:mcp-server/src/scanners/code_scanner.ts",
+        "file:mcp-server/src/scanners/integration.ts",
+        "file:mcp-server/src/scanners/claude_extractor.ts",
+        "file:mcp-server/src/scanners/scan_cache.ts"
+      ]
+    },
+    {
+      "order": 7,
+      "title": "Validation, Analytics, and Rule Adaptation",
+      "description": "After configuration is generated, setup_validator.ts verifies that all generated files are syntactically correct, have proper permissions, and contain no conflicts. rule_analytics.ts tracks rule effectiveness over time -- trigger rates, fix rates, and bypass counts -- persisting data for trend analysis. rule_adapter.ts closes the feedback loop by recommending media upgrades or downgrades (e.g., promoting a CLAUDE.md rule to a CI check when violation rates drop). This trio ensures the constraint system stays accurate and adaptive.",
+      "nodeIds": [
+        "file:mcp-server/src/validators/setup_validator.ts",
+        "file:mcp-server/src/analytics/rule_analytics.ts",
+        "file:mcp-server/src/adapters/rule_adapter.ts"
+      ]
+    },
+    {
+      "order": 8,
+      "title": "Cognitive Layer: Diagnostic, Educational, and Decision Support",
+      "description": "The cognitive layer adds intelligence on top of the rule engine. orchestrator.ts routes requests to three skill types: diagnostic.ts analyzes code patterns and explains violations, educational.ts teaches developers about constraint rules with tailored explanations based on experience level, and decision_support.ts recommends the best medium (linter, hook, CLAUDE.md, CI, etc.) for a given rule in a given project context. This layer transforms raw rule matching into contextual, human-friendly guidance.",
+      "nodeIds": [
+        "file:mcp-server/src/cognitive_layer/orchestrator.ts",
+        "file:mcp-server/src/cognitive_layer/skills/diagnostic.ts",
+        "file:mcp-server/src/cognitive_layer/skills/educational.ts",
+        "file:mcp-server/src/cognitive_layer/skills/decision_support.ts"
+      ]
+    },
+    {
+      "order": 9,
+      "title": "Continuous Improvement: A/B Testing and Error Optimization",
+      "description": "The A/B testing subsystem (manager.ts and analyzer.ts) enables controlled experiments comparing different constraint media -- for example, testing whether a rule enforced via linter_error produces better compliance than one enforced via claude_md. The error optimization subsystem (evaluator.ts, generator.ts, templates.ts) improves the quality of violation messages by generating structured output with 'why', 'whatInstead', and 'reference' sections, then tracking user ratings to identify which message templates drive the highest fix rates.",
+      "nodeIds": [
+        "file:mcp-server/src/ab_test/manager.ts",
+        "file:mcp-server/src/ab_test/analyzer.ts",
+        "file:mcp-server/src/error_optimization/evaluator.ts",
+        "file:mcp-server/src/error_optimization/generator.ts",
+        "file:mcp-server/src/error_optimization/templates.ts"
+      ]
+    },
+    {
+      "order": 10,
+      "title": "Rules Database and API Contract",
+      "description": "The rules.json file is the master rule catalog containing 20+ constraint definitions with metadata: rule ID, category (quality/security/style/performance/convention), formalizability, cost, recommended medium, evidence requirements, and error message templates. The OpenAPI specification (openapi.yaml) defines all 22 MCP tools with their input schemas, output schemas, and examples -- serving as both documentation and contract. rule_io.ts handles importing and exporting rule configurations, enabling teams to share constraint profiles across projects.",
+      "nodeIds": [
+        "config:mcp-server/src/rules.json",
+        "endpoint:docs/api/openapi.yaml",
+        "file:mcp-server/src/io/rule_io.ts"
+      ],
+      "languageLesson": "OpenAPI 3.0 schemas map directly to Zod schemas in the MCP server code. Each tool's inputSchema in the MCP registration matches the OpenAPI requestBody schema -- keeping documentation and implementation in sync requires this 1:1 correspondence."
+    },
+    {
+      "order": 11,
+      "title": "CI/CD and Deployment Infrastructure",
+      "description": "The project uses two CI workflows: the root-level ci.yml runs lint, type-check, build, and test on every push and PR, while the mcp-server-specific ci.yml does the same for the package in isolation. publish.yml automates npm releases, triggering on version tags (v*) and publishing @realpkuasule/harness-automation to the registry. The git pre-commit hook (.husky/pre-commit) catches lint violations before they enter the repository -- a constraint the system itself generates for user projects.",
+      "nodeIds": [
+        "pipeline:.github/workflows/ci.yml",
+        "pipeline:.github/workflows/publish.yml",
+        "pipeline:mcp-server/.github/workflows/ci.yml",
+        "file:.husky/pre-commit"
+      ],
+      "languageLesson": "GitHub Actions matrix builds let you test across multiple Node.js versions in parallel. The ci.yml uses a strategy.matrix.node-version to ensure the package compiles and passes tests on all supported runtimes."
+    },
+    {
+      "order": 12,
+      "title": "Skill System and Project Configuration",
+      "description": "The top-level package.json defines the MCP server binary, npm scripts (build/dev/lint/test), and all dependencies. The Skill definition (SKILL.md) specifies the 11-step harness automation workflow that orchestrates the user experience -- from suitability assessment through rule evaluation, decision confirmation, config generation, and validation. The tsconfig.json targets ES2022 with strict mode, while vitest.config.ts enforces 80% branch/function coverage thresholds. Together these files define how the project is built, distributed, and experienced by end users.",
+      "nodeIds": [
+        "config:mcp-server/package.json",
+        "document:mcp-server/skill/SKILL.md",
+        "config:mcp-server/tsconfig.json",
+        "config:mcp-server/vitest.config.ts"
+      ]
+    }
+  ]
+}

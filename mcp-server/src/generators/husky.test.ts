@@ -49,13 +49,14 @@ describe("generateHuskyConfig", () => {
     expect(result["commit-msg"]).toBeDefined();
   });
 
-  it("all hooks have proper shebang and husky setup", () => {
+  it("all hooks have proper shebang and Husky v9+ format (no deprecated _/husky.sh)", () => {
     const result = generateHuskyConfig({
       decisions: [decision("no-console-log", "linter"), decision("commit-message-convention", "hook")],
     });
     for (const script of Object.values(result)) {
       expect(script.startsWith("#!/bin/sh")).toBe(true);
-      expect(script).toContain('_/husky.sh');
+      // Husky v9+ hooks must NOT source _/husky.sh (deprecated, will fail in v10)
+      expect(script).not.toContain('_/husky.sh');
     }
   });
 });

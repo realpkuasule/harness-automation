@@ -145,4 +145,186 @@ describe("SetupValidator", () => {
     expect(result.summary.passed).toBe(true);
     expect(result.findings.length).toBe(0);
   });
+
+  // ================================================================
+  // P7-12 Enhanced checks
+  // ================================================================
+
+  describe("P7-12 enhanced checks", () => {
+    it("detects unknown ESLint rule names as warnings", () => {
+      // eslint.config.js with a known rule and an unknown rule
+      write("eslint.config.js", JSON.stringify({
+        rules: {
+          "no-console": "error",
+          "made-up-rule": "warn",
+        },
+      }));
+      write("package.json", JSON.stringify({ devDependencies: { eslint: "^8.0.0" } }));
+      write(".harness/state.json", JSON.stringify({ status: "generated", projectDir: tmpDir }));
+
+      const validator = new SetupValidator({
+        projectDir: tmpDir,
+        checkFiles: ["eslint.config.js", "package.json", ".harness/state.json"],
+      });
+      const result = validator.validate();
+
+      const unknownRuleFindings = result.findings.filter(
+        (f) => f.message.includes("Unknown ESLint rule") && f.message.includes("made-up-rule"),
+      );
+      expect(unknownRuleFindings.length).toBeGreaterThan(0);
+      expect(unknownRuleFindings[0].type).toBe("warning");
+      // Known rules should not trigger the finding
+      expect(result.findings.filter((f) => f.message.includes("no-console"))).toHaveLength(0);
+    });
+
+    it("does not flag standard ESLint config keys as unknown rules", () => {
+      // Full generated ESLint config with framework keys (files, languageOptions, etc.)
+      write("eslint.config.js", [
+        'const tseslint = require("@typescript-eslint/eslint-plugin");',
+        'const tsparser = require("@typescript-eslint/parser");',
+        '',
+        'module.exports = [',
+        '  {',
+        '    files: ["**/*.{js,jsx,ts,tsx}"],',
+        '    languageOptions: {',
+        '      parser: tsparser,',
+        '      parserOptions: {',
+        '        ecmaVersion: "latest",',
+        '        sourceType: "module",',
+        '      },',
+        '    },',
+        '    plugins: {',
+        '      "@typescript-eslint": tseslint,',
+        '    },',
+        '    rules: {',
+        '      "no-console": ["warn"],',
+        '      "no-debugger": ["error"],',
+        '    },',
+        '  },',
+        '];',
+      ].join("\n"));
+      write("package.json", JSON.stringify({ devDependencies: { eslint: "^8.0.0" } }));
+      write(".harness/state.json", JSON.stringify({ status: "generated", projectDir: tmpDir }));
+
+      const validator = new SetupValidator({
+        projectDir: tmpDir,
+        checkFiles: ["eslint.config.js", "package.json", ".harness/state.json"],
+      });
+      const result = validator.validate();
+
+      // Should NOT flag config keys (files, languageOptions, etc.) as unknown rules
+      const unknownRuleFindings = result.findings.filter(
+        (f) => f.message.includes("Unknown ESLint rule"),
+      );
+      expect(unknownRuleFindings).toHaveLength(0);
+    });
+
+    it("detects @typescript-eslint plugin dependency from eslint config", () => {
+      // eslint.config.js referencing @typescript-eslint rules but plugin not in deps
+      write("eslint.config.js", `export default { rules: { "@typescript-eslint/no-magic-numbers": "error" } };`);
+      write("package.json", JSON.stringify({ devDependencies: { eslint: "^8.0.0" } }));
+      write(".harness/state.json", JSON.stringify({ status: "generated", projectDir: tmpDir }));
+
+      const validator = new SetupValidator({
+        projectDir: tmpDir,
+        checkFiles: ["eslint.config.js", "package.json", ".harness/state.json"],
+      });
+      const result = validator.validate();
+
+      const pluginFindings = result.findings.filter(
+        (f) => f.message.includes("@typescript-eslint/eslint-plugin"),
+      );
+      expect(pluginFindings.length).toBeGreaterThan(0);
+      expect(pluginFindings[0].type).toBe("warning");
+    });
+
+    it("does not flag @typescript-eslint plugin when it is installed", () => {
+      write("eslint.config.js", `export default { rules: { "@typescript-eslint/naming-convention": "error" } };`);
+      write("package.json", JSON.stringify({
+        devDependencies: {
+          eslint: "^8.0.0",
+          "@typescript-eslint/eslint-plugin": "^7.0.0",
+        },
+      }));
+      write(".harness/state.json", JSON.stringify({ status: "generated", projectDir: tmpDir }));
+
+      const validator = new SetupValidator({
+        projectDir: tmpDir,
+        checkFiles: ["eslint.config.js", "package.json", ".harness/state.json"],
+      });
+      const result = validator.validate();
+
+      const pluginFindings = result.findings.filter(
+        (f) => f.message.includes("@typescript-eslint/eslint-plugin"),
+      );
+      expect(pluginFindings).toHaveLength(0);
+    });
+
+    it("detects lint-staged duplication in package.json and .lintstagedrc.json", () => {
+      write("package.json", JSON.stringify({
+        devDependencies: { eslint: "^8.0.0" },
+        "lint-staged": {
+          "*.{js,ts}": ["eslint --fix"],
+        },
+      }));
+      write(".lintstagedrc.json", JSON.stringify({
+        "*.{js,ts}": ["eslint --fix"],
+      }));
+      write(".harness/state.json", JSON.stringify({ status: "generated", projectDir: tmpDir }));
+
+      const validator = new SetupValidator({
+        projectDir: tmpDir,
+        checkFiles: ["package.json", ".lintstagedrc.json", ".harness/state.json"],
+      });
+      const result = validator.validate();
+
+      const dupFindings = result.findings.filter(
+        (f) => f.message.includes("lint-staged config is duplicated"),
+      );
+      expect(dupFindings.length).toBeGreaterThan(0);
+      expect(dupFindings[0].type).toBe("info");
+    });
+
+    it("does not flag lint-staged when only package.json has it", () => {
+      write("package.json", JSON.stringify({
+        devDependencies: { eslint: "^8.0.0" },
+        "lint-staged": {
+          "*.{js,ts}": ["eslint --fix"],
+        },
+      }));
+      write(".harness/state.json", JSON.stringify({ status: "generated", projectDir: tmpDir }));
+
+      const validator = new SetupValidator({
+        projectDir: tmpDir,
+        checkFiles: ["package.json", ".harness/state.json"],
+      });
+      const result = validator.validate();
+
+      const dupFindings = result.findings.filter(
+        (f) => f.message.includes("lint-staged config is duplicated"),
+      );
+      expect(dupFindings).toHaveLength(0);
+    });
+
+    it("does not flag lint-staged when only .lintstagedrc.json has it", () => {
+      write("package.json", JSON.stringify({
+        devDependencies: { eslint: "^8.0.0" },
+      }));
+      write(".lintstagedrc.json", JSON.stringify({
+        "*.{js,ts}": ["eslint --fix"],
+      }));
+      write(".harness/state.json", JSON.stringify({ status: "generated", projectDir: tmpDir }));
+
+      const validator = new SetupValidator({
+        projectDir: tmpDir,
+        checkFiles: ["package.json", ".lintstagedrc.json", ".harness/state.json"],
+      });
+      const result = validator.validate();
+
+      const dupFindings = result.findings.filter(
+        (f) => f.message.includes("lint-staged config is duplicated"),
+      );
+      expect(dupFindings).toHaveLength(0);
+    });
+  });
 });
