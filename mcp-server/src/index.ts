@@ -1490,33 +1490,41 @@ function generateProjectFiles(
   // Note: lint-staged config is now merged into package.json (not a standalone file)
 
   // 5. Hard constraint scripts and data files (R017 task-board, R018 changelog-convention)
-  const hasTaskBoard = decisions.some((d) => d.ruleId === "R017");
-  const hasChangelog = decisions.some((d) => d.ruleId === "R018");
+  // Only deploy when the corresponding rule is active (not disabled via "none" medium)
+  const hasTaskBoard = decisions.some((d) => d.ruleId === "R017" && d.recommendedMedium !== "none");
+  const hasChangelog = decisions.some((d) => d.ruleId === "R018" && d.recommendedMedium !== "none");
 
   if (hasTaskBoard || hasChangelog) {
-    const deployment = generateScriptsDeployment({
-      includeTaskBoard: hasTaskBoard,
-      includeChangelog: hasChangelog,
-    });
-
-    for (const script of deployment.scripts) {
-      const scriptPath = projectDir ? join(projectDir, script.path) : "";
-      const exists = scriptPath ? existsSync(scriptPath) : false;
-      files.push({
-        path: script.path,
-        content: script.content,
-        action: exists ? "skipped" : "created",
+    try {
+      const deployment = generateScriptsDeployment({
+        includeTaskBoard: hasTaskBoard,
+        includeChangelog: hasChangelog,
       });
-    }
 
-    for (const dataFile of deployment.dataFiles) {
-      const dataPath = projectDir ? join(projectDir, dataFile.path) : "";
-      const exists = dataPath ? existsSync(dataPath) : false;
-      files.push({
-        path: dataFile.path,
-        content: dataFile.content,
-        action: exists ? "skipped" : "created",
-      });
+      for (const script of deployment.scripts) {
+        const scriptPath = projectDir ? join(projectDir, script.path) : "";
+        const exists = scriptPath ? existsSync(scriptPath) : false;
+        files.push({
+          path: script.path,
+          content: script.content,
+          action: exists ? "skipped" : "created",
+        });
+      }
+
+      for (const dataFile of deployment.dataFiles) {
+        const dataPath = projectDir ? join(projectDir, dataFile.path) : "";
+        const exists = dataPath ? existsSync(dataPath) : false;
+        files.push({
+          path: dataFile.path,
+          content: dataFile.content,
+          action: exists ? "skipped" : "created",
+        });
+      }
+    } catch (e) {
+      console.error(
+        `[harness] Failed to deploy task-board/changelog scripts: ${e}. ` +
+        `Skipping script deployment — other config files will still be generated.`,
+      );
     }
   }
 

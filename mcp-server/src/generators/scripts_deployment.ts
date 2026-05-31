@@ -44,24 +44,24 @@ export interface ScriptsDeploymentOutput {
  * Resolve the scripts source directory.
  * In dev (tsx): __dirname = .../src/generators/, scripts at ../../../scripts/
  * In prod (node): __dirname = .../dist/generators/, scripts at ../../scripts/ (copied during build)
+ * In plugin: __dirname = .../plugin/dist/generators/, scripts at ../../scripts/
  */
-function getScriptsDir(): string {
+function getScriptsDir(): string | null {
   const candidates = [
     join(__dirname, "..", "..", "scripts"),        // dist layout: dist/generators/ -> dist/scripts/
     join(__dirname, "..", "..", "..", "scripts"),  // src layout: src/generators/ -> repo root/scripts/
+    join(__dirname, "..", "..", "..", "..", "scripts"), // plugin: plugin/dist/generators/ -> plugin/scripts/
   ];
   for (const dir of candidates) {
     if (existsSync(dir)) return dir;
   }
-  throw new Error(
-    "Cannot locate scripts directory. Ensure task.py and changelog.py are available.",
-  );
+  return null;
 }
 
 // Cache script content to avoid re-reading
 let _scriptCache: Map<string, string> | null = null;
 
-function getScriptContent(filename: string): string {
+function getScriptContent(filename: string): string | null {
   if (!_scriptCache) {
     _scriptCache = new Map();
   }
@@ -69,11 +69,14 @@ function getScriptContent(filename: string): string {
   if (cached !== undefined) return cached;
 
   const scriptsDir = getScriptsDir();
+  if (!scriptsDir) {
+    console.error(`[harness] Scripts directory not found — skipping ${filename}. Run "npm run build" to regenerate dist/scripts/.`);
+    return null;
+  }
   const filePath = join(scriptsDir, filename);
   if (!existsSync(filePath)) {
-    throw new Error(
-      `Script file not found: ${filePath}. Ensure ${filename} is available in the scripts directory.`,
-    );
+    console.error(`[harness] Script file not found: ${filePath} — skipping.`);
+    return null;
   }
   const content = readFileSync(filePath, "utf-8");
   _scriptCache.set(filename, content);
@@ -101,11 +104,14 @@ export function generateScriptsDeployment(
   const includeCl = config.includeChangelog !== false;
 
   if (includeTask) {
-    scripts.push({
-      path: "scripts/task.py",
-      content: getScriptContent("task.py"),
-      executable: true,
-    });
+    const content = getScriptContent("task.py");
+    if (content) {
+      scripts.push({
+        path: "scripts/task.py",
+        content,
+        executable: true,
+      });
+    }
 
     dataFiles.push({
       path: "TASK.json",
@@ -114,11 +120,14 @@ export function generateScriptsDeployment(
   }
 
   if (includeCl) {
-    scripts.push({
-      path: "scripts/changelog.py",
-      content: getScriptContent("changelog.py"),
-      executable: true,
-    });
+    const content = getScriptContent("changelog.py");
+    if (content) {
+      scripts.push({
+        path: "scripts/changelog.py",
+        content,
+        executable: true,
+      });
+    }
 
     dataFiles.push({
       path: "CHANGELOG.jsonl",
