@@ -14,6 +14,7 @@ describe("SetupValidator", () => {
     mkdirSync(join(tmpDir, ".husky"), { recursive: true });
     mkdirSync(join(tmpDir, ".github", "workflows"), { recursive: true });
     mkdirSync(join(tmpDir, ".harness"), { recursive: true });
+    mkdirSync(join(tmpDir, "scripts"), { recursive: true });
   });
 
   afterEach(() => {
@@ -49,6 +50,12 @@ describe("SetupValidator", () => {
     write(".github/workflows/ci.yml", "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest");
     write("package.json", JSON.stringify({ devDependencies: { eslint: "^8.0.0", husky: "^9.0.0" } }));
     write(".harness/state.json", JSON.stringify({ status: "generated", projectDir: tmpDir }));
+    write("scripts/task.py", "#!/usr/bin/env python3\nprint('test')");
+    write("scripts/changelog.py", "#!/usr/bin/env python3\nprint('test')");
+    chmodSync(join(tmpDir, "scripts/task.py"), 0o755);
+    chmodSync(join(tmpDir, "scripts/changelog.py"), 0o755);
+    write("TASK.json", JSON.stringify({ tasks: [] }));
+    write("CHANGELOG.jsonl", "");
 
     const validator = new SetupValidator({ projectDir: tmpDir });
     const result = validator.validate();

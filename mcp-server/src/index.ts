@@ -20,6 +20,7 @@ import { generateGitignore } from "./generators/gitignore.js";
 import { generateHuskyConfig, generateHuskySetupInstructions, generateCommitlintConfig } from "./generators/husky.js";
 import { generateCiWorkflow } from "./generators/ci.js";
 import { mergeDependencies } from "./generators/package_json.js";
+import { generateScriptsDeployment } from "./generators/scripts_deployment.js";
 import { checkDependencies } from "./deps.js";
 import { scanAndEvaluate } from "./scanners/integration.js";
 import { assessSuitability } from "./suitability/assessor.js";
@@ -297,7 +298,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
             if (f.action !== "skipped") {
               mkdirSync(dirname(filePath), { recursive: true });
               writeFileSync(filePath, f.content, "utf-8");
-              if (f.path.startsWith(".husky/")) {
+              if (f.path.startsWith(".husky/") || f.path.startsWith("scripts/")) {
                 chmodSync(filePath, 0o755);
               }
               writtenFiles.add(f.path);
@@ -880,6 +881,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
       const managedFiles = [
         "CLAUDE.md", "eslint.config.js", ".claude/settings.json",
         ".husky/pre-commit", ".husky/commit-msg", ".github/workflows/ci.yml",
+        "scripts/task.py", "scripts/changelog.py", "TASK.json", "CHANGELOG.jsonl",
       ];
       const cleaned: string[] = [];
       for (const file of managedFiles) {
@@ -1487,6 +1489,37 @@ function generateProjectFiles(
 
   // Note: lint-staged config is now merged into package.json (not a standalone file)
 
+  // 5. Hard constraint scripts and data files (R017 task-board, R018 changelog-convention)
+  const hasTaskBoard = decisions.some((d) => d.ruleId === "R017");
+  const hasChangelog = decisions.some((d) => d.ruleId === "R018");
+
+  if (hasTaskBoard || hasChangelog) {
+    const deployment = generateScriptsDeployment({
+      includeTaskBoard: hasTaskBoard,
+      includeChangelog: hasChangelog,
+    });
+
+    for (const script of deployment.scripts) {
+      const scriptPath = projectDir ? join(projectDir, script.path) : "";
+      const exists = scriptPath ? existsSync(scriptPath) : false;
+      files.push({
+        path: script.path,
+        content: script.content,
+        action: exists ? "skipped" : "created",
+      });
+    }
+
+    for (const dataFile of deployment.dataFiles) {
+      const dataPath = projectDir ? join(projectDir, dataFile.path) : "";
+      const exists = dataPath ? existsSync(dataPath) : false;
+      files.push({
+        path: dataFile.path,
+        content: dataFile.content,
+        action: exists ? "skipped" : "created",
+      });
+    }
+  }
+
   return files;
 }
 
@@ -1505,6 +1538,10 @@ function backupGeneratedFiles(projectDir: string): string | null {
     ".gitignore",
     "package.json",
     ".lintstagedrc.json",
+    "scripts/task.py",
+    "scripts/changelog.py",
+    "TASK.json",
+    "CHANGELOG.jsonl",
   ];
 
   const toBackup = candidates.filter((f) => existsSync(join(projectDir, f)));

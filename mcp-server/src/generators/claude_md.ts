@@ -20,14 +20,55 @@ export function generateClaudeMd(config: ClaudeMdConfig): string {
   lines.push("## Harness 约束体系");
   lines.push("");
   lines.push("本文档由 Harness Automation System 自动生成和维护，列出项目应遵守的开发约束。");
-  lines.push("约束按强度分为认知层规则（需主动判断）、软约束（linter 提醒）和参考规则（自动执行）。");
+  lines.push("约束按强度分为硬约束（必须遵守）、认知层规则（需主动判断）、软约束（linter 提醒）和参考规则（自动执行）。");
   lines.push("");
+
+  // Hard constraints section (R017 task-board, R018 changelog-convention)
+  const hardConstraintIds = new Set(["R017", "R018"]);
+  const hardConstraints = decisions.filter((d) => hardConstraintIds.has(d.ruleId));
+
+  if (hardConstraints.length > 0) {
+    lines.push("## 硬约束 (Hard Constraints)");
+    lines.push("");
+    lines.push("以下规则是项目级别的刚性约束，必须严格遵守：");
+    lines.push("");
+
+    for (const rule of hardConstraints) {
+      if (rule.ruleName === "task-board") {
+        lines.push("### 任务看板管理");
+        lines.push("");
+        lines.push("- **规则**: 只能使用 `scripts/task.py` 脚本操作 `TASK.json` 任务看板");
+        lines.push("- **禁止**: 直接手动编辑 `TASK.json` 文件");
+        lines.push("- **用法**:");
+        lines.push("  ```bash");
+        lines.push("  python3 scripts/task.py list [--status pending|completed|in_progress] [--phase <n>] [--priority high|medium|low|critical]");
+        lines.push("  python3 scripts/task.py show <id>");
+        lines.push("  python3 scripts/task.py update <id> <status>");
+        lines.push("  python3 scripts/task.py summary");
+        lines.push("  ```");
+        lines.push("");
+      }
+      if (rule.ruleName === "changelog-convention") {
+        lines.push("### 变更日志管理");
+        lines.push("");
+        lines.push("- **规则**: 只能使用 `scripts/changelog.py` 脚本操作 `CHANGELOG.jsonl` 变更日志");
+        lines.push("- **禁止**: 直接手动编辑 `CHANGELOG.jsonl` 文件");
+        lines.push("- **用法**:");
+        lines.push("  ```bash");
+        lines.push("  python3 scripts/changelog.py add <type> <phase> <description>");
+        lines.push("  python3 scripts/changelog.py list [n]");
+        lines.push("  python3 scripts/changelog.py search <keyword>");
+        lines.push("  ```");
+        lines.push("");
+      }
+    }
+  }
 
   // Design §8.1: CLAUDE.md includes claude_md and linter_warn rules only.
   // claude_md: cognitive guidance (both formal and non-formalizable rules that need LLM awareness)
   // linter_warn: soft constraints (should explain when it's OK to ignore)
   const claudeMdRules = decisions.filter(
-    (d) => d.recommendedMedium === "claude_md" || d.recommendedMedium === "claude.md",
+    (d) => (d.recommendedMedium === "claude_md" || d.recommendedMedium === "claude.md") && !hardConstraintIds.has(d.ruleId),
   );
   const softRules = decisions.filter(
     (d) => d.recommendedMedium === "linter_warn" || d.recommendedMedium === "linter",

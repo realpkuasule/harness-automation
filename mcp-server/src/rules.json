@@ -302,5 +302,43 @@
       "whatInstead": "在开发调试完成后移除所有 debugger 语句，使用断点调试替代",
       "reference": "ESLint no-debugger 规则 — eslint.org/docs/latest/rules/no-debugger"
     }
+  },
+  {
+    "id": "R017",
+    "name": "task-board",
+    "description": "使用 TASK.json 作为任务看板，只能通过 scripts/task.py 脚本操作",
+    "category": "process",
+    "formalizable": false,
+    "cost": 1,
+    "feedbackSpeed": 3,
+    "frequency": 4,
+    "recommendedMedium": "claude_md",
+    "alternativeMedium": ["settings", "hook"],
+    "techStack": ["typescript", "javascript", "python", "go", "java", "generic"],
+    "evidence": "统一的任务看板格式确保团队成员使用一致的方式跟踪任务。手动编辑 TASK.json 容易导致 JSON 格式错误。",
+    "errorMessage": {
+      "why": "手动编辑 TASK.json 容易引入 JSON 格式错误，导致任务数据丢失或解析失败",
+      "whatInstead": "始终使用 scripts/task.py 命令操作任务看板：python3 scripts/task.py list/show/update/summary",
+      "reference": "项目 scripts/task.py 脚本 — 运行 python3 scripts/task.py 查看完整用法"
+    }
+  },
+  {
+    "id": "R018",
+    "name": "changelog-convention",
+    "description": "使用 CHANGELOG.jsonl 作为变更日志，只能通过 scripts/changelog.py 脚本操作",
+    "category": "process",
+    "formalizable": false,
+    "cost": 1,
+    "feedbackSpeed": 3,
+    "frequency": 4,
+    "recommendedMedium": "claude_md",
+    "alternativeMedium": ["settings", "hook"],
+    "techStack": ["typescript", "javascript", "python", "go", "java", "generic"],
+    "evidence": "结构化的变更日志（JSONL 格式）便于程序化分析和生成发布说明。手动编辑容易破坏格式一致性。",
+    "errorMessage": {
+      "why": "手动编辑 CHANGELOG.jsonl 容易破坏 JSONL 格式（每行一个 JSON 对象），导致日志解析失败",
+      "whatInstead": "始终使用 scripts/changelog.py 命令操作变更日志：python3 scripts/changelog.py add/list/search",
+      "reference": "项目 scripts/changelog.py 脚本 — 运行 python3 scripts/changelog.py 查看完整用法"
+    }
   }
 ]

@@ -258,7 +258,7 @@ describe("DecisionEngine", () => {
         techStack: ["typescript", "javascript", "python", "go", "java", "generic"],
       });
       const allIds = new Set(output.decisions.map((d) => d.ruleId));
-      expect(allIds.size).toBe(16); // All 16 rules
+      expect(allIds.size).toBe(18); // All 18 rules (R001-R018)
     });
 
     it("evaluate with duplicate techStack is consistent with single", () => {
@@ -278,6 +278,24 @@ describe("DecisionEngine", () => {
       // Only R004 has "generic" techStack, plus any others that include generic
       const genericRules = engine.filterByTechStack(["generic"]);
       expect(output.decisions.length).toBe(genericRules.length);
+    });
+
+    it("includes R017 and R018 for all tech stacks including generic", () => {
+      const output = engine.evaluate({
+        projectDir: "/test", projectPhase: "growth", teamSize: "medium",
+        techStack: ["generic"],
+      });
+      const ids = output.decisions.map((d) => d.ruleId);
+      expect(ids).toContain("R017");
+      expect(ids).toContain("R018");
+      // Both should map to claude_md
+      const r17 = output.decisions.find((d) => d.ruleId === "R017")!;
+      const r18 = output.decisions.find((d) => d.ruleId === "R018")!;
+      expect(r17.recommendedMedium).toBe("claude_md");
+      expect(r18.recommendedMedium).toBe("claude_md");
+      // Both are process rules, not cognitive-layer
+      expect(r17.cognitiveLayerRequired).toBe(false);
+      expect(r18.cognitiveLayerRequired).toBe(false);
     });
   });
 

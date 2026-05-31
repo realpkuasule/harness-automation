@@ -70,6 +70,8 @@ const PRESETS: RulePreset[] = [
       { ruleId: "R014", recommendedMedium: "linter_warn" },
       { ruleId: "R015", recommendedMedium: "claude_md" },
       { ruleId: "R016", recommendedMedium: "linter_warn" },
+      { ruleId: "R017", recommendedMedium: "claude_md" },
+      { ruleId: "R018", recommendedMedium: "claude_md" },
     ],
   },
   {
@@ -90,6 +92,8 @@ const PRESETS: RulePreset[] = [
       { ruleId: "R014", recommendedMedium: "linter_warn" },
       { ruleId: "R015", recommendedMedium: "claude_md" },
       { ruleId: "R016", recommendedMedium: "linter_warn" },
+      { ruleId: "R017", recommendedMedium: "claude_md" },
+      { ruleId: "R018", recommendedMedium: "claude_md" },
     ],
   },
   {
@@ -107,6 +111,8 @@ const PRESETS: RulePreset[] = [
       { ruleId: "R012", recommendedMedium: "linter_warn" },
       { ruleId: "R013", recommendedMedium: "claude_md" },
       { ruleId: "R015", recommendedMedium: "claude_md" },
+      { ruleId: "R017", recommendedMedium: "claude_md" },
+      { ruleId: "R018", recommendedMedium: "claude_md" },
     ],
   },
   {
@@ -119,6 +125,8 @@ const PRESETS: RulePreset[] = [
       { ruleId: "R009", recommendedMedium: "claude_md" },
       { ruleId: "R013", recommendedMedium: "claude_md" },
       { ruleId: "R015", recommendedMedium: "claude_md" },
+      { ruleId: "R017", recommendedMedium: "claude_md" },
+      { ruleId: "R018", recommendedMedium: "claude_md" },
     ],
   },
   {
@@ -138,6 +146,8 @@ const PRESETS: RulePreset[] = [
       { ruleId: "R013", recommendedMedium: "claude_md" },
       { ruleId: "R015", recommendedMedium: "claude_md" },
       { ruleId: "R016", recommendedMedium: "linter_warn" },
+      { ruleId: "R017", recommendedMedium: "claude_md" },
+      { ruleId: "R018", recommendedMedium: "claude_md" },
     ],
   },
 ];

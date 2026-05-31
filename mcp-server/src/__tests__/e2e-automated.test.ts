@@ -57,8 +57,8 @@ function writeGeneratedFiles(
     const filePath = join(dir, f.path);
     mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, f.content, "utf-8");
-    // Hook files need executable permission (validator checks this)
-    if (f.path.startsWith(".husky/")) {
+    // Hook and script files need executable permission (validator checks this)
+    if (f.path.startsWith(".husky/") || f.path.startsWith("scripts/")) {
       chmodSync(filePath, 0o755);
     }
   }
@@ -1064,7 +1064,7 @@ describe("TC28 — import_rules: from preset", () => {
   beforeEach(async () => { h = await createTestHarness(); });
   afterEach(() => { rmSync(h.tmpDir, { recursive: true, force: true }); });
 
-  it("imports web-app-ts preset with 16 rules", async () => {
+  it("imports web-app-ts preset with 18 rules", async () => {
     const result = await callTool(h.client, "import_rules", {
       projectDir: h.tmpDir,
       presetId: "web-app-ts",
@@ -1073,7 +1073,7 @@ describe("TC28 — import_rules: from preset", () => {
 
     expect(data.preset).toBe("web-app-ts");
     expect(Array.isArray(data.decisions)).toBe(true);
-    expect(data.total).toBe(16);
+    expect(data.total).toBe(18);
     // All decisions enriched to full format
     for (const d of data.decisions) {
       expect(typeof d.confidence).toBe("number");

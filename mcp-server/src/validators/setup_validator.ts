@@ -49,6 +49,10 @@ const MANAGED_FILES = [
   ".github/workflows/ci.yml",
   "package.json",
   ".harness/state.json",
+  "scripts/task.py",
+  "scripts/changelog.py",
+  "TASK.json",
+  "CHANGELOG.jsonl",
 ];
 
 const HARNESS_GITIGNORE_ENTRIES = [
@@ -206,6 +210,40 @@ export class SetupValidator {
         }
       }
 
+      // Python script check for deployed scripts
+      if (file.startsWith("scripts/") && file.endsWith(".py")) {
+        if (!content.startsWith("#!/usr/bin/env python3")) {
+          findings.push({
+            file,
+            type: "warning",
+            message: `Python script missing shebang: ${file}`,
+            fix: `Add #!/usr/bin/env python3 as first line of ${file}`,
+          });
+        }
+      }
+
+      // TASK.json structure validation
+      if (file === "TASK.json") {
+        try {
+          const parsed = JSON.parse(content);
+          if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.tasks)) {
+            findings.push({
+              file,
+              type: "error",
+              message: "TASK.json must have a top-level 'tasks' array",
+              fix: "Initialize TASK.json with {\"tasks\": []}",
+            });
+          }
+        } catch {
+          findings.push({
+            file,
+            type: "error",
+            message: "TASK.json is not valid JSON",
+            fix: "Fix JSON syntax in TASK.json or regenerate with init_harness",
+          });
+        }
+      }
+
       // .gitignore check
       if (file === ".gitignore") {
         for (const entry of HARNESS_GITIGNORE_ENTRIES) {
@@ -232,6 +270,7 @@ export class SetupValidator {
 
         // Check for at least one rule section
         const hasRuleSection =
+          content.includes("## 硬约束") ||
           content.includes("## 认知层规则") ||
           content.includes("## 指引规则") ||
           content.includes("## 软约束规则") ||
@@ -268,8 +307,8 @@ export class SetupValidator {
     fullPath: string,
     findings: ValidationFinding[],
   ): void {
-    // Only hooks need execute permission
-    if (!file.startsWith(".husky/")) return;
+    // Only hooks and scripts need execute permission
+    if (!file.startsWith(".husky/") && !file.startsWith("scripts/")) return;
 
     try {
       const mode = statSync(fullPath).mode;
