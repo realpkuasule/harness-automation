@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { HarnessState, HarnessStatus, EngineInput, EngineOutput, GenerateConfigOutput, RuleDecision, GenerationRecord, TechStack, ProjectPhase, TeamSize } from "./types.js";
+import type { HarnessState, HarnessStatus, EngineInput, EngineOutput, GenerateConfigOutput, RuleDecision, GenerationRecord, TechStack, ProjectPhase, TeamSize, GitProvider, CollaborationMode } from "./types.js";
 
 const STATE_DIR = ".harness";
 const STATE_FILE = "state.json";
@@ -153,9 +153,15 @@ export class StateManager {
   }
 
   /** Store project info snapshot. */
-  setProjectInfo(techStack: TechStack[], projectPhase: ProjectPhase, teamSize: TeamSize): void {
+  setProjectInfo(
+    techStack: TechStack[],
+    projectPhase: ProjectPhase,
+    teamSize: TeamSize,
+    gitProvider?: GitProvider,
+    collaborationMode?: CollaborationMode,
+  ): void {
     const state = this.load();
-    state.project = { techStack, projectPhase, teamSize };
+    state.project = { techStack, projectPhase, teamSize, gitProvider, collaborationMode };
     this.save(state);
   }
 }

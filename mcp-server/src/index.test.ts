@@ -760,7 +760,7 @@ describe("MCP Server — list_rule_presets / list_rule_exports", () => {
   it("lists all presets", async () => {
     const result = await callTool(harness.client, "list_rule_presets", {});
     const data = parseResult(result) as any;
-    expect(data.presets.length).toBe(5);
+    expect(data.presets.length).toBe(6);
   });
 
   // 10.2 按 techStack 过滤

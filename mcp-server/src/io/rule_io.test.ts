@@ -205,13 +205,14 @@ describe("RuleIO", () => {
 
     it("lists all presets", () => {
       const presets = io.listPresets();
-      expect(presets.length).toBe(5);
+      expect(presets.length).toBe(6);
       const ids = presets.map((p) => p.id);
       expect(ids).toContain("web-app-ts");
       expect(ids).toContain("library-ts");
       expect(ids).toContain("python-script");
       expect(ids).toContain("prototype");
       expect(ids).toContain("go-service");
+      expect(ids).toContain("team-gitlab-ts");
     });
 
     it("filters presets by techStack", () => {

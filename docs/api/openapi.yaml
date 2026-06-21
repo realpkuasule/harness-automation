@@ -13,7 +13,7 @@ info:
 
     设计文档: `docs/harness-automation-design.md` v3.0 (2026-04-22)
     实现差异在 schema 的 description 中标注。
-  version: "1.1.0"
+  version: "1.2.0"
   contact:
     name: Harness Automation Team
 
@@ -1065,6 +1065,19 @@ components:
         团队规模。设计 v3.0 使用 1-2 / 3-5 / 5+，
         实现采用 4 级模型以适配频率乘数。
 
+    GitProvider:
+      type: string
+      enum: [github, gitlab, both]
+      description: >
+        Git 平台。github=仅 GitHub Actions，gitlab=仅 GitLab CI/CD，
+        both=双远程（GitLab 团队协作 + GitHub 个人备份），GitLab CI 为主。
+
+    CollaborationMode:
+      type: string
+      enum: [solo, team]
+      description: >
+        协作模式。solo=个人项目（无团队文件），team=团队项目（启用 MR 模板、入职脚本等）。
+
     HarnessStatus:
       type: string
       nullable: true
@@ -1288,6 +1301,14 @@ components:
               $ref: "#/components/schemas/ProjectPhase"
             teamSize:
               $ref: "#/components/schemas/TeamSize"
+        gitProvider:
+          $ref: "#/components/schemas/GitProvider"
+          default: github
+          description: Git 平台选择
+        collaborationMode:
+          $ref: "#/components/schemas/CollaborationMode"
+          default: solo
+          description: 团队协作模式
 
     ConfirmDecisionsInput:
       type: object
@@ -1358,6 +1379,10 @@ components:
             - .husky/pre-commit
             - .husky/commit-msg
             - .github/workflows/ci.yml
+            - .gitlab-ci.yml
+            - .gitlab/merge_request_templates/default.md
+            - .gitleaks.toml
+            - scripts/onboard.sh
             - package.json
             - .harness/state.json
           description: >
@@ -1619,8 +1644,10 @@ components:
           description: >
             配置文件的相对路径。常见值：CLAUDE.md、eslint.config.js、
             .claude/settings.json、.gitignore、.husky/pre-commit、
-            .husky/commit-msg、.github/workflows/ci.yml、package.json、
-            commitlint.config.js。lint-staged 配置现已合并到 package.json 的 lint-staged 字段中。
+            .husky/commit-msg、.github/workflows/ci.yml、.gitlab-ci.yml、
+            .gitlab/merge_request_templates/default.md、package.json、
+            commitlint.config.js、.gitleaks.toml、scripts/onboard.sh。
+            lint-staged 配置现已合并到 package.json 的 lint-staged 字段中。
         content:
           type: string
           description: dry_run 模式时返回内容预览
@@ -2364,6 +2391,10 @@ components:
               $ref: "#/components/schemas/ProjectPhase"
             teamSize:
               $ref: "#/components/schemas/TeamSize"
+            gitProvider:
+              $ref: "#/components/schemas/GitProvider"
+            collaborationMode:
+              $ref: "#/components/schemas/CollaborationMode"
 
     # ============================================================
     # Init Harness Summary

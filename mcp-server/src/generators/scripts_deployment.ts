@@ -113,9 +113,37 @@ export function generateScriptsDeployment(
       });
     }
 
+    const now = new Date().toISOString();
     dataFiles.push({
       path: "TASK.json",
-      content: JSON.stringify({ tasks: [] }, null, 2) + "\n",
+      content: JSON.stringify(
+        {
+          meta: {
+            description: "Task board — managed by scripts/task.py",
+            created: now,
+            updated: now,
+          },
+          tasks: [
+            {
+              id: "P0-0",
+              phase: 0,
+              status: "_template_",
+              title: "示例任务 — 展示全部字段，请删除或替换",
+              description: "每个任务的字段说明：id=唯一标识(P{phase}-{n}), phase=阶段, status=pending|in_progress|completed|deleted, title=标题, description=说明, priority=high|medium|low|critical, blockedBy=前置任务ID列表, blocks=后续任务ID列表, createdAt/updatedAt=ISO8601时间戳, createdBy/updatedBy=执行agent, relatedFiles=关联文件路径列表",
+              priority: "medium",
+              blockedBy: [] as string[],
+              blocks: [] as string[],
+              createdAt: now,
+              updatedAt: now,
+              createdBy: "harness-automation",
+              updatedBy: "harness-automation",
+              relatedFiles: [] as string[],
+            },
+          ],
+        },
+        null,
+        2,
+      ) + "\n",
     });
   }
 
@@ -129,9 +157,17 @@ export function generateScriptsDeployment(
       });
     }
 
+    const now = new Date().toISOString();
     dataFiles.push({
       path: "CHANGELOG.jsonl",
-      content: "",
+      content:
+        JSON.stringify({
+          timestamp: now,
+          type: "milestone",
+          phase: 0,
+          description: "项目初始化 — CHANGELOG.jsonl 创建",
+          agent: "harness-automation",
+        }) + "\n",
     });
   }
 

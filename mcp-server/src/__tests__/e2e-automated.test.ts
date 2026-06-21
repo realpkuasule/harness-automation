@@ -1164,7 +1164,7 @@ describe("TC31 — list_rule_presets", () => {
       const allResult = await callTool(client, "list_rule_presets", {});
       const allData = parseResult(allResult) as any;
       expect(Array.isArray(allData.presets)).toBe(true);
-      expect(allData.presets.length).toBe(5);
+      expect(allData.presets.length).toBe(6);
 
       const presetIds = allData.presets.map((p: any) => p.id);
       expect(presetIds).toContain("web-app-ts");
@@ -1172,6 +1172,7 @@ describe("TC31 — list_rule_presets", () => {
       expect(presetIds).toContain("python-script");
       expect(presetIds).toContain("prototype");
       expect(presetIds).toContain("go-service");
+      expect(presetIds).toContain("team-gitlab-ts");
 
       // Filter by python
       const pyResult = await callTool(client, "list_rule_presets", {

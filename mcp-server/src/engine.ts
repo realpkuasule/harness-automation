@@ -125,6 +125,13 @@ const CONFLICT_MATRIX: Array<{
     description: "test-before-merge 和 code-review-required 都要求合并前检查，可能造成流程冗余",
     resolution: "test-before-merge 由 CI 自动执行，code-review 是人工步骤，两者互补不冲突。可在 CI 中配置 review 要求",
   },
+  {
+    ruleA: "R019",
+    ruleB: "R022",
+    type: "needs_refinement" as const,
+    description: "branch-naming-convention 和 secret-detection 都可能触发 pre-commit hook，需确保两者不冲突",
+    resolution: "pre-commit hook 先运行 gitleaks（快速失败），再运行 branch name check",
+  },
 ];
 
 // ============================================================

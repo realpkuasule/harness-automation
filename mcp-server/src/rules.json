@@ -340,5 +340,100 @@
       "whatInstead": "始终使用 scripts/changelog.py 命令操作变更日志：python3 scripts/changelog.py add/list/search",
       "reference": "项目 scripts/changelog.py 脚本 — 运行 python3 scripts/changelog.py 查看完整用法"
     }
+  },
+  {
+    "id": "R019",
+    "name": "branch-naming-convention",
+    "description": "分支命名应遵循统一规范（feature/xxx, fix/xxx 等）",
+    "category": "process",
+    "formalizable": true,
+    "cost": 1,
+    "feedbackSpeed": 1,
+    "frequency": 5,
+    "recommendedMedium": "hook",
+    "alternativeMedium": ["ci", "claude_md"],
+    "techStack": ["typescript", "javascript", "python", "go", "java", "generic"],
+    "evidence": "统一的分支命名便于管理、检索和自动化发布流程。可通过 git hook 在本地检查分支名。",
+    "errorMessage": {
+      "why": "不统一的分支命名导致分支管理混乱，难以区分功能开发和 bug 修复",
+      "whatInstead": "使用规范的分支命名：feature/功能名、fix/问题描述、release/版本号",
+      "reference": "Git 分支规范 — git-scm.com/book/en/Git-Branching"
+    }
+  },
+  {
+    "id": "R020",
+    "name": "mr-template-required",
+    "description": "合并请求必须使用标准模板，包含变更描述、测试结果和风险评估",
+    "category": "process",
+    "formalizable": false,
+    "cost": 1,
+    "feedbackSpeed": 3,
+    "frequency": 5,
+    "recommendedMedium": "claude_md",
+    "alternativeMedium": ["ci", "settings"],
+    "techStack": ["typescript", "javascript", "python", "go", "java", "generic"],
+    "evidence": "标准化的 MR 模板确保团队获得一致的变更描述，提高评审效率。",
+    "errorMessage": {
+      "why": "缺少统一模板的 MR 信息不完整，评审者需要反复追问基本信息",
+      "whatInstead": "在项目中配置 .gitlab/merge_request_templates 或 GitHub PR template，要求填写变更、测试和风险信息",
+      "reference": "GitHub PR Template — docs.github.com/communities/using-templates"
+    }
+  },
+  {
+    "id": "R021",
+    "name": "ai-code-review",
+    "description": "代码合并前应通过 AI 代码审查辅助检测问题",
+    "category": "process",
+    "formalizable": true,
+    "cost": 3,
+    "feedbackSpeed": 4,
+    "frequency": 4,
+    "recommendedMedium": "ci",
+    "alternativeMedium": ["claude_md", "hook"],
+    "techStack": ["typescript", "javascript", "python", "go", "java"],
+    "evidence": "AI 代码审查可快速发现常见的代码质量问题，作为人工审查的补充。",
+    "errorMessage": {
+      "why": "纯人工代码审查受限于评审者精力，可能遗漏常见的代码质量问题",
+      "whatInstead": "在 CI 流水线中集成 AI 代码审查工具（如 Claude Code Review），作为人工评审的前置步骤",
+      "reference": "AI 辅助代码审查最佳实践 — anthropic.com/claude-code-review"
+    }
+  },
+  {
+    "id": "R022",
+    "name": "secret-detection",
+    "description": "禁止将密钥、密码、Token 等敏感信息提交到代码仓库",
+    "category": "security",
+    "formalizable": true,
+    "cost": 1,
+    "feedbackSpeed": 1,
+    "frequency": 3,
+    "recommendedMedium": "linter_error",
+    "alternativeMedium": ["hook", "ci"],
+    "techStack": ["typescript", "javascript", "python", "go", "java", "generic"],
+    "evidence": "密钥泄露是常见安全事故。gitleaks 等工具可自动检测硬编码的凭证。",
+    "errorMessage": {
+      "why": "硬编码的密钥、密码、Token 一旦推送到代码仓库，即使后续删除也会保存在 Git 历史中",
+      "whatInstead": "使用环境变量、密钥管理服务（如 AWS Secrets Manager）或 .env 文件（加入 .gitignore）管理敏感信息",
+      "reference": "Gitleaks — github.com/gitleaks/gitleaks"
+    }
+  },
+  {
+    "id": "R023",
+    "name": "team-onboarding",
+    "description": "新成员入职时应通过项目文档快速了解开发环境和规范",
+    "category": "process",
+    "formalizable": true,
+    "cost": 1,
+    "feedbackSpeed": 3,
+    "frequency": 1,
+    "recommendedMedium": "settings",
+    "alternativeMedium": ["claude_md", "hook"],
+    "techStack": ["typescript", "javascript", "python", "go", "java", "generic"],
+    "evidence": "完善的入职文档能帮助新成员快速上手，减少团队生产力损失。",
+    "errorMessage": {
+      "why": "缺少清晰的团队入职文档时，新成员需要重复询问相同问题，影响团队整体效率",
+      "whatInstead": "在项目 README 或 CONTRIBUTING.md 中记录：开发环境搭建步骤、代码规范、提交流程和常见问题",
+      "reference": "团队入职文档最佳实践 — onboarding.guide"
+    }
   }
 ]

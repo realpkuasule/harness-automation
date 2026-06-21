@@ -30,6 +30,12 @@ export type ProjectPhase = "prototype" | "early" | "growth" | "mature";
 /** Team size bracket */
 export type TeamSize = "solo" | "small" | "medium" | "large";
 
+/** Git provider for CI/CD generation */
+export type GitProvider = "github" | "gitlab" | "both";
+
+/** Team collaboration mode */
+export type CollaborationMode = "solo" | "team";
+
 /** State machine for harness setup progress */
 export type HarnessStatus =
   | null
@@ -140,6 +146,8 @@ export interface EngineInput {
   teamSize: TeamSize;
   techStack: TechStack[];
   dryRun?: boolean;
+  gitProvider?: GitProvider;
+  collaborationMode?: CollaborationMode;
 }
 
 export interface EngineOutput {
@@ -245,6 +253,8 @@ export interface HarnessState {
     techStack: TechStack[];
     projectPhase: ProjectPhase;
     teamSize: TeamSize;
+    gitProvider?: GitProvider;
+    collaborationMode?: CollaborationMode;
   };
 }
 
@@ -364,6 +374,10 @@ export const InitHarnessInputSchema = z.object({
     projectPhase: z.enum(["prototype", "early", "growth", "mature"]).optional(),
     teamSize: z.enum(["solo", "small", "medium", "large"]).optional(),
   }).optional().describe("Nested preset object (alternative to flat params)"),
+  gitProvider: z.enum(["github", "gitlab", "both"]).optional().default("github")
+    .describe("Git provider for CI/CD generation. 'both' = dual remote, GitLab primary"),
+  collaborationMode: z.enum(["solo", "team"]).optional().default("solo")
+    .describe("Team collaboration mode enables MR templates, onboarding, and team norms"),
 });
 
 export type InitHarnessInput = z.infer<typeof InitHarnessInputSchema>;

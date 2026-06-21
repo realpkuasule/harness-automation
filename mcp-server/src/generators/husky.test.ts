@@ -49,6 +49,50 @@ describe("generateHuskyConfig", () => {
     expect(result["commit-msg"]).toBeDefined();
   });
 
+  it("includeGitleaks=true: pre-commit hook contains gitleaks command", () => {
+    const result = generateHuskyConfig({
+      decisions: [],
+      includeGitleaks: true,
+    });
+    expect(result["pre-commit"]).toBeDefined();
+    expect(result["pre-commit"]).toContain("gitleaks protect --staged -v");
+    expect(result["pre-commit"]).toContain("command -v gitleaks");
+  });
+
+  it("includeGitleaks=false: pre-commit hook does NOT contain gitleaks", () => {
+    const result = generateHuskyConfig({
+      decisions: [decision("no-console-log", "linter")],
+      includeGitleaks: false,
+    });
+    expect(result["pre-commit"]).toBeDefined();
+    expect(result["pre-commit"]).not.toContain("gitleaks");
+  });
+
+  it("includeBranchCheck=true: pre-commit hook contains branch name regex check", () => {
+    const result = generateHuskyConfig({
+      decisions: [],
+      includeBranchCheck: true,
+    });
+    expect(result["pre-commit"]).toBeDefined();
+    expect(result["pre-commit"]).toContain("feature|bugfix|hotfix|release");
+    expect(result["pre-commit"]).toContain("git rev-parse --abbrev-ref HEAD");
+  });
+
+  it("both includeGitleaks + includeBranchCheck: gitleaks runs BEFORE branch check (order matters)", () => {
+    const result = generateHuskyConfig({
+      decisions: [],
+      includeGitleaks: true,
+      includeBranchCheck: true,
+    });
+    const script = result["pre-commit"];
+    expect(script).toBeDefined();
+    const gitleaksIndex = script!.indexOf("gitleaks protect");
+    const branchCheckIndex = script!.indexOf("git rev-parse");
+    expect(gitleaksIndex).toBeGreaterThan(-1);
+    expect(branchCheckIndex).toBeGreaterThan(-1);
+    expect(gitleaksIndex).toBeLessThan(branchCheckIndex);
+  });
+
   it("all hooks have proper shebang and Husky v9+ format (no deprecated _/husky.sh)", () => {
     const result = generateHuskyConfig({
       decisions: [decision("no-console-log", "linter"), decision("commit-message-convention", "hook")],

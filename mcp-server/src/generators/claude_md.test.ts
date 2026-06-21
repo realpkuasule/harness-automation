@@ -171,6 +171,52 @@ describe("generateClaudeMd", () => {
     expect(taskBoardMatches?.length).toBe(1);
   });
 
+  // Team Collaboration tests
+  it("omits Team Collaboration section when collaborationMode is solo", () => {
+    const result = generateClaudeMd({
+      decisions: [cognitiveRule()],
+      collaborationMode: "solo",
+    });
+    expect(result).not.toContain("## Team Collaboration");
+    expect(result).not.toContain("Git 工作流");
+    expect(result).not.toContain("Code Review");
+    expect(result).not.toContain("AI 参与度记录");
+    expect(result).not.toContain("新成员 Onboarding");
+  });
+
+  it("generates Team Collaboration section when collaborationMode is team", () => {
+    const result = generateClaudeMd({
+      decisions: [cognitiveRule()],
+      collaborationMode: "team",
+    });
+    expect(result).toContain("## Team Collaboration");
+    expect(result).toContain("Git 工作流");
+    expect(result).toContain("feature/<描述>, bugfix/<描述>, hotfix/<描述>, release/<版本>");
+    expect(result).toContain("从 main 分支创建功能分支，完成后通过 Merge Request 合并");
+    expect(result).toContain("### Code Review");
+    expect(result).toContain("所有 MR 需要至少 1 人 Approve");
+    expect(result).toContain("AI Code Review 在 CI 中自动运行，审查结果作为参考");
+    expect(result).toContain("Review 关注：逻辑正确性、安全性、性能、可维护性");
+    expect(result).toContain("### AI 参与度记录");
+    expect(result).toContain("在 MR 描述中标注 AI 工具使用情况");
+    expect(result).toContain("Co-Authored-By");
+    expect(result).toContain("### 新成员 Onboarding");
+    expect(result).toContain("bash scripts/onboard.sh");
+    expect(result).toContain(".gitlab/merge_request_templates/default.md");
+    // Should NOT include dual-remote note when gitProvider is not "both"
+    expect(result).not.toContain("双远程");
+  });
+
+  it("includes dual-remote note when collaborationMode is team and gitProvider is both", () => {
+    const result = generateClaudeMd({
+      decisions: [cognitiveRule()],
+      collaborationMode: "team",
+      gitProvider: "both",
+    });
+    expect(result).toContain("## Team Collaboration");
+    expect(result).toContain("双远程：GitLab（团队主仓库）+ GitHub（个人备份）");
+  });
+
   it("includes CLI usage in hard constraints section", () => {
     const result = generateClaudeMd({ decisions: [taskBoardRule(), changelogRule()] });
     expect(result).toContain("python3 scripts/task.py list");

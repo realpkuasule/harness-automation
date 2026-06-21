@@ -258,7 +258,7 @@ describe("DecisionEngine", () => {
         techStack: ["typescript", "javascript", "python", "go", "java", "generic"],
       });
       const allIds = new Set(output.decisions.map((d) => d.ruleId));
-      expect(allIds.size).toBe(18); // All 18 rules (R001-R018)
+      expect(allIds.size).toBe(23); // All 23 rules (R001-R023)
     });
 
     it("evaluate with duplicate techStack is consistent with single", () => {

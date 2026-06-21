@@ -8,12 +8,19 @@ export interface CiConfig {
   nodeVersion?: string;
   /** Project phase for context-aware CI generation */
   projectPhase?: string;
+  /** Git provider: "github" | "gitlab" | "both" */
+  gitProvider?: "github" | "gitlab" | "both";
 }
 
 /**
  * Generate a GitHub Actions workflow from rule decisions.
  */
 export function generateCiWorkflow(config: CiConfig): string {
+  if (config.gitProvider === "gitlab") {
+    // GitLab CI is generated separately by gitlab_ci.ts
+    return "";
+  }
+
   // Prototype phase: skip CI unless explicitly requested via ci medium rules
   if (config.projectPhase === "prototype" && !config.decisions.some((d) => d.recommendedMedium === "ci")) {
     return "";
@@ -31,6 +38,12 @@ export function generateCiWorkflow(config: CiConfig): string {
 
   const nodeVer = config.nodeVersion || "18";
   const lines: string[] = [];
+
+  if (config.gitProvider === "both") {
+    lines.push("# Note: GitLab CI (.gitlab-ci.yml) is the primary CI for team collaboration.");
+    lines.push("# This GitHub Actions workflow is for the personal backup repository.");
+    lines.push("");
+  }
 
   lines.push("name: Harness CI");
   lines.push("");

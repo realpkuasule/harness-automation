@@ -21,6 +21,11 @@ import { generateHuskyConfig, generateHuskySetupInstructions, generateCommitlint
 import { generateCiWorkflow } from "./generators/ci.js";
 import { mergeDependencies } from "./generators/package_json.js";
 import { generateScriptsDeployment } from "./generators/scripts_deployment.js";
+import { generateGitlabCiWorkflow } from "./generators/gitlab_ci.js";
+import { generateMrTemplate } from "./generators/gitlab_mr_template.js";
+import { generateGitlabSettings } from "./generators/gitlab_settings.js";
+import { generateGitleaksConfig } from "./generators/gitleaks.js";
+import { generateTeamOnboarding } from "./generators/team_onboarding.js";
 import { checkDependencies } from "./deps.js";
 import { scanAndEvaluate } from "./scanners/integration.js";
 import { assessSuitability } from "./suitability/assessor.js";
@@ -65,6 +70,8 @@ import {
   type HarnessStatus,
   type HarnessError,
   type GenerateConfigOutput,
+  type GitProvider,
+  type CollaborationMode,
 } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -532,17 +539,77 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
       }
 
       // 3f. CI workflow — skip if already exists (don't overwrite existing CI)
-      const ciFilePath = join(input.projectDir, ".github/workflows/ci.yml");
-      if (existsSync(ciFilePath)) {
-        console.error(`CI workflow already exists at .github/workflows/ci.yml — skipping to avoid overwriting`);
-        files.push({ path: ".github/workflows/ci.yml", content: "", action: "skipped" });
-      } else {
-        const ciContent = generateCiWorkflow({ decisions, techStack: input.techStack[0], projectPhase: input.projectPhase });
-        if (ciContent.trim()) {
-          files.push({
-            path: ".github/workflows/ci.yml",
-            content: ciContent,
-            action: "created",
+      // Only generate GitHub CI when provider is "github" or "both"
+      if (input.gitProvider !== "gitlab") {
+        const ciFilePath = join(input.projectDir, ".github/workflows/ci.yml");
+        if (existsSync(ciFilePath)) {
+          console.error(`CI workflow already exists at .github/workflows/ci.yml — skipping to avoid overwriting`);
+          files.push({ path: ".github/workflows/ci.yml", content: "", action: "skipped" });
+        } else {
+          const ciContent = generateCiWorkflow({ decisions, techStack: input.techStack[0], projectPhase: input.projectPhase });
+          if (ciContent.trim()) {
+            files.push({
+              path: ".github/workflows/ci.yml",
+              content: ciContent,
+              action: "created",
+            });
+          }
+        }
+      }
+
+      // --- GitLab CI generation (NEW) ---
+      if (input.gitProvider === "gitlab" || input.gitProvider === "both") {
+        const gitlabCiContent = generateGitlabCiWorkflow({
+          decisions,
+          techStack: input.techStack[0],
+          projectPhase: input.projectPhase,
+          includeAiReview: decisions.some((d) => d.ruleId === "R021" || d.ruleName === "ai-code-review"),
+        });
+        if (gitlabCiContent.trim()) {
+          const gitlabCiPath = join(input.projectDir, ".gitlab-ci.yml");
+          if (existsSync(gitlabCiPath)) {
+            files.push({ path: ".gitlab-ci.yml", content: "", action: "skipped" });
+          } else {
+            files.push({ path: ".gitlab-ci.yml", content: gitlabCiContent, action: "created" });
+          }
+        }
+      }
+
+      // --- Team collaboration configs (NEW) ---
+      const isTeamMode = input.collaborationMode === "team" ||
+        (!input.collaborationMode && (input.teamSize === "medium" || input.teamSize === "large"));
+
+      if (isTeamMode) {
+        // MR template
+        const mrTemplate = generateMrTemplate({ decisions });
+        files.push({ path: ".gitlab/merge_request_templates/default.md", content: mrTemplate, action: "created" });
+
+        // Gitleaks config
+        if (decisions.some((d) => d.ruleId === "R022" || d.ruleName === "secret-detection")) {
+          const gitleaks = generateGitleaksConfig({ decisions });
+          if (gitleaks.config) {
+            files.push({ path: ".gitleaks.toml", content: gitleaks.config, action: "created" });
+          }
+        }
+
+        // GitLab settings script + doc
+        const settings = generateGitlabSettings({ decisions });
+        files.push({ path: "scripts/gitlab-configure.sh", content: settings.script.content, action: "created" });
+        files.push({ path: "docs/gitlab-settings.md", content: settings.doc.content, action: "created" });
+
+        // Team onboarding script
+        const onboarding = generateTeamOnboarding({ decisions, gitProvider: input.gitProvider ?? "github" });
+        files.push({ path: "scripts/onboard.sh", content: onboarding, action: "created" });
+      }
+
+      // Update CLAUDE.md with team section if in team mode
+      if (isTeamMode) {
+        const claudeMdEntry = files.find((f) => f.path === "CLAUDE.md");
+        if (claudeMdEntry) {
+          claudeMdEntry.content = generateClaudeMd({
+            decisions,
+            collaborationMode: "team",
+            gitProvider: input.gitProvider,
           });
         }
       }
@@ -710,7 +777,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
       const output = { files, summary, errors };
 
       sm.setConfigOutput({ files, summary: fileSummary, errors, warnings: [] });
-      sm.setProjectInfo(input.techStack, input.projectPhase, input.teamSize);
+      sm.setProjectInfo(input.techStack, input.projectPhase, input.teamSize, input.gitProvider, input.collaborationMode);
       sm.logGeneration({
         phase: "generated",
         timestamp: new Date().toISOString(),
@@ -881,7 +948,9 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
       const managedFiles = [
         "CLAUDE.md", "eslint.config.js", ".claude/settings.json",
         ".husky/pre-commit", ".husky/commit-msg", ".github/workflows/ci.yml",
-        "scripts/task.py", "scripts/changelog.py", "TASK.json", "CHANGELOG.jsonl",
+        ".gitlab-ci.yml", ".gitlab/merge_request_templates/default.md", ".gitleaks.toml",
+        "scripts/task.py", "scripts/changelog.py", "scripts/gitlab-configure.sh",
+        "docs/gitlab-settings.md", "scripts/onboard.sh", "TASK.json", "CHANGELOG.jsonl",
       ];
       const cleaned: string[] = [];
       for (const file of managedFiles) {
@@ -1447,11 +1516,13 @@ function enrichPartialDecisions(
 function generateProjectFiles(
   decisions: RuleDecision[],
   projectDir?: string,
+  collaborationMode?: string,
+  gitProvider?: string,
 ): Array<{ path: string; content: string; action: "created" | "overwritten" | "skipped" | "merged" | "dry_run" }> {
   const files: Array<{ path: string; content: string; action: "created" | "overwritten" | "skipped" | "merged" | "dry_run" }> = [];
 
   // 1. CLAUDE.md
-  files.push({ path: "CLAUDE.md", content: generateClaudeMd({ decisions }), action: "created" });
+  files.push({ path: "CLAUDE.md", content: generateClaudeMd({ decisions, collaborationMode: collaborationMode as "solo" | "team", gitProvider: gitProvider as "github" | "gitlab" | "both" }), action: "created" });
 
   // 2. ESLint config (if any linter_error or linter_warn rules)
   const linterDecisions = decisions.filter(
@@ -1543,11 +1614,17 @@ function backupGeneratedFiles(projectDir: string): string | null {
     ".husky/pre-commit",
     ".husky/commit-msg",
     ".github/workflows/ci.yml",
+    ".gitlab-ci.yml",
+    ".gitlab/merge_request_templates/default.md",
+    ".gitleaks.toml",
     ".gitignore",
     "package.json",
     ".lintstagedrc.json",
     "scripts/task.py",
     "scripts/changelog.py",
+    "scripts/gitlab-configure.sh",
+    "docs/gitlab-settings.md",
+    "scripts/onboard.sh",
     "TASK.json",
     "CHANGELOG.jsonl",
   ];

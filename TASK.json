@@ -1,4 +1,8 @@
 {
+  "meta": {
+    "project": "harness-automation",
+    "updated": "2026-06-18T11:21:01+08:00"
+  },
   "tasks": [
     {
       "id": "P7-1",
@@ -242,6 +246,350 @@
       "phase": 10,
       "description": "OpenAPI rollback 路径仅定义 200 响应（oneOf），缺少 400 错误响应。实现中当备份目录不存在/无可用备份/指定备份不存在时返回 ROLLBACK_FAILED 错误。修复: 在 responses 中增加 400 响应，引用 HarnessError schema，description 说明 ROLLBACK_FAILED 错误码。涉及: docs/api/openapi.yaml L348-358",
       "ref": "full-fix-20260510-1412.md P3-2"
+    },
+    {
+      "id": "P0-1",
+      "phase": 0,
+      "status": "completed",
+      "title": "P0-1: 更新 OpenAPI 规范（Contract-First）",
+      "description": "更新 docs/api/openapi.yaml: 新增 GitProvider/CollaborationMode 枚举、更新 InitHarnessInput/HarnessState.project/ValidateSetupInput/ConfigFileResult schema、版本号 1.1.0 → 1.2.0",
+      "priority": "critical",
+      "blockedBy": [],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:13+08:00",
+      "updatedAt": "2026-06-18T11:09:09+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "docs/api/openapi.yaml"
+      ]
+    },
+    {
+      "id": "P0-2",
+      "phase": 0,
+      "status": "completed",
+      "title": "P0-2: Types + Schema 扩展",
+      "description": "在 types.ts 新增 GitProvider/CollaborationMode 类型、扩展 InitHarnessInputSchema/EngineInput/HarnessState.project schema",
+      "priority": "critical",
+      "blockedBy": [],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:14+08:00",
+      "updatedAt": "2026-06-18T11:10:36+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "mcp-server/src/types.ts",
+        "mcp-server/src/state.ts"
+      ]
+    },
+    {
+      "id": "P0-3",
+      "phase": 0,
+      "status": "completed",
+      "title": "P0-3: 新增规则 R019-R023",
+      "description": "在 rules.json 新增 5 条规则: branch-naming-convention, mr-template-required, ai-code-review, secret-detection, team-onboarding。更新 engine.ts CONFLICT_MATRIX",
+      "priority": "critical",
+      "blockedBy": [],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:15+08:00",
+      "updatedAt": "2026-06-18T11:12:14+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "mcp-server/src/rules.json",
+        "mcp-server/src/engine.ts"
+      ]
+    },
+    {
+      "id": "P0-4",
+      "phase": 0,
+      "status": "completed",
+      "title": "P0-4: Gitleaks Generator (TDD)",
+      "description": "新建 gitleaks.ts + gitleaks.test.ts。生成 .gitleaks.toml 配置和 pre-commit hook 集成。TDD: 先写测试→失败→实现→通过",
+      "priority": "critical",
+      "blockedBy": [],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:17+08:00",
+      "updatedAt": "2026-06-18T11:15:09+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "mcp-server/src/generators/gitleaks.ts",
+        "mcp-server/src/generators/gitleaks.test.ts"
+      ]
+    },
+    {
+      "id": "P0-5",
+      "phase": 0,
+      "status": "completed",
+      "title": "P0-5: AI Review Generator (TDD)",
+      "description": "新建 ai_review.ts + ai_review.test.ts。生成 GitLab CI AI code review job YAML snippet。TDD: 先写测试→失败→实现→通过",
+      "priority": "critical",
+      "blockedBy": [],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:18+08:00",
+      "updatedAt": "2026-06-18T11:15:09+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "mcp-server/src/generators/ai_review.ts",
+        "mcp-server/src/generators/ai_review.test.ts"
+      ]
+    },
+    {
+      "id": "P0-6",
+      "phase": 0,
+      "status": "completed",
+      "title": "P0-6: GitLab CI Generator (TDD)",
+      "description": "新建 gitlab_ci.ts + gitlab_ci.test.ts。生成 .gitlab-ci.yml（5 stages: lint/test/security/ai-review/build），包含 GitLab Security templates。TDD",
+      "priority": "critical",
+      "blockedBy": [],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:23+08:00",
+      "updatedAt": "2026-06-18T11:15:09+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "mcp-server/src/generators/gitlab_ci.ts",
+        "mcp-server/src/generators/gitlab_ci.test.ts"
+      ]
+    },
+    {
+      "id": "P0-7",
+      "phase": 0,
+      "status": "completed",
+      "title": "P0-7: GitLab MR Template Generator (TDD)",
+      "description": "新建 gitlab_mr_template.ts + test。生成 .gitlab/merge_request_templates/default.md，含 AI 参与追踪 checkbox。TDD",
+      "priority": "critical",
+      "blockedBy": [],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:24+08:00",
+      "updatedAt": "2026-06-18T11:15:09+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "mcp-server/src/generators/gitlab_mr_template.ts",
+        "mcp-server/src/generators/gitlab_mr_template.test.ts"
+      ]
+    },
+    {
+      "id": "P0-8",
+      "phase": 0,
+      "status": "completed",
+      "title": "P0-8: GitLab Settings Generator (TDD)",
+      "description": "新建 gitlab_settings.ts + test。生成 scripts/gitlab-configure.sh 配置脚本和 docs/gitlab-settings.md 文档。TDD",
+      "priority": "critical",
+      "blockedBy": [],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:25+08:00",
+      "updatedAt": "2026-06-18T11:15:09+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "mcp-server/src/generators/gitlab_settings.ts",
+        "mcp-server/src/generators/gitlab_settings.test.ts"
+      ]
+    },
+    {
+      "id": "P0-9",
+      "phase": 0,
+      "status": "completed",
+      "title": "P0-9: Team Onboarding Generator (TDD)",
+      "description": "新建 team_onboarding.ts + test。生成 scripts/onboard.sh，自动配置开发环境。TDD",
+      "priority": "critical",
+      "blockedBy": [],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:27+08:00",
+      "updatedAt": "2026-06-18T11:15:09+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "mcp-server/src/generators/team_onboarding.ts",
+        "mcp-server/src/generators/team_onboarding.test.ts"
+      ]
+    },
+    {
+      "id": "P1-1",
+      "phase": 1,
+      "status": "completed",
+      "title": "P1-1: 修改 CI Generator (ci.ts)",
+      "description": "在 ci.ts CiConfig 接口新增 gitProvider 字段。gitProvider=gitlab 时返回空字符串，gitProvider=both 时添加注释说明 GitLab 为主。更新 ci.test.ts 新增 3 个测试。",
+      "priority": "high",
+      "blockedBy": [
+        "P0-2"
+      ],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:32+08:00",
+      "updatedAt": "2026-06-18T11:16:40+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "mcp-server/src/generators/ci.ts",
+        "mcp-server/src/generators/ci.test.ts"
+      ]
+    },
+    {
+      "id": "P1-2",
+      "phase": 1,
+      "status": "completed",
+      "title": "P1-2: 修改 CLAUDE.md Generator (claude_md.ts)",
+      "description": "在 ClaudeMdConfig 新增 collaborationMode/gitProvider 字段。collaborationMode=team 时新增 Team Collaboration 章节。更新 claude_md.test.ts",
+      "priority": "high",
+      "blockedBy": [
+        "P0-2",
+        "P0-3"
+      ],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:34+08:00",
+      "updatedAt": "2026-06-18T11:16:40+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "mcp-server/src/generators/claude_md.ts",
+        "mcp-server/src/generators/claude_md.test.ts"
+      ]
+    },
+    {
+      "id": "P1-3",
+      "phase": 1,
+      "status": "completed",
+      "title": "P1-3: 修改 Husky Generator (husky.ts)",
+      "description": "在 HuskyConfig 新增 includeGitleaks/includeBranchCheck 字段。扩展 pre-commit hook 支持 gitleaks 快速失败检查。更新 husky.test.ts",
+      "priority": "high",
+      "blockedBy": [
+        "P0-2",
+        "P0-4"
+      ],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:35+08:00",
+      "updatedAt": "2026-06-18T11:16:40+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "mcp-server/src/generators/husky.ts",
+        "mcp-server/src/generators/husky.test.ts"
+      ]
+    },
+    {
+      "id": "P1-4",
+      "phase": 1,
+      "status": "completed",
+      "title": "P1-4: 编排层 — init_harness 扩展 (index.ts)",
+      "description": "扩展 init_harness handler: 导入新 generator、按 gitProvider 分发 CI 生成、按 collaborationMode 生成团队文件。更新 generateProjectFiles/backupGeneratedFiles/rollback managedFiles",
+      "priority": "high",
+      "blockedBy": [
+        "P0-4",
+        "P0-5",
+        "P0-6",
+        "P0-7",
+        "P0-8",
+        "P0-9",
+        "P1-1",
+        "P1-2",
+        "P1-3"
+      ],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:37+08:00",
+      "updatedAt": "2026-06-18T11:19:47+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "mcp-server/src/index.ts"
+      ]
+    },
+    {
+      "id": "P1-5",
+      "phase": 1,
+      "status": "completed",
+      "title": "P1-5: 状态管理扩展 (state.ts)",
+      "description": "setProjectInfo() 方法签名扩展接受 gitProvider/collaborationMode 参数，保存到 state.project",
+      "priority": "high",
+      "blockedBy": [
+        "P0-2"
+      ],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:38+08:00",
+      "updatedAt": "2026-06-18T11:16:40+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "mcp-server/src/state.ts"
+      ]
+    },
+    {
+      "id": "P1-6",
+      "phase": 1,
+      "status": "completed",
+      "title": "P1-6: 新增 Preset (rule_io.ts)",
+      "description": "在 PRESETS 数组新增 team-gitlab-ts preset，包含全部 23 条规则的团队推荐配置",
+      "priority": "high",
+      "blockedBy": [
+        "P0-3"
+      ],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:39+08:00",
+      "updatedAt": "2026-06-18T11:16:40+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "mcp-server/src/io/rule_io.ts"
+      ]
+    },
+    {
+      "id": "P2-1",
+      "phase": 2,
+      "status": "completed",
+      "title": "P2-1: 更新 SKILL.md",
+      "description": "在 SKILL.md Step 2 新增 gitProvider/collaborationMode 交互问题。新增 Team/GitLab Mode 章节描述 TL 后续操作",
+      "priority": "medium",
+      "blockedBy": [
+        "P1-4"
+      ],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:40+08:00",
+      "updatedAt": "2026-06-18T11:21:01+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "skill/SKILL.md"
+      ]
+    },
+    {
+      "id": "P2-2",
+      "phase": 2,
+      "status": "completed",
+      "title": "P2-2: 集成测试",
+      "description": "新增集成测试: init_harness gitProvider=gitlab/collaborationMode=team 验证、默认参数回归、新 preset 加载、rollback 覆盖",
+      "priority": "medium",
+      "blockedBy": [
+        "P1-4",
+        "P1-6"
+      ],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:42+08:00",
+      "updatedAt": "2026-06-18T11:21:01+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "mcp-server/src/index.test.ts"
+      ]
+    },
+    {
+      "id": "P2-3",
+      "phase": 2,
+      "status": "completed",
+      "title": "P2-3: 变更记录 (CHANGELOG.jsonl)",
+      "description": "使用 scripts/changelog.py 分 Phase 记录所有变更条目",
+      "priority": "medium",
+      "blockedBy": [],
+      "blocks": [],
+      "createdAt": "2026-06-18T11:07:43+08:00",
+      "updatedAt": "2026-06-18T11:21:01+08:00",
+      "createdBy": "Claude Opus 4.8",
+      "updatedBy": "Claude Opus 4.8",
+      "relatedFiles": [
+        "CHANGELOG.jsonl"
+      ]
     }
   ]
 }

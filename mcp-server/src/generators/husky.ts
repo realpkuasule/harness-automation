@@ -4,6 +4,10 @@ export interface HuskyConfig {
   decisions: RuleDecision[];
   /** Existing husky config (pre-commit, commit-msg, etc.) */
   existingHooks?: Record<string, string>;
+  /** Prepend gitleaks secret scan to pre-commit hook */
+  includeGitleaks?: boolean;
+  /** Append branch naming convention check to pre-commit hook */
+  includeBranchCheck?: boolean;
 }
 
 /**
@@ -25,16 +29,41 @@ export function generateHuskyConfig(config: HuskyConfig): Record<string, string>
       d.recommendedMedium === "hook",
   );
 
-  if (!hasRelevantRules) return hooks;
+  const hasPreCommitFeatures = config.includeGitleaks || config.includeBranchCheck;
+
+  if (!hasRelevantRules && !hasPreCommitFeatures) return hooks;
 
   // pre-commit hook: run lint-staged on staged files
   // Husky v9+ hooks are plain shell scripts — no _/husky.sh sourcing needed.
   if (!hooks["pre-commit"]) {
-    hooks["pre-commit"] = [
-      "#!/bin/sh",
-      "",
-      "npx lint-staged",
-    ].join("\n");
+    const lines: string[] = ["#!/bin/sh", ""];
+
+    if (config.includeGitleaks) {
+      lines.push(
+        "# Gitleaks secret scan (fast-fail)",
+        "if command -v gitleaks &> /dev/null; then",
+        "  gitleaks protect --staged -v || exit 1",
+        "fi",
+        "",
+      );
+    }
+
+    lines.push("npx lint-staged");
+
+    if (config.includeBranchCheck) {
+      lines.push(
+        "",
+        "# Branch naming check",
+        'BRANCH=$(git rev-parse --abbrev-ref HEAD)',
+        "if ! echo \"$BRANCH\" | grep -qE '^(feature|bugfix|hotfix|release)/'; then",
+        '  echo "⚠️  Branch name does not follow convention: feature|bugfix|hotfix|release/<desc>"',
+        '  echo "   Current branch: $BRANCH"',
+        "  exit 1",
+        "fi",
+      );
+    }
+
+    hooks["pre-commit"] = lines.join("\n");
   }
 
   // commit-msg hook: commitlint

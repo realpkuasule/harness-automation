@@ -3,6 +3,8 @@ import type { RuleDecision } from "../types.js";
 export interface ClaudeMdConfig {
   decisions: RuleDecision[];
   projectName?: string;
+  collaborationMode?: "solo" | "team";
+  gitProvider?: "github" | "gitlab" | "both";
 }
 
 /**
@@ -132,6 +134,36 @@ export function generateClaudeMd(config: ClaudeMdConfig): string {
         `- **${rule.ruleName}** → 由 \`${rule.recommendedMedium}\` 自动执行`,
       );
     }
+    lines.push("");
+  }
+
+  // Team Collaboration section — only when collaborationMode is "team"
+  if (config.collaborationMode === "team") {
+    lines.push("## Team Collaboration");
+    lines.push("");
+
+    lines.push("### Git 工作流");
+    lines.push("- 分支命名：feature/<描述>, bugfix/<描述>, hotfix/<描述>, release/<版本>");
+    lines.push("- 从 main 分支创建功能分支，完成后通过 Merge Request 合并");
+    if (config.gitProvider === "both") {
+      lines.push("- 双远程：GitLab（团队主仓库）+ GitHub（个人备份）");
+    }
+    lines.push("");
+
+    lines.push("### Code Review");
+    lines.push("- 所有 MR 需要至少 1 人 Approve");
+    lines.push("- AI Code Review 在 CI 中自动运行，审查结果作为参考");
+    lines.push("- Review 关注：逻辑正确性、安全性、性能、可维护性");
+    lines.push("");
+
+    lines.push("### AI 参与度记录");
+    lines.push("- 在 MR 描述中标注 AI 工具使用情况");
+    lines.push("- 提交信息中使用 Co-Authored-By 标注 AI 参与");
+    lines.push("");
+
+    lines.push("### 新成员 Onboarding");
+    lines.push("- 运行 `bash scripts/onboard.sh` 完成环境配置");
+    lines.push("- 阅读 `.gitlab/merge_request_templates/default.md` 了解 MR 规范");
     lines.push("");
   }
 
