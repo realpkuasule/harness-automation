@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { DecisionEngine } from "./engine.js";
 import { CodeScanner } from "./scanners/code_scanner.js";
 import { generateClaudeMd } from "./generators/claude_md.js";
@@ -51,14 +53,20 @@ describe("Performance baselines", () => {
 
   // 4. scanDirCached second scan
   it("cached scan under 50ms", async () => {
-    const scanner = new CodeScanner();
-    // Warm cache
-    await scanner.scanDirCached(FIXTURES);
-    const start = performance.now();
-    const result = await scanner.scanDirCached(FIXTURES);
-    const duration = performance.now() - start;
-    expect(duration).toBeLessThan(50);
-    expect(result.scannedFiles).toBeGreaterThan(0);
+    const project = mkdtempSync(join(tmpdir(), "ht-perf-cache-"));
+    try {
+      cpSync(FIXTURES, project, { recursive: true });
+      rmSync(join(project, ".harness"), { recursive: true, force: true });
+      const scanner = new CodeScanner();
+      await scanner.scanDirCached(project);
+      const start = performance.now();
+      const result = await scanner.scanDirCached(project);
+      const duration = performance.now() - start;
+      expect(duration).toBeLessThan(50);
+      expect(result.scannedFiles).toBeGreaterThan(0);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
   });
 
   // 5. scanAndEvaluate full flow

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -117,12 +117,18 @@ describe("Scanner — mixed/ project integration", () => {
 
   // 14. useCache = true
   it("cached scan returns valid results", async () => {
-    const scanner = new CodeScanner();
-    const result = await scanner.scanDirCached(fixturePath("mixed"));
-    expect(result.scannedFiles).toBeGreaterThan(0);
-    // Second call uses cache
-    const result2 = await scanner.scanDirCached(fixturePath("mixed"));
-    expect(result2.scannedFiles).toBeGreaterThan(0);
+    const project = mkdtempSync(join(tmpdir(), "ht-mixed-cache-"));
+    try {
+      cpSync(fixturePath("mixed"), project, { recursive: true });
+      rmSync(join(project, ".harness"), { recursive: true, force: true });
+      const scanner = new CodeScanner();
+      const result = await scanner.scanDirCached(project);
+      expect(result.scannedFiles).toBeGreaterThan(0);
+      const result2 = await scanner.scanDirCached(project);
+      expect(result2.scannedFiles).toBeGreaterThan(0);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
   });
 
   // 15. console.log in project

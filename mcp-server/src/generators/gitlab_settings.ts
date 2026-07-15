@@ -121,7 +121,7 @@ function generateScript(decisions: RuleDecision[], projectUrl?: string, projectI
   };
 }
 
-function generateDoc(decisions: RuleDecision[]): { path: string; content: string } {
+function generateDoc(): { path: string; content: string } {
   const lines: string[] = [];
 
   lines.push("# GitLab Settings");
@@ -229,7 +229,7 @@ function generateDoc(decisions: RuleDecision[]): { path: string; content: string
  */
 export function generateGitlabSettings(config: GitlabSettingsConfig): GitlabSettingsOutput {
   const script = generateScript(config.decisions, config.projectUrl, config.projectId);
-  const doc = generateDoc(config.decisions);
+  const doc = generateDoc();
 
   return { script, doc };
 }

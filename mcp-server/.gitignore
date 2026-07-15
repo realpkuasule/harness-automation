@@ -2,3 +2,4 @@
 # Harness
 .harness/state.json
 .harness/backups/
+**/.harness/scan-cache.json

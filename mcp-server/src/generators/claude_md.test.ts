@@ -165,7 +165,6 @@ describe("generateClaudeMd", () => {
     if (guidelineIndex > -1) expect(hardConstraintIndex).toBeLessThan(guidelineIndex);
 
     // task-board should NOT appear in cognitive section
-    const afterHardConstraint = result.slice(hardConstraintIndex + 50);
     // Count occurrences of "task-board" — should be exactly 1 (in hard constraints only)
     const taskBoardMatches = result.match(/task-board/g);
     expect(taskBoardMatches?.length).toBe(1);
