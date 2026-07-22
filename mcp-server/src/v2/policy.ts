@@ -77,7 +77,7 @@ function typescriptNaming(owner: string, sources: SourceSnapshot[]): PolicyRule 
   return rule({
     id: "typescript-naming",
     title: "TypeScript naming",
-    statement: "Use camelCase for variables, functions, parameters, methods, and local properties; PascalCase for classes, interfaces, types, enums, React components, and NestJS providers; UPPER_SNAKE_CASE is allowed only for module constants.",
+    statement: "Use camelCase for variables, functions, parameters, methods, and local properties; PascalCase for classes, interfaces, types, enums, and React components; UPPER_SNAKE_CASE is allowed only for module constants.",
     rationale: "A deterministic naming gate prevents fresh sessions from alternating between camelCase and snake_case.",
     scope: { include: ["**/*.ts", "**/*.tsx"], exclude: ["**/*.d.ts", "**/generated/**", ".harness/**"], boundaries: ["code"] },
     formalization: "deterministic",
@@ -88,9 +88,9 @@ function typescriptNaming(owner: string, sources: SourceSnapshot[]): PolicyRule 
   }, owner, sources);
 }
 
-function profileRules(profile: StackProfile, owner: string, sources: SourceSnapshot[]): PolicyRule[] {
+function profileRules(profile: StackProfile, stacks: Stack[], owner: string, sources: SourceSnapshot[]): PolicyRule[] {
   const rules: PolicyRule[] = [];
-  if (profile !== "custom") rules.push(typescriptNaming(owner, sources));
+  if (stacks.includes("typescript")) rules.push(typescriptNaming(owner, sources));
 
   if (profile === "full-typescript") {
     rules.push(rule({
@@ -106,7 +106,7 @@ function profileRules(profile: StackProfile, owner: string, sources: SourceSnaps
     }, owner, sources));
   }
 
-  if (profile === "python-data-ai") {
+  if (stacks.includes("python")) {
     rules.push(rule({
       id: "python-naming",
       title: "Python naming",
@@ -119,6 +119,9 @@ function profileRules(profile: StackProfile, owner: string, sources: SourceSnaps
       verification: { commands: [["python3", ".harness/generated/check_python_naming.py", "."]], passCriteria: "Python AST naming verifier rejects its invalid fixture and passes the repository." },
       examples: { valid: ["user_id = 1", "class UserService: ..."], invalid: ["userId = 1", "class user_service: ..."] },
     }, owner, sources));
+  }
+
+  if (profile === "python-data-ai") {
     rules.push(rule({
       id: "python-json-boundary",
       title: "Python to TypeScript JSON boundary",
@@ -154,7 +157,7 @@ function profileRules(profile: StackProfile, owner: string, sources: SourceSnaps
     }, owner, sources));
   }
 
-  if (profile === "go-performance") {
+  if (stacks.includes("go")) {
     rules.push(rule({
       id: "go-naming",
       title: "Go naming",
@@ -167,6 +170,9 @@ function profileRules(profile: StackProfile, owner: string, sources: SourceSnaps
       verification: { commands: [["go", "run", ".harness/generated/check_go_naming.go", "."]], passCriteria: "Go AST naming verifier rejects its invalid fixture and passes the repository." },
       examples: { valid: ["var userID string", "func LoadUser() {}"], invalid: ["var user_id string"] },
     }, owner, sources));
+  }
+
+  if (profile === "go-performance") {
     rules.push(rule({
       id: "grpc-database-boundary",
       title: "Go RPC and database boundary naming",
@@ -191,7 +197,7 @@ function profileRules(profile: StackProfile, owner: string, sources: SourceSnaps
     }, owner, sources));
   }
 
-  if (profile === "python-data-ai" || profile === "go-performance") {
+  if (stacks.includes("kubernetes")) {
     rules.push(rule({
       id: "kubernetes-delivery",
       title: "Kubernetes delivery validation",
@@ -214,12 +220,18 @@ export function compilePolicy(args: {
   intake: Intake;
   discovery: Discovery;
   profile?: StackProfile;
+  stacks?: Stack[];
 }): PolicyDocument {
   const profile = args.profile ?? args.discovery.profile;
-  if (profile === "custom") {
-    throw new Error("STACK_DECISION_REQUIRED: choose full-typescript, python-data-ai, or go-performance");
+  if (profile !== "custom" && args.stacks?.length) {
+    throw new Error("STACK_OVERRIDE_REQUIRES_CUSTOM_PROFILE: use --profile custom with explicit --stack values");
   }
-  const stacks = stacksForProfile(profile, args.discovery.stacks);
+  const stacks = profile === "custom"
+    ? [...new Set(args.stacks ?? [])]
+    : stacksForProfile(profile, args.discovery.stacks);
+  if (stacks.length === 0) {
+    throw new Error("STACK_SELECTION_REQUIRED: use --profile custom with one or more explicit --stack values");
+  }
   const adapters = new Map(args.discovery.agents.map(({ id, capabilities }) => [id, { id, capabilities }]));
   adapters.set("portable", {
     id: "portable",
@@ -246,7 +258,7 @@ export function compilePolicy(args: {
       portableInstructionFile: "AGENTS.md",
       adapters: [...adapters.values()],
     },
-    policies: [...commonRules(args.owner, args.intake.sources), ...profileRules(profile, args.owner, args.intake.sources)],
+    policies: [...commonRules(args.owner, args.intake.sources), ...profileRules(profile, stacks, args.owner, args.intake.sources)],
   };
 }
 

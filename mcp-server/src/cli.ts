@@ -24,7 +24,7 @@ import {
   rollbackChange,
   runTrustedChecks,
 } from "./v2/service.js";
-import type { StackProfile } from "./v2/types.js";
+import { SUPPORTED_STACKS, type Stack, type StackProfile } from "./v2/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -181,9 +181,19 @@ function profile(args: ParsedArguments): StackProfile | undefined {
   if (!selected) return undefined;
   const profiles: StackProfile[] = ["full-typescript", "python-data-ai", "go-performance", "custom"];
   if (!profiles.includes(selected as StackProfile)) {
-    throw new Error(`INVALID_PROFILE: choose ${profiles.slice(0, 3).join(", ")}`);
+    throw new Error(`INVALID_PROFILE: choose ${profiles.join(", ")}`);
   }
   return selected as StackProfile;
+}
+
+function stacks(args: ParsedArguments): Stack[] | undefined {
+  const selected = args.values.get("stack");
+  if (!selected) return undefined;
+  const invalid = selected.filter((item) => !SUPPORTED_STACKS.includes(item as Stack));
+  if (invalid.length > 0) {
+    throw new Error(`INVALID_STACK: ${invalid.join(", ")}; choose ${SUPPORTED_STACKS.join(", ")}`);
+  }
+  return [...new Set(selected)] as Stack[];
 }
 
 function usage(): void {
@@ -196,6 +206,7 @@ Usage:
   harness-automation intake --owner <name> --approve-sources [--project .]
   harness-automation discover [--project .]
   harness-automation plan [--project .] [--profile full-typescript|python-data-ai|go-performance]
+  harness-automation plan --profile custom --stack <stack> [--stack <stack>...] [--project .]
   harness-automation apply --plan <relative-path> --approve <sha256> [--project .]
   harness-automation context [--project .]
   harness-automation check [--project .] [--mode session|commit|ci]
@@ -225,8 +236,8 @@ function runWorkflow(argv: string[]): void {
       printJson(discoverAndSave(root));
       return;
     case "plan": {
-      const result = planProject({ projectRoot: root, profile: profile(args) });
-      printJson({ planPath: result.path, planHash: result.plan.planHash, operations: result.plan.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash })), commands: result.plan.commands, warnings: result.plan.warnings });
+      const result = planProject({ projectRoot: root, profile: profile(args), stacks: stacks(args) });
+      printJson({ planPath: result.path, planHash: result.plan.planHash, stacks: result.policy.project.stacks, operations: result.plan.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash })), commands: result.plan.commands, warnings: result.plan.warnings });
       return;
     }
     case "apply":

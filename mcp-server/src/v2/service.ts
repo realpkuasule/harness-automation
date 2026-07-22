@@ -30,6 +30,7 @@ import type {
   Intake,
   PolicyDocument,
   SourceSnapshot,
+  Stack,
   StackProfile,
 } from "./types.js";
 import { checkGo, checkPython, checkTypeScript } from "./verifier.js";
@@ -189,6 +190,7 @@ function uniqueCommands(commands: string[][]): string[][] {
 export function planProject(args: {
   projectRoot: string;
   profile?: StackProfile;
+  stacks?: Stack[];
   now?: Date;
 }): { plan: ChangePlan; path: string; policy: PolicyDocument } {
   const root = resolve(args.projectRoot);
@@ -199,7 +201,7 @@ export function planProject(args: {
   const intake = readJson<Intake>(intakeFile);
   const discovery = readJson<Discovery>(discoveryFile);
   ensureApprovedSources(root, intake);
-  const policy = compilePolicy({ projectRoot: root, owner: intake.owner, intake, discovery, profile: args.profile });
+  const policy = compilePolicy({ projectRoot: root, owner: intake.owner, intake, discovery, profile: args.profile, stacks: args.stacks });
   const policyDigest = hashObject(policy);
   const effectivePolicy = renderEffectivePolicy(policy, policyDigest);
   const instruction = managedInstructionBlock(policyDigest);
@@ -227,7 +229,12 @@ export function planProject(args: {
   operations.push(operation(root, ".harness/manifest.json", prettyJson(manifest)));
 
   const createdAt = (args.now ?? new Date()).toISOString();
-  const seed = hashObject({ intake: fileHash(intakeFile), discovery: fileHash(discoveryFile), profile: args.profile ?? discovery.profile });
+  const seed = hashObject({
+    intake: fileHash(intakeFile),
+    discovery: fileHash(discoveryFile),
+    profile: args.profile ?? discovery.profile,
+    stacks: args.stacks ?? null,
+  });
   const id = `${createdAt.replace(/[:.]/gu, "-")}-${seed.slice(0, 12)}`;
   const draft: ChangePlan = {
     schemaVersion: "2.0",
@@ -244,6 +251,9 @@ export function planProject(args: {
     ]),
     warnings: [
       ...discovery.warnings,
+      ...(args.stacks ?? [])
+        .filter((stack) => !discovery.stacks.includes(stack))
+        .map((stack) => `Owner-selected stack not observed during discovery: ${stack}`),
       ...policy.policies.filter((item) => item.formalization === "cognitive").map((item) => `${item.id}: guidance requires owner/reviewer judgment`),
     ],
     planHash: "",

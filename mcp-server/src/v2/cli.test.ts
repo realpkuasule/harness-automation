@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,5 +54,34 @@ describe("v2 CLI forward flow", () => {
     expect(checked.ok).toBe(true);
     expect((run(root, ["explain", "typescript-naming"]).id)).toBe("typescript-naming");
     expect(run(root, ["drift"]).clean).toBe(true);
+  }, 30_000);
+
+  it("accepts repeated owner-selected stacks for a custom repository", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-cli-custom-"));
+    projects.push(root);
+    write(root, "docs/PRD.md", "# Studio\n");
+    write(root, "docs/design/architecture.md", "# Vite and Electron\n");
+    write(root, "docs/research/github.md", "# Evidence\n");
+    write(root, "package.json", JSON.stringify({
+      scripts: { build: "vite build" },
+      dependencies: { react: "1" },
+      devDependencies: { vite: "1" },
+    }));
+    write(root, "package-lock.json", "{}\n");
+
+    run(root, ["intake", "--owner", "owner", "--approve-sources"]);
+    expect(run(root, ["discover"]).profile).toBe("custom");
+    const planned = run(root, ["plan", "--profile", "custom", "--stack", "typescript"]);
+    expect(planned.stacks).toEqual(["typescript"]);
+    const planPath = String(planned.planPath);
+    run(root, ["apply", "--plan", planPath, "--approve", String(planned.planHash)]);
+
+    const policy = JSON.parse(readFileSync(join(root, ".harness/policy.yaml"), "utf8")) as {
+      project: { stacks: string[] };
+      policies: Array<{ id: string }>;
+    };
+    expect(policy.project.stacks).toEqual(["typescript"]);
+    expect(policy.policies.map((item) => item.id)).toContain("typescript-naming");
+    expect(JSON.stringify(policy)).not.toMatch(/NestJS|Prisma|tRPC|PostgreSQL/iu);
   }, 30_000);
 });

@@ -57,21 +57,24 @@ node <skill目录>/scripts/run.mjs discover --project <项目绝对路径>
 
 先读发现结果中的证据、置信度、命令和冲突。只有无法从仓库或批准文档恢复的高影响决策才询问负责人。
 
-当前正式支持三套 profile：
+当前正式支持三套完整 preset：
 
 - `full-typescript`：NestJS + Prisma + tRPC + Next.js。
 - `python-data-ai`：Django + Pydantic + PostgreSQL + Celery + React/TS + K8s。
 - `go-performance`：Go + sqlc/ent + PostgreSQL + gRPC + K8s + TS 前端。
 
-发现结果为 `custom` 时，解释证据并让负责人选择最接近的 profile 或停止；不得静默猜测。详细边界约定见 [stack-adapters.md](references/stack-adapters.md)。
+发现结果为 `custom` 时，解释证据并让负责人批准精确 stack 列表。不要为了复用 preset 而引入仓库不存在或设计明确禁止的框架。例如 Vite/Electron 目标项目可批准 `custom + typescript`，不得套用包含 NestJS、Prisma、tRPC、Next.js 和 PostgreSQL 的 `full-typescript`。详细边界约定见 [stack-adapters.md](references/stack-adapters.md)。
 
 ### 4. 只生成计划
 
 ```bash
 node <skill目录>/scripts/run.mjs plan --project <项目绝对路径> --profile <profile>
+
+# custom 仓库：--stack 可重复，必须与负责人批准的精确列表一致
+node <skill目录>/scripts/run.mjs plan --project <项目绝对路径> --profile custom --stack typescript
 ```
 
-向负责人展示：将修改的路径、每个旧/新哈希、建议验证命令、未自动形式化的 guidance 和计划哈希。计划不得安装依赖、运行迁移、修改仓库设置或覆盖既有 CI。
+向负责人展示：选定 stack、未在仓库中观察到的 stack 警告、将修改的路径、每个旧/新哈希、建议验证命令、未自动形式化的 guidance 和计划哈希。计划不得安装依赖、运行迁移、修改仓库设置或覆盖既有 CI。preset 不接受 `--stack` 裁剪；需要裁剪时改用 `custom` 并显式列出 stack。
 
 ### 5. 精确批准后应用
 

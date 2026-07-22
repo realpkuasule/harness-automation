@@ -53,7 +53,7 @@ import {
   rollbackChange as rollbackV2Change,
   runTrustedChecks as runV2TrustedChecks,
 } from "./v2/service.js";
-import type { StackProfile } from "./v2/types.js";
+import { SUPPORTED_STACKS, type Stack, type StackProfile } from "./v2/types.js";
 import {
   EvaluateRulesInputSchema,
   GenerateConfigInputSchema,
@@ -137,7 +137,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
       {
         name: "harness_plan",
         description: "v2: compile policy and write an immutable plan; does not apply target changes",
-        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" }, profile: { enum: ["full-typescript", "python-data-ai", "go-performance"] } } },
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" }, profile: { enum: ["full-typescript", "python-data-ai", "go-performance", "custom"] }, stacks: { type: "array", minItems: 1, uniqueItems: true, items: { enum: [...SUPPORTED_STACKS] } } } },
       },
       {
         name: "harness_apply",
@@ -321,10 +321,12 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
       const result = planV2Project({
         projectRoot: v2String("projectDir"),
         profile: typeof v2Args.profile === "string" ? v2Args.profile as StackProfile : undefined,
+        stacks: Array.isArray(v2Args.stacks) ? v2Args.stacks as Stack[] : undefined,
       });
       return v2Result({
         planPath: result.path,
         planHash: result.plan.planHash,
+        stacks: result.policy.project.stacks,
         operations: result.plan.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash })),
         commands: result.plan.commands,
         warnings: result.plan.warnings,

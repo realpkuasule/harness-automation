@@ -23,6 +23,8 @@ Discover facts first. Ask only decisions with material policy consequences, one 
 
 The owner must explicitly approve source readiness and the exact plan hash. Other choices may be recorded as proposed policy but may not be applied.
 
+When discovery returns `custom`, record the exact owner-approved stack list before planning. Never translate “use a preset as a baseline, but exclude some of its frameworks” into the full preset. Use `--profile custom` with repeated `--stack` values instead, and surface selected-but-unobserved stacks in the plan warnings.
+
 ## Safe command sequence
 
 ```text

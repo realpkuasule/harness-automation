@@ -38,4 +38,12 @@ Harness ships a Go standard-library AST checker and self-tests it with an invali
 
 ## Ambiguous repositories
 
-If discovery returns `custom`, do not silently choose. Ask the owner for the intended architecture. v2 supports one of the three profiles above as the compilation baseline; unsupported stacks require an explicit adapter design and must report unavailable enforcement as `blocked`.
+If discovery returns `custom`, do not silently choose the nearest preset. Ask the owner to approve the exact subset of supported stacks: `typescript`, `python`, `go`, `postgresql`, `grpc`, and `kubernetes`.
+
+Compile custom repositories with repeated `--stack` arguments, for example:
+
+```bash
+harness-automation plan --project . --profile custom --stack typescript
+```
+
+Language naming gates and Kubernetes guidance are selected by stack. Framework-specific policies remain exclusive to their complete presets, so `custom + typescript` does not add NestJS, Prisma, tRPC, Next.js, or PostgreSQL. A selected stack that discovery did not observe is allowed only as an explicit owner decision and appears as a plan warning. Languages or enforcement adapters outside the supported list still require an adapter design and must report unavailable enforcement as `blocked`.

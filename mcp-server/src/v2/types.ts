@@ -1,12 +1,15 @@
 export const HARNESS_VERSION = "2.0" as const;
 
-export type Stack =
-  | "typescript"
-  | "python"
-  | "go"
-  | "postgresql"
-  | "grpc"
-  | "kubernetes";
+export const SUPPORTED_STACKS = [
+  "typescript",
+  "python",
+  "go",
+  "postgresql",
+  "grpc",
+  "kubernetes",
+] as const;
+
+export type Stack = typeof SUPPORTED_STACKS[number];
 
 export type StackProfile =
   | "full-typescript"

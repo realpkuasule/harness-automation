@@ -31,6 +31,13 @@ describe("v2 MCP transport", () => {
       "harness_check",
       "harness_rollback",
     ]));
+    const planTool = tools.tools.find((tool) => tool.name === "harness_plan");
+    expect(planTool?.inputSchema).toMatchObject({
+      properties: {
+        profile: { enum: ["full-typescript", "python-data-ai", "go-performance", "custom"] },
+        stacks: { type: "array", items: { enum: ["typescript", "python", "go", "postgresql", "grpc", "kubernetes"] } },
+      },
+    });
 
     const projectDir = mkdtempSync(join(tmpdir(), "harness-mcp-v2-"));
     directories.push(projectDir);

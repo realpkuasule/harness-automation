@@ -84,6 +84,9 @@ harness-automation discover --project .
 # 只生成计划，不修改目标文件
 harness-automation plan --project . --profile full-typescript
 
+# 无完整 preset 匹配时，由负责人批准精确 stack；--stack 可重复
+harness-automation plan --project . --profile custom --stack typescript
+
 # 负责人审阅计划后，使用输出中的完整哈希批准
 harness-automation apply --project . \
   --plan .harness/plans/<plan>.json \

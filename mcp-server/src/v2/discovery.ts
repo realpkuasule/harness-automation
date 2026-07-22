@@ -172,7 +172,7 @@ export function discoverProject(root: string, now = new Date()): Discovery {
     { fact: `Detected stacks: ${stacks.join(", ") || "none"}`, paths: manifests, confidence: 0.9 },
   ];
   const warnings: string[] = [];
-  if (profile === "custom") warnings.push("No supported v1 stack profile matched exactly; owner decisions are required.");
+  if (profile === "custom") warnings.push("No preset stack profile matched exactly; owner-approved custom stacks are required.");
   if (lockfiles.length === 0) warnings.push("No dependency lockfile was found.");
 
   return {

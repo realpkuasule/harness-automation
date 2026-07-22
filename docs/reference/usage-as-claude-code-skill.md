@@ -58,6 +58,14 @@ harness-automation discover --project .
 harness-automation plan --project . --profile <profile>
 ```
 
+若发现结果为 `custom`，不要套用会引入无关框架的最近 preset。让负责人批准精确 stack，然后运行：
+
+```bash
+harness-automation plan --project . --profile custom --stack typescript
+```
+
+`--stack` 可重复；可选值为 `typescript`、`python`、`go`、`postgresql`、`grpc`、`kubernetes`。计划会警告负责人批准但 discovery 尚未观察到的 stack。
+
 Agent 必须把计划中的路径、旧/新哈希、验证命令、guidance 和完整计划哈希展示给负责人。负责人明确批准该哈希后才能运行：
 
 ```bash
@@ -74,6 +82,8 @@ harness-automation drift --project .
 - `full-typescript`；
 - `python-data-ai`；
 - `go-performance`。
+
+此外支持由上述 stack 组合而成的 `custom` profile。preset 不支持用 `--stack` 静默裁剪。
 
 如果自动发现无法匹配，Agent 必须根据仓库证据向负责人澄清，不能静默选择。
 

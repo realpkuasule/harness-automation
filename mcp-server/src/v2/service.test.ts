@@ -80,6 +80,66 @@ describe("v2 stack discovery", () => {
   });
 });
 
+describe("v2 custom stack planning", () => {
+  it("compiles only owner-selected stack rules without preset-only frameworks", () => {
+    const root = temporaryProject();
+    approvedSources(root);
+    write(root, "package.json", JSON.stringify({
+      scripts: { build: "vite build" },
+      dependencies: { react: "1.0.0" },
+      devDependencies: { vite: "1.0.0" },
+    }));
+    write(root, "package-lock.json", "{}\n");
+
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    const discovery = discoverProject(root);
+    expect(discovery.profile).toBe("custom");
+    expect(discovery.stacks).toEqual([]);
+    write(root, ".harness/discovery.json", `${JSON.stringify(discovery, null, 2)}\n`);
+
+    const { plan, policy } = planProject({
+      projectRoot: root,
+      profile: "custom",
+      stacks: ["typescript"],
+      now: new Date("2026-01-01T00:00:00Z"),
+    });
+
+    expect(policy.project.stacks).toEqual(["typescript"]);
+    expect(policy.policies.map((item) => item.id)).toContain("typescript-naming");
+    expect(policy.policies.map((item) => item.id)).not.toContain("typescript-boundary-naming");
+    expect(JSON.stringify(policy)).not.toMatch(/NestJS|Prisma|tRPC|PostgreSQL/iu);
+    expect(plan.commands.flat()).not.toContain("node_modules/.bin/prisma");
+    expect(plan.warnings).toContain("Owner-selected stack not observed during discovery: typescript");
+  });
+
+  it("requires an explicit stack when a custom repository has no observed stack", () => {
+    const root = temporaryProject();
+    approvedSources(root);
+    write(root, "package.json", JSON.stringify({ dependencies: { react: "1.0.0" } }));
+    write(root, "package-lock.json", "{}\n");
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    const discovery = discoverProject(root);
+    write(root, ".harness/discovery.json", `${JSON.stringify(discovery, null, 2)}\n`);
+
+    expect(() => planProject({ projectRoot: root, profile: "custom" }))
+      .toThrow(/STACK_SELECTION_REQUIRED/);
+  });
+
+  it("rejects stack overrides on complete presets", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    const discovery = discoverProject(root);
+    write(root, ".harness/discovery.json", `${JSON.stringify(discovery, null, 2)}\n`);
+
+    expect(() => planProject({
+      projectRoot: root,
+      profile: "full-typescript",
+      stacks: ["typescript"],
+    })).toThrow(/STACK_OVERRIDE_REQUIRES_CUSTOM_PROFILE/);
+  });
+});
+
 describe("v2 GitHub research evidence", () => {
   it("records deterministic queries and candidate metadata under docs/research", () => {
     const root = temporaryProject();
