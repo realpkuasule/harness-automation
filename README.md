@@ -12,6 +12,12 @@ Harness Automation 是面向 AI coding 工程的 repository-native policy compil
 - 能形式化的规则由真实检查器执行，不能形式化的规则明确标为 review guidance；
 - 所有变更先生成不可变计划，经项目负责人批准精确哈希后才原子应用并可精确回滚。
 
+典型使用场景是项目完成初始化、开始由多人或多个 AI 会话并行开发的第一周。Harness 重点控制三类最常见的失控：
+
+- 不同会话没有先搜索现有实现，重复建设同一能力；
+- 接口约定在局部实现中被悄悄改变，调用方和实现方逐渐分叉；
+- `camelCase`、`snake_case` 等命名边界因 Agent 理解不同反复返工。
+
 ## 适用时机
 
 推荐流程：
@@ -27,24 +33,43 @@ Harness Automation 是面向 AI coding 工程的 repository-native policy compil
 
 Harness 不修改或替代 `grill-me`，只消费它和设计流程留下的仓库产物。
 
-## v2 支持的技术栈
+## 支持的技术栈
 
 | Profile | 组合 | 命名边界 |
 |---|---|---|
 | `full-typescript` | NestJS + Prisma + tRPC + Next.js | TS/JSON camelCase；PostgreSQL snake_case；Prisma 显式映射 |
 | `python-data-ai` | Django + Pydantic + PostgreSQL + Celery + React/TS + K8s | Python snake_case；JSON/TS camelCase；Pydantic 显式 alias |
 | `go-performance` | Go + sqlc/ent + PostgreSQL + gRPC + K8s + TS | Go mixedCaps；Proto/DB snake_case；Proto JSON/TS camelCase |
+| `custom` | 由负责人批准精确 stack 组合 | 只编译所选 stack 的规则，不继承最接近 preset 的框架 |
 
 TypeScript、Python 和 Go 的代码命名由 AST 检查器验证。数据库、RPC、API 和生成代码边界分别保留自己的惯用形式，通过 schema/compiler 显式转换。
 
+`custom` 当前支持 `typescript`、`python`、`go`、`postgresql`、`grpc`、`kubernetes`。例如 `custom + typescript` 不会隐式加入 NestJS、Prisma、tRPC、Next.js 或 PostgreSQL。
+
 ## 安装
 
-从 npm：
+要求 Node.js 18 或更高版本。安装分为两步：先安装全局 CLI，再把同一份 Skill 和可选 MCP 接入本机 coding agent。
 
 ```bash
-npm install -g @realpkuasule/harness-automation
+npm install -g @realpkuasule/harness-automation@latest
 harness-automation install
 ```
+
+验证安装：
+
+```bash
+npm list -g @realpkuasule/harness-automation --depth=0
+harness-automation help
+```
+
+`harness-automation install` 会部署：
+
+- `~/.claude/skills/harness-automation/`；
+- `~/.codex/skills/harness-automation/`；
+- `~/.agents/skills/harness-automation/`；
+- Claude Code 可选 MCP Server。
+
+安装后新建 coding-agent 会话，让 Agent 重新发现 Skill。CLI 是所有 Agent 的权威基线；即使某个 Agent 尚无专用 MCP，也可以通过仓库文件和 CLI 使用完整流程。
 
 从源码：
 
@@ -56,9 +81,7 @@ cd ..
 ./skill/install.sh
 ```
 
-安装器部署同一份 Skill 到 Claude Code、Codex 和通用 Agent Skill 目录，并为 Claude Code 注册可选 MCP Server。CLI 是所有 Agent 的权威基线。
-
-## 使用
+## 快速开始
 
 准备以下输入：
 
@@ -85,7 +108,9 @@ harness-automation discover --project .
 harness-automation plan --project . --profile full-typescript
 
 # 无完整 preset 匹配时，由负责人批准精确 stack；--stack 可重复
-harness-automation plan --project . --profile custom --stack typescript
+harness-automation plan --project . --profile custom \
+  --stack typescript \
+  --stack postgresql
 
 # 负责人审阅计划后，使用输出中的完整哈希批准
 harness-automation apply --project . \
@@ -97,13 +122,23 @@ harness-automation check --project . --mode session
 harness-automation drift --project .
 ```
 
-每个新编码会话先运行：
+`plan` 的 JSON 输出包含最终 stack、目标文件、变更前后哈希、验证命令、warning 和完整 `planHash`。项目负责人必须审阅这些内容后，才能把该哈希交给 `apply`。
+
+## 新会话接力
+
+每个新编码会话在修改代码前先运行：
 
 ```bash
 harness-automation context --project . --agent codex
 ```
 
-再读取 `.harness/generated/effective-policy.md`，搜索现有实现和所属模块，确认共享契约后开始编码。
+`--agent` 可选 `auto`、`portable`、`claude-code` 或 `codex`。随后：
+
+1. 读取 `.harness/generated/effective-policy.md`；
+2. 搜索已有实现，避免重复建设；
+3. 确认所属模块、共享契约和命名边界；
+4. 完成前运行 `harness-automation check --project . --mode session`；
+5. 提交前运行 `--mode commit`，CI 使用 `--mode ci`。
 
 ## 安全模型
 
