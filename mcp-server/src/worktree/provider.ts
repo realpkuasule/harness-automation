@@ -59,7 +59,8 @@ function findConfiguredField(node: unknown, fieldName: string): string | undefin
   }
   if (!node || typeof node !== "object") return undefined;
   const object = node as Record<string, unknown>;
-  const direct = object[fieldName];
+  const direct = Object.entries(object)
+    .find(([key]) => key.toLowerCase() === fieldName.toLowerCase())?.[1];
   if (typeof direct === "string") return direct;
   const field = object.field;
   if (field && typeof field === "object") {
