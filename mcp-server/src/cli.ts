@@ -302,13 +302,13 @@ function runWorktreeCommand(
       return;
     }
     case "configure": {
-      const mode = value(args, "mode") ?? "audit-only";
-      if (mode !== "audit-only" && mode !== "enforced") {
+      const selectedMode = value(args, "mode");
+      if (selectedMode !== undefined && selectedMode !== "audit-only" && selectedMode !== "enforced") {
         throw new Error("INVALID_WORKTREE_MODE: choose audit-only or enforced");
       }
       printWorkspacePlan(planWorkspaceConfiguration({
         projectRoot: root,
-        mode,
+        mode: selectedMode,
         maxPersistentWorktrees: positiveInteger(args, "max-persistent"),
         leaseTtlHours: positiveInteger(args, "lease-ttl-hours"),
         reviewTtlMinutes: positiveInteger(args, "review-ttl-minutes"),

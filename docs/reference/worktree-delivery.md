@@ -43,6 +43,12 @@ harness-automation worktree configure \
 
 `--done-value` may repeat. GitLab and Jira currently report `blocked`.
 
+The approved plan writes portable policy to
+`.harness/worktree-delivery.json` and host-specific canonical roots to
+`<git-common-dir>/harness/worktree-delivery/host-binding.json`. The plan hash
+covers both. On a new host, run configure again to approve that host's roots;
+omitted portable options preserve the existing repository policy.
+
 ## Allocate
 
 ```bash
@@ -101,8 +107,9 @@ harness-automation check --project . --mode session
 ```
 
 `drift` returns `workspaceClean` and the complete workspace audit when
-configured. Session checks gate on the local audit. CI reports the host-local
-gate as unavailable.
+configured. Status reports the host binding's configured/source/hash fields.
+Missing or legacy embedded bindings block enforced allocation. Session checks
+gate on the local audit. CI reports the host-local gate as unavailable.
 
 ## Recovery
 
@@ -110,7 +117,8 @@ gate as unavailable.
 harness-automation rollback --project . --change <receipt-id>
 ```
 
-Configuration and close rollback are refused after observed-state drift.
+Configuration rollback restores both the repository policy and host binding;
+configuration and close rollback are refused after observed-state drift.
 Allocation rollback does not remove a potentially valuable worktree; generate
 a new close plan instead.
 

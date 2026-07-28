@@ -232,7 +232,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
       },
       {
         name: "harness_worktree_configure",
-        description: "Write an immutable exact-hash plan for repository worktree-delivery configuration",
+        description: "Write one immutable exact-hash plan for portable repository policy and host-local path binding",
         inputSchema: {
           type: "object",
           additionalProperties: false,

@@ -4,13 +4,14 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmdirSync,
   rmSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { hashObject, prettyJson, withoutHash } from "../v2/fs.js";
 import {
@@ -202,7 +203,7 @@ describe("portable worktree inventory", () => {
     expect(() => planWorkspaceConfiguration({
       projectRoot: root,
       allowedRoots: [],
-    })).toThrow(/WORKTREE_CONFIG_INVALID/);
+    })).toThrow(/WORKTREE_HOST_BINDING_INVALID/);
     expect(() => planWorkspaceConfiguration({
       projectRoot: root,
       provider: { kind: "github" },
@@ -262,6 +263,154 @@ describe("portable worktree inventory", () => {
 });
 
 describe("hash-approved worktree lifecycle", () => {
+  it("separates portable policy from the host-local path binding", () => {
+    const root = repository();
+    const allowedRoot = join(root, "..");
+    const configured = planWorkspaceConfiguration({
+      projectRoot: root,
+      mode: "enforced",
+      allowedRoots: [allowedRoot],
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    const otherHost = planWorkspaceConfiguration({
+      projectRoot: root,
+      mode: "enforced",
+      allowedRoots: [join(allowedRoot, "other-host")],
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    expect(otherHost.plan.planHash).not.toBe(configured.plan.planHash);
+    expect(configured.plan.operation.kind).toBe("configure");
+    if (configured.plan.operation.kind !== "configure") return;
+
+    const repositoryPolicy = JSON.parse(configured.plan.operation.content) as Record<string, unknown>;
+    expect(repositoryPolicy).not.toHaveProperty("allowedRoots");
+    expect(repositoryPolicy).not.toHaveProperty("protectedRoots");
+    expect(configured.plan.operation).toHaveProperty(
+      "hostBindingPath",
+      "harness/worktree-delivery/host-binding.json",
+    );
+
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: configured.path,
+      approval: configured.plan.planHash,
+    });
+    const commonDir = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir");
+    const bindingPath = join(commonDir, "harness", "worktree-delivery", "host-binding.json");
+    expect(JSON.parse(readFileSync(bindingPath, "utf8"))).toMatchObject({
+      allowedRoots: [realpathSync.native(allowedRoot)],
+    });
+    expect(workspaceStatus(root)).toMatchObject({
+      hostBinding: { configured: true, source: "host-local" },
+    });
+  });
+
+  it("detects host-binding drift before applying an allocation", () => {
+    const root = repository();
+    const configured = planWorkspaceConfiguration({
+      projectRoot: root,
+      mode: "enforced",
+      allowedRoots: [join(root, "..")],
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: configured.path,
+      approval: configured.plan.planHash,
+    });
+    const allocation = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#binding-drift",
+      branch: "binding-drift",
+      path: `${root}-binding-drift`,
+      owner: "owner",
+    });
+    const bindingPath = workspaceStatus(root).hostBinding.path;
+    const binding = JSON.parse(readFileSync(bindingPath, "utf8")) as Record<string, unknown>;
+    writeFileSync(bindingPath, JSON.stringify({ ...binding, allowedRoots: [root] }));
+
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocation.path,
+      approval: allocation.plan.planHash,
+    })).toThrow(/WORKSPACE_DRIFT/);
+  });
+
+  it("fails closed when enforced policy has no host-local path binding", () => {
+    const root = repository();
+    const configured = planWorkspaceConfiguration({
+      projectRoot: root,
+      mode: "enforced",
+      allowedRoots: [join(root, "..")],
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: configured.path,
+      approval: configured.plan.planHash,
+    });
+    const commonDir = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir");
+    rmSync(join(commonDir, "harness", "worktree-delivery", "host-binding.json"), { force: true });
+
+    expect(workspaceStatus(root)).toMatchObject({
+      enforced: false,
+      passing: false,
+      hostBinding: { configured: false },
+      errors: expect.arrayContaining(["WORKTREE_HOST_BINDING_REQUIRED"]),
+    });
+    expect(() => planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#missing-binding",
+      branch: "missing-binding",
+      path: `${root}-missing-binding`,
+      owner: "owner",
+    })).toThrow(/WORKTREE_HOST_BINDING_REQUIRED/);
+  });
+
+  it("requires an approved configure plan to migrate legacy embedded roots", () => {
+    const root = repository();
+    const configDirectory = join(root, ".harness");
+    mkdirSync(configDirectory, { recursive: true });
+    writeFileSync(join(configDirectory, "worktree-delivery.json"), JSON.stringify({
+      schemaVersion: "1.0",
+      mode: "enforced",
+      maxPersistentWorktrees: 4,
+      leaseTtlHours: 168,
+      reviewTtlMinutes: 120,
+      remoteBranchRetentionDays: 14,
+      allowedRoots: [join(root, "..")],
+      protectedRoots: [root, resolve("/")],
+      remoteBranchDeletion: false,
+      provider: { kind: "none" },
+    }));
+
+    expect(workspaceStatus(root)).toMatchObject({
+      enforced: false,
+      hostBinding: { configured: false, source: "legacy-config" },
+      errors: expect.arrayContaining(["WORKTREE_HOST_BINDING_MIGRATION_REQUIRED"]),
+    });
+    expect(() => planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#legacy",
+      branch: "legacy",
+      path: `${root}-legacy`,
+      owner: "owner",
+    })).toThrow(/WORKTREE_HOST_BINDING_MIGRATION_REQUIRED/);
+
+    const migration = planWorkspaceConfiguration({ projectRoot: root });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: migration.path,
+      approval: migration.plan.planHash,
+    });
+    const portable = JSON.parse(
+      readFileSync(join(configDirectory, "worktree-delivery.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(portable).not.toHaveProperty("allowedRoots");
+    expect(workspaceStatus(root).hostBinding).toMatchObject({
+      configured: true,
+      source: "host-local",
+    });
+  });
+
   it("configures, allocates, closes, rolls back, and reapplies idempotently", () => {
     const root = repositoryWithRemote();
     const worktreePath = `${root}-issue-24`;
@@ -588,7 +737,10 @@ describe("hash-approved worktree lifecycle", () => {
       projectRoot: root,
       changeId: configReceipt.id,
     }).status).toBe("rolled-back");
-    expect(workspaceStatus(root).configured).toBe(false);
+    expect(workspaceStatus(root)).toMatchObject({
+      configured: false,
+      hostBinding: { configured: false },
+    });
     expect(() => rollbackWorkspaceChange({
       projectRoot: root,
       changeId: "missing",

@@ -2,8 +2,9 @@
 
 ## 状态位置
 
-- 项目配置：`.harness/worktree-delivery.json`，由精确哈希计划生成。
-- 租约、事务锁和生命周期回执：解析后的 Git common dir 下 `harness/worktree-delivery/`。
+- 可移植项目策略：`.harness/worktree-delivery.json`，不得包含主机绝对路径。
+- 允许根、保护根、租约、事务锁和生命周期回执：解析后的 Git common dir 下 `harness/worktree-delivery/`。
+- 配置计划哈希同时覆盖项目策略和 `host-binding.json`；缺失或旧式内嵌绑定时 enforced 分配 fail-closed。
 - 临时 Review 回执：操作系统 state 目录。
 - 凭据不进入任何上述文件。
 

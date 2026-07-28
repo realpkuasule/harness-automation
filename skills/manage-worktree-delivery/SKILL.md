@@ -36,7 +36,9 @@ node <skill目录>/scripts/run.mjs worktree configure \
   --allow-root <worktree允许父目录的绝对路径>
 ```
 
-向项目负责人展示 `planPath`、完整 `planHash`、配置模式、允许根、保护根、容量和 Provider 映射。
+向项目负责人展示 `planPath`、完整 `planHash`、配置模式、主机绑定中的允许根/保护根、容量和 Provider 映射。仓库配置不得写入主机绝对路径；同一个哈希计划同时覆盖仓库策略和 Git common dir 下的主机绑定。
+
+新机器缺少主机绑定、或旧配置仍内嵌绝对路径时，enforced 分配必须停止并重新生成 configure 迁移计划。未显式提供的 portable 选项沿用现有仓库策略。
 
 只有负责人明确批准展示过的完整哈希后才执行：
 

@@ -1,6 +1,6 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { observeProvider } from "./provider.js";
 import type { WorktreeDeliveryConfig, WorkspaceLease } from "./types.js";
@@ -25,8 +25,6 @@ function config(
     leaseTtlHours: 168,
     reviewTtlMinutes: 120,
     remoteBranchRetentionDays: 14,
-    allowedRoots: ["/tmp"],
-    protectedRoots: ["/"],
     remoteBranchDeletion: false,
     provider,
   };
@@ -47,9 +45,7 @@ function lease(workItem = "github:example/project#24"): WorkspaceLease {
 }
 
 function installGh(root: string): void {
-  const executable = join(root, "gh");
-  writeFileSync(executable, `#!/usr/bin/env node
-const command = process.argv[2];
+  const script = `const command = process.argv[2];
 const mode = process.env.HARNESS_TEST_GH_MODE;
 if (mode === "invalid-json") {
   process.stdout.write("not-json");
@@ -84,9 +80,16 @@ if (command === "project") {
   process.stderr.write("unexpected command");
   process.exit(2);
 }
-`, "utf8");
-  chmodSync(executable, 0o755);
-  process.env.PATH = `${root}:${originalPath ?? ""}`;
+`;
+  if (process.platform === "win32") {
+    writeFileSync(join(root, "gh.js"), script, "utf8");
+    writeFileSync(join(root, "gh.cmd"), "@node \"%~dp0gh.js\" %*\r\n", "utf8");
+  } else {
+    const executable = join(root, "gh");
+    writeFileSync(executable, `#!/usr/bin/env node\n${script}`, "utf8");
+    chmodSync(executable, 0o755);
+  }
+  process.env.PATH = `${root}${delimiter}${originalPath ?? ""}`;
 }
 
 afterEach(() => {
