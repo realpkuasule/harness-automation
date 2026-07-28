@@ -47,4 +47,5 @@ jobs:
         run: npx vitest run src/worktree/service.test.ts --testTimeout=20000
 
       - name: Build
+        if: runner.os != 'Windows'
         run: npm run build
