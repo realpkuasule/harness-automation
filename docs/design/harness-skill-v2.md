@@ -347,6 +347,29 @@ existing repository tools or an owner-approved plan. Verify syntax, schema,
 policy, secret exposure, immutable image references, and deployment overlays
 only when a sound validator is configured.
 
+### 8.5 Custom and unknown stacks
+
+Stack identifiers are an open, normalized namespace rather than an enum tied to
+the currently bundled adapters. The owner may select lowercase kebab-case
+identifiers such as `csharp`, `godot`, `rust`, or a future framework name.
+
+An unknown stack must not terminate the Harness lifecycle. Intake, immutable
+planning, portable context, source hashes, atomic apply, drift, and rollback
+remain available through the generic policy compiler. `check` reports adapter
+coverage separately:
+
+- `stackAdapters[*].status = available` when Harness has a built-in adapter;
+- `stackAdapters[*].status = blocked` when stack-specific enforcement is
+  unavailable;
+- `stackCoverageComplete = false` when any selected stack is blocked.
+
+Blocked optional coverage does not roll back a valid generic baseline, but it
+must remain visible and must never be described as language-level enforcement.
+Repository-owned deterministic gates are discovered from conventional
+`verify:*`, `*:check`, `test:*`, and `build:*` package scripts. Missing adapter
+coverage must not be replaced with a second repository-local intake, approval,
+drift, or rollback implementation.
+
 ## 9. CLI contract
 
 ```text
@@ -417,9 +440,12 @@ and rollback behavior that can lose nested or pre-existing files.
 
 ### 12.1 Fixture repositories
 
-Maintain realistic fixture projects for all three stack paths. Each fixture must
-contain valid and intentionally invalid cases for naming, boundary conversion,
-contract drift, test gates, generated code, and deployment configuration.
+Maintain realistic fixture projects for all three built-in stack paths and one
+unknown-stack fallback path. Each built-in fixture must contain valid and
+intentionally invalid cases for naming, boundary conversion, contract drift,
+test gates, generated code, and deployment configuration. The fallback fixture
+must prove that an owner-selected C#/Godot-style stack can complete
+plan/apply/check/rollback while its unavailable adapter remains visibly blocked.
 
 ### 12.2 Adapter contract tests
 

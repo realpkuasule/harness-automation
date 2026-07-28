@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { parse } from "@typescript-eslint/typescript-estree";
 
@@ -158,13 +159,18 @@ export function checkTypeScript(root: string): NamingCheck {
   };
 }
 
-function externalChecker(command: string, args: string[], selfTestArgs: string[]): NamingCheck {
-  const fixture = spawnSync(command, selfTestArgs, { encoding: "utf8", timeout: 30_000 });
+function externalChecker(
+  command: string,
+  args: string[],
+  selfTestArgs: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): NamingCheck {
+  const fixture = spawnSync(command, selfTestArgs, { encoding: "utf8", env, timeout: 30_000 });
   const enforced = fixture.status === 1;
   if (fixture.error && (fixture.error as NodeJS.ErrnoException).code === "ENOENT") {
     return { enforced: false, passing: false, violations: [], detail: `${command} is not installed` };
   }
-  const result = spawnSync(command, args, { encoding: "utf8", timeout: 120_000 });
+  const result = spawnSync(command, args, { encoding: "utf8", env, timeout: 120_000 });
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
   return {
     enforced,
@@ -187,5 +193,9 @@ export function checkGo(root: string): NamingCheck {
   if (!existsSync(checker)) {
     return { enforced: false, passing: false, violations: [], detail: "Go naming checker is not configured" };
   }
-  return externalChecker("go", ["run", checker, root], ["run", checker, "--self-test"]);
+  const env = {
+    ...process.env,
+    GOCACHE: process.env.GOCACHE || join(tmpdir(), "harness-automation-go-build"),
+  };
+  return externalChecker("go", ["run", checker, root], ["run", checker, "--self-test"], env);
 }

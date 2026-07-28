@@ -38,12 +38,22 @@ Harness ships a Go standard-library AST checker and self-tests it with an invali
 
 ## Ambiguous repositories
 
-If discovery returns `custom`, do not silently choose the nearest preset. Ask the owner to approve the exact subset of supported stacks: `typescript`, `python`, `go`, `postgresql`, `grpc`, and `kubernetes`.
+If discovery returns `custom`, do not silently choose the nearest preset. Ask the owner to approve the exact stack identifiers. Use lowercase kebab-case such as `typescript`, `csharp`, `godot`, or `rust`.
 
 Compile custom repositories with repeated `--stack` arguments, for example:
 
 ```bash
 harness-automation plan --project . --profile custom --stack typescript
+harness-automation plan --project . --profile custom --stack csharp --stack godot
 ```
 
-Language naming gates and Kubernetes guidance are selected by stack. Framework-specific policies remain exclusive to their complete presets, so `custom + typescript` does not add NestJS, Prisma, tRPC, Next.js, or PostgreSQL. A selected stack that discovery did not observe is allowed only as an explicit owner decision and appears as a plan warning. Languages or enforcement adapters outside the supported list still require an adapter design and must report unavailable enforcement as `blocked`.
+Built-in adapters currently exist for `typescript`, `python`, `go`, `postgresql`, `grpc`, and `kubernetes`. Language naming gates and Kubernetes guidance are selected by stack. Framework-specific policies remain exclusive to their complete presets, so `custom + typescript` does not add NestJS, Prisma, tRPC, Next.js, or PostgreSQL.
+
+A selected stack that discovery did not observe is allowed only as an explicit owner decision and appears as a plan warning. A stack without a built-in adapter remains in the compiled policy: generic continuity, source approval, immutable planning, drift, and rollback still work, while `check.stackAdapters` reports stack-specific enforcement as `blocked`.
+
+Do not solve missing adapter coverage by replacing Harness with a second repository-local governance lifecycle. Put approved stack-specific guidance outside the Harness-managed block in `AGENTS.md`; the plan preserves and hashes the complete resulting file. Expose deterministic project checks through conventional package scripts:
+
+- commit gates: `verify:*`, `*:check`, `lint`, `typecheck`, `format:check`;
+- CI gates: `test`, `test:*`, `build`, `build:*`.
+
+Harness discovers these commands as argv and includes them in the reviewed plan. A future built-in adapter may replace the blocked coverage without changing the project’s approval or rollback model.

@@ -35,7 +35,14 @@ describe("v2 MCP transport", () => {
     expect(planTool?.inputSchema).toMatchObject({
       properties: {
         profile: { enum: ["full-typescript", "python-data-ai", "go-performance", "custom"] },
-        stacks: { type: "array", items: { enum: ["typescript", "python", "go", "postgresql", "grpc", "kubernetes"] } },
+        stacks: {
+          type: "array",
+          maxItems: 16,
+          items: {
+            type: "string",
+            pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          },
+        },
       },
     });
 

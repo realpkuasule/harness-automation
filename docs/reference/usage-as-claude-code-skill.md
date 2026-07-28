@@ -64,7 +64,17 @@ harness-automation plan --project . --profile <profile>
 harness-automation plan --project . --profile custom --stack typescript
 ```
 
-`--stack` 可重复；可选值为 `typescript`、`python`、`go`、`postgresql`、`grpc`、`kubernetes`。计划会警告负责人批准但 discovery 尚未观察到的 stack。
+`--stack` 可重复并接受小写 kebab-case 标识。`typescript`、`python`、`go`、`postgresql`、`grpc`、`kubernetes` 有内置适配器；其他标识继续使用通用 Harness 策略，并在 `check.stackAdapters` 中把栈级 enforcement 标为 `blocked`、把 `stackCoverageComplete` 设为 `false`。计划会警告负责人批准但 discovery 尚未观察到的 stack。
+
+例如 C#/Godot 项目继续使用同一条批准链：
+
+```bash
+harness-automation plan --project . --profile custom \
+  --stack csharp \
+  --stack godot
+```
+
+不得因为缺少内置适配器而停止 `plan/apply`，也不得在目标仓库复制另一套 intake、哈希批准、drift 或 rollback 实现。专用指导可放在 `AGENTS.md` 的 Harness managed block 之外；确定性检查通过 `verify:*`、`*:check`、`test:*` 或 `build:*` 包脚本接入。
 
 Agent 必须把计划中的路径、旧/新哈希、验证命令、guidance 和完整计划哈希展示给负责人。负责人明确批准该哈希后才能运行：
 

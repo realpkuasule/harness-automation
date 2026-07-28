@@ -63,7 +63,9 @@ node <skill目录>/scripts/run.mjs discover --project <项目绝对路径>
 - `python-data-ai`：Django + Pydantic + PostgreSQL + Celery + React/TS + K8s。
 - `go-performance`：Go + sqlc/ent + PostgreSQL + gRPC + K8s + TS 前端。
 
-发现结果为 `custom` 时，解释证据并让负责人批准精确 stack 列表。不要为了复用 preset 而引入仓库不存在或设计明确禁止的框架。例如 Vite/Electron 目标项目可批准 `custom + typescript`，不得套用包含 NestJS、Prisma、tRPC、Next.js 和 PostgreSQL 的 `full-typescript`。详细边界约定见 [stack-adapters.md](references/stack-adapters.md)。
+发现结果为 `custom` 时，解释证据并让负责人批准精确 stack 列表。stack 使用小写 kebab-case 标识；除内置的 `typescript`、`python`、`go`、`postgresql`、`grpc`、`kubernetes` 外，也可声明 `csharp`、`godot`、`rust` 等未知栈。不要为了复用 preset 而引入仓库不存在或设计明确禁止的框架。例如 Vite/Electron 目标项目可批准 `custom + typescript`，不得套用包含 NestJS、Prisma、tRPC、Next.js 和 PostgreSQL 的 `full-typescript`。详细边界约定见 [stack-adapters.md](references/stack-adapters.md)。
+
+未知栈不得中断 Harness，也不得在业务仓库复制另一套 intake、哈希批准、apply、drift 或 rollback 系统。继续使用 `custom plan/apply` 建立通用跨会话基线；让 Harness 把缺失的栈级适配器如实报告为 `blocked`。专用架构规则可写在 `AGENTS.md` 的 Harness managed block 之外，由计划完整保留并纳入输出哈希。现有仓库 gate 应暴露为 `verify:*`、`*:check`、`test:*` 或 `build:*` 包脚本，让 discovery 纳入 commit/CI 检查。
 
 ### 4. 只生成计划
 
@@ -72,6 +74,9 @@ node <skill目录>/scripts/run.mjs plan --project <项目绝对路径> --profile
 
 # custom 仓库：--stack 可重复，必须与负责人批准的精确列表一致
 node <skill目录>/scripts/run.mjs plan --project <项目绝对路径> --profile custom --stack typescript
+
+# 未知栈仍走同一计划，例如 C# + Godot
+node <skill目录>/scripts/run.mjs plan --project <项目绝对路径> --profile custom --stack csharp --stack godot
 ```
 
 向负责人展示：选定 stack、未在仓库中观察到的 stack 警告、将修改的路径、每个旧/新哈希、建议验证命令、未自动形式化的 guidance 和计划哈希。计划不得安装依赖、运行迁移、修改仓库设置或覆盖既有 CI。preset 不接受 `--stack` 裁剪；需要裁剪时改用 `custom` 并显式列出 stack。
@@ -93,7 +98,7 @@ node <skill目录>/scripts/run.mjs check --project <项目绝对路径> --mode s
 node <skill目录>/scripts/run.mjs drift --project <项目绝对路径>
 ```
 
-分别报告 `configured`、`loaded`、`enforced`、`passing`。写进 Agent 文档不等于 enforced；认知规则必须显示为 `guidance`。失败时展示具体违规和被阻塞的运行时，不要虚报完成。
+分别报告 `configured`、`loaded`、`enforced`、`passing`，并展示 `stackAdapters` 和 `stackCoverageComplete`。写进 Agent 文档不等于 enforced；认知规则必须显示为 `guidance`；没有内置适配器的 stack 必须显示为 `blocked`。通用 Harness 基线可以成功应用，但不得把它描述成未知栈已经获得语言级 enforcement。
 
 提交前可用 `--mode commit` 追加格式、lint、类型、Django、Go、Proto 等已发现的快速 gate；CI 用 `--mode ci` 追加测试与构建。命令始终以 argv 执行，缺失工具显示 `blocked`。
 

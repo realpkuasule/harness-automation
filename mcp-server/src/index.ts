@@ -53,7 +53,7 @@ import {
   rollbackChange as rollbackV2Change,
   runTrustedChecks as runV2TrustedChecks,
 } from "./v2/service.js";
-import { SUPPORTED_STACKS, type Stack, type StackProfile } from "./v2/types.js";
+import { MAX_STACKS, STACK_ID_PATTERN_SOURCE, SUPPORTED_STACKS, type Stack, type StackProfile } from "./v2/types.js";
 import {
   EvaluateRulesInputSchema,
   GenerateConfigInputSchema,
@@ -137,7 +137,23 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
       {
         name: "harness_plan",
         description: "v2: compile policy and write an immutable plan; does not apply target changes",
-        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" }, profile: { enum: ["full-typescript", "python-data-ai", "go-performance", "custom"] }, stacks: { type: "array", minItems: 1, uniqueItems: true, items: { enum: [...SUPPORTED_STACKS] } } } },
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["projectDir"],
+          properties: {
+            projectDir: { type: "string" },
+            profile: { enum: ["full-typescript", "python-data-ai", "go-performance", "custom"] },
+            stacks: {
+              type: "array",
+              minItems: 1,
+              maxItems: MAX_STACKS,
+              uniqueItems: true,
+              description: `Owner-approved lowercase stack identifiers. Built-in adapters: ${SUPPORTED_STACKS.join(", ")}; other identifiers retain generic policies and report stack-specific enforcement as blocked.`,
+              items: { type: "string", minLength: 1, maxLength: 64, pattern: STACK_ID_PATTERN_SOURCE },
+            },
+          },
+        },
       },
       {
         name: "harness_apply",

@@ -23,7 +23,9 @@ Discover facts first. Ask only decisions with material policy consequences, one 
 
 The owner must explicitly approve source readiness and the exact plan hash. Other choices may be recorded as proposed policy but may not be applied.
 
-When discovery returns `custom`, record the exact owner-approved stack list before planning. Never translate “use a preset as a baseline, but exclude some of its frameworks” into the full preset. Use `--profile custom` with repeated `--stack` values instead, and surface selected-but-unobserved stacks in the plan warnings.
+When discovery returns `custom`, record the exact owner-approved stack list before planning. Never translate “use a preset as a baseline, but exclude some of its frameworks” into the full preset. Use `--profile custom` with repeated lowercase kebab-case `--stack` values instead, and surface selected-but-unobserved stacks in the plan warnings.
+
+Stack identifiers are open, not a closed preset enum. If a selected stack has no built-in adapter, continue the normal plan/apply/check/rollback lifecycle with generic continuity policies. Report the stack adapter as `blocked`; do not stop Harness and do not create a parallel approval, hash-lock, drift, or rollback implementation in the target repository. Preserve stack-specific guidance outside the Harness-managed `AGENTS.md` block, and expose repository-owned deterministic gates through conventional `verify:*`, `*:check`, `test:*`, or `build:*` package scripts.
 
 ## Safe command sequence
 
@@ -58,4 +60,4 @@ Never treat stars as the primary criterion.
 
 ## Completion language
 
-Report completion only when apply succeeded and all deterministic rules report `enforced: true` and `passing: true`. Apply runs session-level enforcement immediately and restores every target if that verification fails. Cognitive policies stay `guidance`; unavailable runtimes stay `blocked`. Include the policy digest, change ID, verification result, and exact rollback command.
+Report generic Harness setup completion only when apply succeeded and all required deterministic rules report `enforced: true` and `passing: true`. Apply runs session-level enforcement immediately and restores every target if that verification fails. Cognitive policies stay `guidance`; unavailable runtimes and unknown stack adapters stay `blocked`. A successful generic baseline is not full stack enforcement. Include the policy digest, change ID, verification result, blocked adapter coverage, and exact rollback command.

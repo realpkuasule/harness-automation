@@ -78,6 +78,31 @@ describe("v2 stack discovery", () => {
     write(go, "package-lock.json", "{}\n");
     expect(discoverProject(go).profile).toBe("go-performance");
   });
+
+  it("detects C# and Godot without pretending they have built-in adapters", () => {
+    const root = temporaryProject();
+    approvedSources(root);
+    write(root, "Game.sln", "\n");
+    write(root, "src/Game/Game.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />\n");
+    write(root, "project.godot", "[application]\nconfig/name=\"Game\"\n");
+
+    const discovery = discoverProject(root);
+
+    expect(discovery.profile).toBe("custom");
+    expect(discovery.stacks).toEqual(["csharp", "godot"]);
+    expect(discovery.manifests).toEqual(expect.arrayContaining([
+      "Game.sln",
+      "src/Game/Game.csproj",
+      "project.godot",
+    ]));
+    expect(discovery.commands["dotnet:build"]).toEqual([
+      "dotnet",
+      "build",
+      "Game.sln",
+      "--no-restore",
+    ]);
+    expect(discovery.warnings.join("\n")).toMatch(/No built-in stack adapter for: csharp, godot/);
+  });
 });
 
 describe("v2 custom stack planning", () => {
@@ -123,6 +148,11 @@ describe("v2 custom stack planning", () => {
 
     expect(() => planProject({ projectRoot: root, profile: "custom" }))
       .toThrow(/STACK_SELECTION_REQUIRED/);
+    expect(() => planProject({
+      projectRoot: root,
+      profile: "custom",
+      stacks: ["C#"],
+    })).toThrow(/INVALID_STACK/);
   });
 
   it("rejects stack overrides on complete presets", () => {
@@ -137,6 +167,58 @@ describe("v2 custom stack planning", () => {
       profile: "full-typescript",
       stacks: ["typescript"],
     })).toThrow(/STACK_OVERRIDE_REQUIRES_CUSTOM_PROFILE/);
+  });
+
+  it("keeps unsupported stacks inside the approved plan/apply/check lifecycle", () => {
+    const root = temporaryProject();
+    approvedSources(root);
+    write(root, "package.json", JSON.stringify({
+      scripts: {
+        "governance:check": "node tools/verify-governance.mjs",
+        "test:contracts": "node --test tools/tests/contracts.test.mjs",
+        "verify:contracts": "node tools/verify-contracts.mjs",
+      },
+    }));
+
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    const discovery = discoverProject(root);
+    expect(discovery.stacks).toEqual([]);
+    write(root, ".harness/discovery.json", `${JSON.stringify(discovery, null, 2)}\n`);
+    const { plan, path, policy } = planProject({
+      projectRoot: root,
+      profile: "custom",
+      stacks: ["csharp", "godot"],
+      now: new Date("2026-01-01T00:00:00Z"),
+    });
+
+    expect(policy.project.stacks).toEqual(["csharp", "godot"]);
+    expect(policy.policies.map((item) => item.id)).toEqual([
+      "single-implementation-owner",
+      "contract-first-change",
+      "generated-files-immutable",
+    ]);
+    expect(plan.warnings).toEqual(expect.arrayContaining([
+      "Owner-selected stack not observed during discovery: csharp",
+      "Owner-selected stack not observed during discovery: godot",
+      "Stack-specific enforcement blocked for 'csharp': no built-in adapter; generic continuity policies will still be applied.",
+      "Stack-specific enforcement blocked for 'godot': no built-in adapter; generic continuity policies will still be applied.",
+    ]));
+    expect(plan.commands).toEqual(expect.arrayContaining([
+      ["npm", "run", "governance:check"],
+      ["npm", "run", "test:contracts"],
+      ["npm", "run", "verify:contracts"],
+    ]));
+
+    applyPlan({ projectRoot: root, planPath: path, approval: plan.planHash });
+    const checked = checkProject(root);
+    expect(checked.ok).toBe(true);
+    expect(checked.stackCoverageComplete).toBe(false);
+    expect(checked.stackAdapters).toEqual([
+      expect.objectContaining({ stack: "csharp", support: "none", status: "blocked" }),
+      expect.objectContaining({ stack: "godot", support: "none", status: "blocked" }),
+    ]);
+    expect(readFileSync(join(root, ".harness/generated/effective-policy.md"), "utf8"))
+      .toContain("generic policies apply and stack-specific enforcement is blocked");
   });
 });
 

@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = join(here, "../..");
-const tsx = join(packageRoot, "node_modules/.bin/tsx");
 const cli = join(packageRoot, "src/cli.ts");
 const projects: string[] = [];
 
@@ -18,7 +17,11 @@ function write(root: string, path: string, content: string): void {
 }
 
 function run(root: string, args: string[]): Record<string, unknown> {
-  const result = spawnSync(tsx, [cli, ...args, "--project", root], { encoding: "utf8", timeout: 30_000 });
+  const result = spawnSync(process.execPath, ["--import", "tsx", cli, ...args, "--project", root], {
+    cwd: packageRoot,
+    encoding: "utf8",
+    timeout: 30_000,
+  });
   if (result.status !== 0) throw new Error(`${result.stderr}\n${result.stdout}`);
   return JSON.parse(result.stdout) as Record<string, unknown>;
 }
@@ -83,5 +86,45 @@ describe("v2 CLI forward flow", () => {
     expect(policy.project.stacks).toEqual(["typescript"]);
     expect(policy.policies.map((item) => item.id)).toContain("typescript-naming");
     expect(JSON.stringify(policy)).not.toMatch(/NestJS|Prisma|tRPC|PostgreSQL/iu);
+  }, 30_000);
+
+  it("keeps a C# and Godot repository in the Harness lifecycle", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-cli-csharp-"));
+    projects.push(root);
+    write(root, "docs/PRD.md", "# Game\n");
+    write(root, "docs/design/architecture.md", "# C# deterministic simulation with Godot presentation\n");
+    write(root, "docs/research/github.md", "# Evidence\n");
+    write(root, "Game.sln", "\n");
+    write(root, "src/Game/Game.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />\n");
+    write(root, "project.godot", "[application]\nconfig/name=\"Game\"\n");
+
+    run(root, ["intake", "--owner", "owner", "--approve-sources"]);
+    const discovery = run(root, ["discover"]);
+    expect(discovery.stacks).toEqual(["csharp", "godot"]);
+    const planned = run(root, [
+      "plan",
+      "--profile",
+      "custom",
+      "--stack",
+      "csharp",
+      "--stack",
+      "godot",
+    ]);
+    expect(planned.stacks).toEqual(["csharp", "godot"]);
+    run(root, [
+      "apply",
+      "--plan",
+      String(planned.planPath),
+      "--approve",
+      String(planned.planHash),
+    ]);
+
+    const checked = run(root, ["check", "--mode", "session"]);
+    expect(checked.ok).toBe(true);
+    expect(checked.stackCoverageComplete).toBe(false);
+    expect(checked.stackAdapters).toEqual([
+      expect.objectContaining({ stack: "csharp", status: "blocked" }),
+      expect.objectContaining({ stack: "godot", status: "blocked" }),
+    ]);
   }, 30_000);
 });

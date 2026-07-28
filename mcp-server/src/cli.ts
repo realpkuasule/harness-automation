@@ -24,7 +24,7 @@ import {
   rollbackChange,
   runTrustedChecks,
 } from "./v2/service.js";
-import { SUPPORTED_STACKS, type Stack, type StackProfile } from "./v2/types.js";
+import { normalizeStackIds, type Stack, type StackProfile } from "./v2/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -189,11 +189,7 @@ function profile(args: ParsedArguments): StackProfile | undefined {
 function stacks(args: ParsedArguments): Stack[] | undefined {
   const selected = args.values.get("stack");
   if (!selected) return undefined;
-  const invalid = selected.filter((item) => !SUPPORTED_STACKS.includes(item as Stack));
-  if (invalid.length > 0) {
-    throw new Error(`INVALID_STACK: ${invalid.join(", ")}; choose ${SUPPORTED_STACKS.join(", ")}`);
-  }
-  return [...new Set(selected)] as Stack[];
+  return normalizeStackIds(selected);
 }
 
 function usage(): void {
@@ -214,7 +210,8 @@ Usage:
   harness-automation explain <policy-id> [--project .]
   harness-automation rollback [--project .] [--change <id>]
 
-All workflow commands emit stable JSON. Apply requires the exact hash printed by plan.`);
+All workflow commands emit stable JSON. Apply requires the exact hash printed by plan.
+Custom stack identifiers use lowercase kebab-case. Unknown stacks retain generic policies and report stack-specific enforcement as blocked.`);
 }
 
 function runWorkflow(argv: string[]): void {

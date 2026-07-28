@@ -31,8 +31,10 @@ import type {
   PolicyDocument,
   SourceSnapshot,
   Stack,
+  StackAdapterResult,
   StackProfile,
 } from "./types.js";
+import { hasBuiltInStackAdapter, stackAdapterSupport } from "./types.js";
 import { checkGo, checkPython, checkTypeScript } from "./verifier.js";
 
 const HARNESS_DIR = ".harness";
@@ -254,6 +256,9 @@ export function planProject(args: {
       ...(args.stacks ?? [])
         .filter((stack) => !discovery.stacks.includes(stack))
         .map((stack) => `Owner-selected stack not observed during discovery: ${stack}`),
+      ...policy.project.stacks
+        .filter((stack) => !hasBuiltInStackAdapter(stack))
+        .map((stack) => `Stack-specific enforcement blocked for '${stack}': no built-in adapter; generic continuity policies will still be applied.`),
       ...policy.policies.filter((item) => item.formalization === "cognitive").map((item) => `${item.id}: guidance requires owner/reviewer judgment`),
     ],
     planHash: "",
@@ -396,6 +401,8 @@ export function checkProject(projectRoot: string): {
   policyDigest: string;
   agents: Array<{ id: string; configured: boolean; loaded: boolean; enforced: boolean; passing: boolean; status: "verified" | "failing" | "blocked" }>;
   results: EnforcementResult[];
+  stackAdapters: StackAdapterResult[];
+  stackCoverageComplete: boolean;
   violations: string[];
 } {
   const root = resolve(projectRoot);
@@ -432,6 +439,19 @@ export function checkProject(projectRoot: string): {
   const hardResults = results.filter((item) => item.status !== "guidance");
   const hardEnforced = hardResults.every((item) => item.enforced);
   const hardPassing = hardResults.every((item) => item.passing);
+  const stackAdapters = policy.project.stacks.map<StackAdapterResult>((stack) => {
+    const support = stackAdapterSupport(stack);
+    const available = support !== "none";
+    return {
+      stack,
+      support,
+      available,
+      status: available ? "available" : "blocked",
+      detail: available
+        ? `Harness provides ${support} policy support for '${stack}'.`
+        : `No built-in adapter for '${stack}'; generic continuity policies are active, but stack-specific enforcement is unavailable.`,
+    };
+  });
   const agents = policy.agents.adapters.map((adapter) => {
     const path = adapter.id === "claude-code" ? "CLAUDE.md" : "AGENTS.md";
     const target = join(root, path);
@@ -453,6 +473,8 @@ export function checkProject(projectRoot: string): {
     policyDigest: digest,
     agents,
     results,
+    stackAdapters,
+    stackCoverageComplete: stackAdapters.every((adapter) => adapter.available),
     violations,
   };
 }
@@ -478,9 +500,16 @@ function trustedCommands(root: string, discovery: Discovery, mode: "session" | "
     if (command && !selected.some((item) => JSON.stringify(item.command) === JSON.stringify(command))) selected.push({ id, command });
   };
   for (const [id, command] of Object.entries(discovery.commands)) {
-    const name = id.split(":").at(-1)?.toLowerCase() ?? "";
-    if (["lint", "typecheck", "check", "format:check"].includes(name)) add(id, command);
-    if (mode === "ci" && ["test", "build", "test:ci"].includes(name)) add(id, command);
+    const parts = id.split(":");
+    const name = parts.length >= 3 ? parts.slice(2).join(":").toLowerCase() : parts.at(-1)?.toLowerCase() ?? "";
+    const commitGate = ["lint", "typecheck", "check", "format:check"].includes(name) ||
+      name.startsWith("verify:") ||
+      name.endsWith(":check");
+    const ciGate = ["test", "build", "test:ci"].includes(name) ||
+      name.startsWith("test:") ||
+      name.startsWith("build:");
+    if (commitGate) add(id, command);
+    if (mode === "ci" && ciGate) add(id, command);
   }
   if (discovery.stacks.includes("python") && existsSync(join(root, "manage.py"))) {
     add("django:check", ["python3", "manage.py", "check"]);
@@ -507,7 +536,13 @@ function trustedCommands(root: string, discovery: Discovery, mode: "session" | "
 export function runTrustedChecks(args: {
   projectRoot: string;
   mode: "session" | "commit" | "ci";
-}): { ok: boolean; policy: ReturnType<typeof checkProject>; commands: TrustedCommandResult[] } {
+}): {
+  ok: boolean;
+  policy: ReturnType<typeof checkProject>;
+  stackAdapters: StackAdapterResult[];
+  stackCoverageComplete: boolean;
+  commands: TrustedCommandResult[];
+} {
   const root = resolve(args.projectRoot);
   const policy = checkProject(root);
   const discovery = readJson<Discovery>(harnessPath(root, "discovery.json"));
@@ -530,7 +565,13 @@ export function runTrustedChecks(args: {
     const passed = result.status === 0 && !gofmtDirty;
     return { id, command, status: passed ? "passed" : "failed", exitCode: result.status, output };
   });
-  return { ok: policy.ok && commands.every((item) => item.status === "passed"), policy, commands };
+  return {
+    ok: policy.ok && commands.every((item) => item.status === "passed"),
+    policy,
+    stackAdapters: policy.stackAdapters,
+    stackCoverageComplete: policy.stackCoverageComplete,
+    commands,
+  };
 }
 
 export function explainPolicy(projectRoot: string, policyId: string): PolicyDocument["policies"][number] {

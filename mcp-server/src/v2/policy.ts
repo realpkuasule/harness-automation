@@ -8,6 +8,7 @@ import type {
   Stack,
   StackProfile,
 } from "./types.js";
+import { normalizeStackIds, stackAdapterSupport } from "./types.js";
 
 export const MANAGED_START = "<!-- harness-automation:v2:start -->";
 export const MANAGED_END = "<!-- harness-automation:v2:end -->";
@@ -226,9 +227,11 @@ export function compilePolicy(args: {
   if (profile !== "custom" && args.stacks?.length) {
     throw new Error("STACK_OVERRIDE_REQUIRES_CUSTOM_PROFILE: use --profile custom with explicit --stack values");
   }
-  const stacks = profile === "custom"
-    ? [...new Set(args.stacks ?? [])]
-    : stacksForProfile(profile, args.discovery.stacks);
+  const stacks = normalizeStackIds(
+    profile === "custom"
+      ? args.stacks ?? []
+      : stacksForProfile(profile, args.discovery.stacks),
+  );
   if (stacks.length === 0) {
     throw new Error("STACK_SELECTION_REQUIRED: use --profile custom with one or more explicit --stack values");
   }
@@ -263,6 +266,12 @@ export function compilePolicy(args: {
 }
 
 export function renderEffectivePolicy(policy: PolicyDocument, digest: string): string {
+  const stackCoverage = policy.project.stacks.map((stack) => {
+    const support = stackAdapterSupport(stack);
+    return support === "none"
+      ? `- \`${stack}\`: no built-in adapter; generic policies apply and stack-specific enforcement is blocked.`
+      : `- \`${stack}\`: built-in ${support} support.`;
+  });
   const sections = policy.policies.map((item, index) => {
     const verification = item.verification.commands.length > 0
       ? item.verification.commands.map((command) => `\`${command.join(" ")}\``).join(", ")
@@ -285,6 +294,10 @@ export function renderEffectivePolicy(policy: PolicyDocument, digest: string): s
     `Stack: ${policy.project.stacks.join(", ")}`,
     "",
     "This file is generated. Change `.harness/policy.yaml`, obtain owner approval, and recompile instead of editing this file.",
+    "",
+    "## Stack adapter coverage",
+    "",
+    ...stackCoverage,
     "",
     ...sections,
     "",

@@ -40,11 +40,11 @@ Harness 不修改或替代 `grill-me`，只消费它和设计流程留下的仓�
 | `full-typescript` | NestJS + Prisma + tRPC + Next.js | TS/JSON camelCase；PostgreSQL snake_case；Prisma 显式映射 |
 | `python-data-ai` | Django + Pydantic + PostgreSQL + Celery + React/TS + K8s | Python snake_case；JSON/TS camelCase；Pydantic 显式 alias |
 | `go-performance` | Go + sqlc/ent + PostgreSQL + gRPC + K8s + TS | Go mixedCaps；Proto/DB snake_case；Proto JSON/TS camelCase |
-| `custom` | 由负责人批准精确 stack 组合 | 只编译所选 stack 的规则，不继承最接近 preset 的框架 |
+| `custom` | 由负责人批准精确 stack 标识 | 只编译可用适配器，不继承最接近 preset 的框架 |
 
 TypeScript、Python 和 Go 的代码命名由 AST 检查器验证。数据库、RPC、API 和生成代码边界分别保留自己的惯用形式，通过 schema/compiler 显式转换。
 
-`custom` 当前支持 `typescript`、`python`、`go`、`postgresql`、`grpc`、`kubernetes`。例如 `custom + typescript` 不会隐式加入 NestJS、Prisma、tRPC、Next.js 或 PostgreSQL。
+`custom` 接受小写 kebab-case stack 标识。`typescript`、`python`、`go`、`postgresql`、`grpc`、`kubernetes` 有内置适配器；`csharp`、`godot`、`rust` 等未知栈仍可进入完整 plan/apply/check/rollback 闭环，但栈级 enforcement 会如实报告为 `blocked`。例如 `custom + typescript` 不会隐式加入 NestJS、Prisma、tRPC、Next.js 或 PostgreSQL。
 
 ## 安装
 
@@ -112,6 +112,11 @@ harness-automation plan --project . --profile custom \
   --stack typescript \
   --stack postgresql
 
+# 没有内置 adapter 的栈不会中断 Harness
+harness-automation plan --project . --profile custom \
+  --stack csharp \
+  --stack godot
+
 # 负责人审阅计划后，使用输出中的完整哈希批准
 harness-automation apply --project . \
   --plan .harness/plans/<plan>.json \
@@ -177,7 +182,7 @@ harness-automation context --project . --agent codex
 - `enforced`：真实检查器能拒绝已知无效 fixture；
 - `passing`：当前代码库通过检查。
 
-写入 instruction 文件不等于 enforced。设计判断类规则始终显示为 `guidance`；缺少运行时或适配器时显示为 `blocked`。
+`stackAdapters` 另外报告每个 stack 的内置适配器覆盖，`stackCoverageComplete` 汇总是否全部覆盖。写入 instruction 文件不等于 enforced。设计判断类规则始终显示为 `guidance`；缺少运行时或适配器时显示为 `blocked`。未知栈的通用 Harness 基线可以成功应用，但不等于该语言已经获得确定性 enforcement。
 
 ## CLI 与 MCP
 

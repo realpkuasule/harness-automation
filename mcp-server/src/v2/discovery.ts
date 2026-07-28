@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
-import type { AgentDiscovery, Discovery, Evidence, Stack, StackProfile } from "./types.js";
+import { hasBuiltInStackAdapter, type AgentDiscovery, type Discovery, type Evidence, type Stack, type StackProfile } from "./types.js";
 
 const IGNORED_DIRECTORIES = new Set([
   ".git",
@@ -54,7 +54,7 @@ function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
 }
 
-function commandFromPackages(packageFiles: string[], root: string): Record<string, string[]> {
+function commandFromProject(packageFiles: string[], files: string[], root: string): Record<string, string[]> {
   const commands: Record<string, string[]> = {};
   const manager = existsSync(join(root, "pnpm-lock.yaml")) ? "pnpm"
     : existsSync(join(root, "yarn.lock")) ? "yarn"
@@ -87,6 +87,12 @@ function commandFromPackages(packageFiles: string[], root: string): Record<strin
     commands["go:test"] = ["go", "test", "./..."];
     commands["go:vet"] = ["go", "vet", "./..."];
   }
+  const dotnetTarget = files.find((path) => path.endsWith(".sln")) ??
+    files.find((path) => path.endsWith(".csproj"));
+  if (dotnetTarget) {
+    commands["dotnet:build"] = ["dotnet", "build", dotnetTarget, "--no-restore"];
+    commands["dotnet:test"] = ["dotnet", "test", dotnetTarget, "--no-build", "--no-restore"];
+  }
   return commands;
 }
 
@@ -117,6 +123,16 @@ export function discoverProject(root: string, now = new Date()): Discovery {
   });
   const hasK8s = files.some((path) => /(^|\/)(Chart\.yaml|kustomization\.ya?ml)$/u.test(path)) ||
     files.some((path) => /^k8s\//u.test(path) && /\.ya?ml$/u.test(path));
+  const hasCSharp = files.some((path) => /\.(?:csproj|sln)$/u.test(path)) ||
+    files.some((path) => /(^|\/)Directory\.Build\.(?:props|targets)$/u.test(path));
+  const hasGodot = files.some((path) => /(^|\/)project\.godot$/u.test(path));
+  const hasUnity = files.some((path) => /(^|\/)ProjectSettings\/ProjectVersion\.txt$/u.test(path));
+  const hasRust = files.some((path) => /(^|\/)Cargo\.toml$/u.test(path));
+  const hasJava = files.some((path) => /(^|\/)(pom\.xml|build\.gradle)$/u.test(path));
+  const hasKotlin = files.some((path) => /(^|\/)build\.gradle\.kts$/u.test(path)) ||
+    files.some((path) => path.endsWith(".kt"));
+  const hasSwift = files.some((path) => /(^|\/)Package\.swift$/u.test(path)) ||
+    files.some((path) => path.endsWith(".xcodeproj/project.pbxproj"));
 
   const stacks: Stack[] = [];
   if (hasTs) stacks.push("typescript");
@@ -125,6 +141,13 @@ export function discoverProject(root: string, now = new Date()): Discovery {
   if (hasPostgres) stacks.push("postgresql");
   if (hasGrpc) stacks.push("grpc");
   if (hasK8s) stacks.push("kubernetes");
+  if (hasCSharp) stacks.push("csharp");
+  if (hasGodot) stacks.push("godot");
+  if (hasUnity) stacks.push("unity");
+  if (hasRust) stacks.push("rust");
+  if (hasJava) stacks.push("java");
+  if (hasKotlin) stacks.push("kotlin");
+  if (hasSwift) stacks.push("swift");
 
   let profile: StackProfile = "custom";
   if (hasNest && hasPrisma && hasTrpc && hasNext) profile = "full-typescript";
@@ -134,10 +157,10 @@ export function discoverProject(root: string, now = new Date()): Discovery {
   }
 
   const manifests = files.filter((path) =>
-    /(^|\/)(package\.json|pyproject\.toml|requirements[^/]*\.txt|go\.mod|Cargo\.toml|pom\.xml|build\.gradle(?:\.kts)?)$/u.test(path),
+    /(^|\/)(package\.json|pyproject\.toml|requirements[^/]*\.txt|go\.mod|Cargo\.toml|pom\.xml|build\.gradle(?:\.kts)?|Package\.swift|project\.godot|ProjectSettings\/ProjectVersion\.txt|Directory\.Build\.(?:props|targets)|[^/]+\.(?:csproj|sln))$/u.test(path),
   );
   const lockfiles = files.filter((path) =>
-    /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|poetry\.lock|uv\.lock|go\.sum)$/u.test(path),
+    /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|poetry\.lock|uv\.lock|go\.sum|Cargo\.lock|packages\.lock\.json|gradle\.lockfile|Package\.resolved)$/u.test(path),
   );
   const boundaries = unique([
     ...(hasPrisma || hasPostgres ? ["database"] : []),
@@ -173,6 +196,12 @@ export function discoverProject(root: string, now = new Date()): Discovery {
   ];
   const warnings: string[] = [];
   if (profile === "custom") warnings.push("No preset stack profile matched exactly; owner-approved custom stacks are required.");
+  const stacksWithoutAdapters = stacks.filter((stack) => !hasBuiltInStackAdapter(stack));
+  if (stacksWithoutAdapters.length > 0) {
+    warnings.push(
+      `No built-in stack adapter for: ${stacksWithoutAdapters.join(", ")}. Generic continuity policies remain available; stack-specific enforcement will be reported as blocked.`,
+    );
+  }
   if (lockfiles.length === 0) warnings.push("No dependency lockfile was found.");
 
   return {
@@ -183,7 +212,7 @@ export function discoverProject(root: string, now = new Date()): Discovery {
     manifests,
     lockfiles,
     packages: packageFiles.map((path) => path.replace(/\/package\.json$/u, "") || "."),
-    commands: commandFromPackages(packageFiles, root),
+    commands: commandFromProject(packageFiles, files, root),
     boundaries,
     agents,
     evidence,

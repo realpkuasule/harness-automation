@@ -1,5 +1,8 @@
 export const HARNESS_VERSION = "2.0" as const;
 
+export const STACK_ID_PATTERN_SOURCE = "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$";
+export const MAX_STACKS = 16;
+
 export const SUPPORTED_STACKS = [
   "typescript",
   "python",
@@ -9,7 +12,36 @@ export const SUPPORTED_STACKS = [
   "kubernetes",
 ] as const;
 
-export type Stack = typeof SUPPORTED_STACKS[number];
+export type SupportedStack = typeof SUPPORTED_STACKS[number];
+export type Stack = string;
+export type StackAdapterSupport = "deterministic" | "procedural" | "guidance" | "none";
+
+const STACK_ID_PATTERN = new RegExp(STACK_ID_PATTERN_SOURCE, "u");
+
+export function hasBuiltInStackAdapter(stack: Stack): stack is SupportedStack {
+  return (SUPPORTED_STACKS as readonly string[]).includes(stack);
+}
+
+export function stackAdapterSupport(stack: Stack): StackAdapterSupport {
+  if (["typescript", "python", "go"].includes(stack)) return "deterministic";
+  if (stack === "kubernetes") return "procedural";
+  if (["postgresql", "grpc"].includes(stack)) return "guidance";
+  return "none";
+}
+
+export function normalizeStackIds(values: readonly string[]): Stack[] {
+  if (values.length > MAX_STACKS) {
+    throw new Error(`TOO_MANY_STACKS: at most ${MAX_STACKS} stack identifiers are allowed`);
+  }
+  const stacks = [...new Set(values.map((value) => value.trim()))];
+  const invalid = stacks.filter((stack) => stack.length > 64 || !STACK_ID_PATTERN.test(stack));
+  if (invalid.length > 0) {
+    throw new Error(
+      `INVALID_STACK: ${invalid.join(", ")}; use lowercase kebab-case identifiers such as typescript, csharp, or godot`,
+    );
+  }
+  return stacks;
+}
 
 export type StackProfile =
   | "full-typescript"
@@ -169,5 +201,13 @@ export interface EnforcementResult {
   enforced: boolean;
   passing: boolean;
   status: "verified" | "failing" | "blocked" | "guidance";
+  detail: string;
+}
+
+export interface StackAdapterResult {
+  stack: Stack;
+  support: StackAdapterSupport;
+  available: boolean;
+  status: "available" | "blocked";
   detail: string;
 }
