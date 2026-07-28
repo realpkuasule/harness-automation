@@ -65,7 +65,10 @@ if (mode === "fail-issue" && command === "issue") {
 }
 if (command === "project") {
   process.stdout.write(JSON.stringify({
-    items: mode === "project-missing" ? [] : [{
+    items: mode === "project-missing" ? [] : mode === "flattened" ? [{
+      content: { number: 24 },
+      status: "In Progress"
+    }] : [{
       content: { number: 24 },
       fieldValues: [{ field: { name: "Workflow" }, name: "Done" }]
     }]
@@ -157,6 +160,26 @@ describe("worktree provider adapters", () => {
     }), [lease()])).toMatchObject({
       available: true,
       items: [{ projectItemPresent: false, projectStatus: undefined }],
+    });
+  });
+
+  it("loads flattened Project fields case-insensitively", () => {
+    const root = directory();
+    installGh(root);
+    process.env.HARNESS_TEST_GH_MODE = "flattened";
+
+    expect(observeProvider(root, config({
+      kind: "github",
+      repository: "example/project",
+      project: {
+        owner: "example",
+        number: 2,
+        statusField: "Status",
+        doneValues: ["Done"],
+      },
+    }), [lease()])).toMatchObject({
+      available: true,
+      items: [{ projectStatus: "In Progress" }],
     });
   });
 
