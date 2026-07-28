@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/realpkuasule/harness-automation/main/docs/api/worktree-host-binding-v1.schema.json",
+  "title": "Harness Worktree Host Binding v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "allowedRoots", "protectedRoots"],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "allowedRoots": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Canonical absolute paths on this host under which persistent worktrees may be allocated.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "protectedRoots": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Canonical absolute paths on this host that cannot contain a managed worktree.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

@@ -26,8 +26,6 @@ export interface WorktreeDeliveryConfig {
   leaseTtlHours: number;
   reviewTtlMinutes: number;
   remoteBranchRetentionDays: number;
-  allowedRoots: string[];
-  protectedRoots: string[];
   remoteBranchDeletion: false;
   provider: {
     kind: "none" | "github" | "gitlab" | "jira";
@@ -39,6 +37,20 @@ export interface WorktreeDeliveryConfig {
       doneValues: string[];
     };
   };
+}
+
+export interface WorktreeHostBinding {
+  schemaVersion: "1.0";
+  allowedRoots: string[];
+  protectedRoots: string[];
+}
+
+export interface WorktreeHostBindingObservation extends WorktreeHostBinding {
+  configured: boolean;
+  loaded: boolean;
+  source: "host-local" | "legacy-config" | "default";
+  path: string;
+  hash: string | null;
 }
 
 export interface WorkspaceLease {
@@ -88,6 +100,7 @@ export interface WorkspaceStatus {
   passing: boolean;
   mode: "audit-only" | "enforced";
   config: WorktreeDeliveryConfig;
+  hostBinding: WorktreeHostBindingObservation;
   worktrees: WorktreeRecord[];
   leases: WorkspaceLease[];
   provider: ProviderObservation;
@@ -139,6 +152,10 @@ export type WorkspaceOperation =
       beforeHash: string | null;
       afterHash: string;
       content: string;
+      hostBindingPath: "harness/worktree-delivery/host-binding.json";
+      beforeHostBindingHash: string | null;
+      afterHostBindingHash: string;
+      hostBindingContent: string;
     }
   | {
       kind: "allocate";
@@ -178,6 +195,7 @@ export interface WorkspaceReceipt {
   steps: Array<{ id: string; status: "applied" | "failed" | "compensated"; detail: string }>;
   error?: string;
   backupContent?: string | null;
+  backupHostBindingContent?: string | null;
   before: WorkspaceStatus;
   after?: WorkspaceStatus;
 }

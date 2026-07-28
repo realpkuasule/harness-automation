@@ -35,6 +35,8 @@ import {
   type RetentionAudit,
   type ReviewReceipt,
   type WorkspaceAudit,
+  type WorktreeHostBinding,
+  type WorktreeHostBindingObservation,
   type WorkspaceLease,
   type WorkspacePlan,
   type WorkspacePolicyResult,
@@ -85,7 +87,7 @@ function gitCommonDir(root: string): string {
   return resolve(commonDir);
 }
 
-function defaultConfig(root: string, commonDir: string): WorktreeDeliveryConfig {
+function defaultConfig(): WorktreeDeliveryConfig {
   return {
     schemaVersion: WORKTREE_SCHEMA_VERSION,
     mode: "audit-only",
@@ -93,8 +95,6 @@ function defaultConfig(root: string, commonDir: string): WorktreeDeliveryConfig 
     leaseTtlHours: 168,
     reviewTtlMinutes: 120,
     remoteBranchRetentionDays: 14,
-    allowedRoots: [],
-    protectedRoots: [root, commonDir, resolve("/")],
     remoteBranchDeletion: false,
     provider: { kind: "none" },
   };
@@ -104,35 +104,47 @@ const uniqueAbsolutePaths = z.array(z.string().min(1)).min(1)
   .refine((paths) => paths.every(isAbsolute), "must contain only absolute paths")
   .refine((paths) => new Set(paths).size === paths.length, "must contain unique paths");
 
-const worktreeConfigSchema = z.object({
+const providerSchema = z.object({
+  kind: z.enum(["none", "github", "gitlab", "jira"]),
+  repository: z.string().min(1).optional(),
+  project: z.object({
+    owner: z.string().min(1),
+    number: z.number().int().positive(),
+    statusField: z.string().min(1),
+    doneValues: z.array(z.string().min(1)).min(1)
+      .refine((values) => new Set(values).size === values.length, "must be unique"),
+  }).strict().optional(),
+}).strict().superRefine((provider, context) => {
+  if (provider.kind !== "none" && !provider.repository?.trim()) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["repository"],
+      message: "is required for configured providers",
+    });
+  }
+});
+
+const worktreeConfigShape = {
   schemaVersion: z.literal(WORKTREE_SCHEMA_VERSION),
   mode: z.enum(["audit-only", "enforced"]),
   maxPersistentWorktrees: z.number().int().positive(),
   leaseTtlHours: z.number().int().positive(),
   reviewTtlMinutes: z.number().int().positive(),
   remoteBranchRetentionDays: z.number().int().positive(),
+  remoteBranchDeletion: z.literal(false),
+  provider: providerSchema,
+};
+
+const worktreeConfigSchema = z.object(worktreeConfigShape).strict();
+const legacyWorktreeConfigSchema = z.object({
+  ...worktreeConfigShape,
   allowedRoots: uniqueAbsolutePaths,
   protectedRoots: uniqueAbsolutePaths,
-  remoteBranchDeletion: z.literal(false),
-  provider: z.object({
-    kind: z.enum(["none", "github", "gitlab", "jira"]),
-    repository: z.string().min(1).optional(),
-    project: z.object({
-      owner: z.string().min(1),
-      number: z.number().int().positive(),
-      statusField: z.string().min(1),
-      doneValues: z.array(z.string().min(1)).min(1)
-        .refine((values) => new Set(values).size === values.length, "must be unique"),
-    }).strict().optional(),
-  }).strict().superRefine((provider, context) => {
-    if (provider.kind !== "none" && !provider.repository?.trim()) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["repository"],
-        message: "is required for configured providers",
-      });
-    }
-  }),
+}).strict();
+const hostBindingSchema = z.object({
+  schemaVersion: z.literal(WORKTREE_SCHEMA_VERSION),
+  allowedRoots: uniqueAbsolutePaths,
+  protectedRoots: uniqueAbsolutePaths,
 }).strict();
 
 function validConfig(input: unknown): WorktreeDeliveryConfig {
@@ -144,13 +156,92 @@ function validConfig(input: unknown): WorktreeDeliveryConfig {
   return parsed.data;
 }
 
-function loadConfig(root: string, commonDir: string): {
+function validHostBinding(input: unknown): WorktreeHostBinding {
+  const parsed = hostBindingSchema.safeParse(input);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new Error(
+      `WORKTREE_HOST_BINDING_INVALID: ${issue.path.join(".") || "binding"} ${issue.message}`,
+    );
+  }
+  return parsed.data;
+}
+
+const HOST_BINDING_PATH = "harness/worktree-delivery/host-binding.json" as const;
+
+function hostBindingFile(commonDir: string): string {
+  return safePath(commonDir, HOST_BINDING_PATH);
+}
+
+function loadConfig(root: string): {
   configured: boolean;
   config: WorktreeDeliveryConfig;
+  legacyBinding?: WorktreeHostBinding;
 } {
   const path = join(root, ".harness", "worktree-delivery.json");
-  if (!existsSync(path)) return { configured: false, config: defaultConfig(root, commonDir) };
-  return { configured: true, config: validConfig(readJson<unknown>(path)) };
+  if (!existsSync(path)) return { configured: false, config: defaultConfig() };
+  const input = readJson<unknown>(path);
+  const portable = worktreeConfigSchema.safeParse(input);
+  if (portable.success) return { configured: true, config: portable.data };
+  const legacy = legacyWorktreeConfigSchema.safeParse(input);
+  if (legacy.success) {
+    const { allowedRoots, protectedRoots, ...config } = legacy.data;
+    return {
+      configured: true,
+      config,
+      legacyBinding: {
+        schemaVersion: WORKTREE_SCHEMA_VERSION,
+        allowedRoots,
+        protectedRoots,
+      },
+    };
+  }
+  return { configured: true, config: validConfig(input) };
+}
+
+function defaultHostBinding(root: string, commonDir: string): WorktreeHostBinding {
+  return {
+    schemaVersion: WORKTREE_SCHEMA_VERSION,
+    allowedRoots: [],
+    protectedRoots: [root, commonDir, resolve("/")],
+  };
+}
+
+function loadHostBinding(
+  root: string,
+  commonDir: string,
+  legacyBinding?: WorktreeHostBinding,
+): WorktreeHostBindingObservation {
+  const path = hostBindingFile(commonDir);
+  if (legacyBinding) {
+    return {
+      ...legacyBinding,
+      configured: false,
+      loaded: true,
+      source: "legacy-config",
+      path,
+      hash: fileHash(path),
+    };
+  }
+  if (existsSync(path)) {
+    return {
+      ...validHostBinding(readJson<unknown>(path)),
+      configured: true,
+      loaded: true,
+      source: "host-local",
+      path,
+      hash: fileHash(path),
+    };
+  }
+  const binding = defaultHostBinding(root, commonDir);
+  return {
+    ...binding,
+    configured: false,
+    loaded: true,
+    source: "default",
+    path,
+    hash: null,
+  };
 }
 
 export function parseWorktreePorcelain(output: string): WorktreeRecord[] {
@@ -314,12 +405,21 @@ function leases(commonDir: string): { values: WorkspaceLease[]; errors: string[]
 export function workspaceStatus(projectRoot: string): WorkspaceStatus {
   const root = repositoryRoot(projectRoot);
   const commonDir = gitCommonDir(root);
-  const loadedConfig = loadConfig(root, commonDir);
+  const loadedConfig = loadConfig(root);
+  const hostBinding = loadHostBinding(root, commonDir, loadedConfig.legacyBinding);
   const loadedLeases = leases(commonDir);
   const observedWorktrees = worktrees(root);
   const provider = observeProvider(root, loadedConfig.config, loadedLeases.values);
+  const bindingError = loadedConfig.configured &&
+    loadedConfig.config.mode === "enforced" &&
+    !hostBinding.configured
+    ? hostBinding.source === "legacy-config"
+      ? "WORKTREE_HOST_BINDING_MIGRATION_REQUIRED"
+      : "WORKTREE_HOST_BINDING_REQUIRED"
+    : null;
   const errors = [
     ...loadedLeases.errors,
+    ...(bindingError ? [bindingError] : []),
     ...(provider.configured && !provider.available ? [`PROVIDER_UNAVAILABLE: ${provider.error}`] : []),
   ];
   const refs = git(root, [
@@ -330,6 +430,7 @@ export function workspaceStatus(projectRoot: string): WorkspaceStatus {
   ]).split("\0").filter(Boolean);
   const observed = {
     configHash: fileHash(join(root, ".harness", "worktree-delivery.json")),
+    hostBindingHash: hostBinding.hash,
     refs,
     worktrees: observedWorktrees.map((worktree) => {
       if (!samePath(worktree.path, root)) return worktree;
@@ -355,10 +456,11 @@ export function workspaceStatus(projectRoot: string): WorkspaceStatus {
     commonDir,
     configured: loadedConfig.configured,
     loaded: true,
-    enforced: true,
+    enforced: bindingError === null,
     passing: errors.length === 0,
     mode: loadedConfig.config.mode,
     config: loadedConfig.config,
+    hostBinding,
     worktrees: observedWorktrees,
     leases: loadedLeases.values,
     provider,
@@ -372,8 +474,8 @@ function isSameOrWithin(parent: string, child: string): boolean {
   return back === "" || (!back.startsWith("..") && !isAbsolute(back));
 }
 
-function protectedPath(config: WorktreeDeliveryConfig, target: string): boolean {
-  return config.protectedRoots.some((protectedRoot) => {
+function protectedPath(binding: WorktreeHostBinding, target: string): boolean {
+  return binding.protectedRoots.some((protectedRoot) => {
     const normalized = canonicalPath(protectedRoot);
     if (normalized === resolve("/")) return resolve(target) === normalized;
     return isSameOrWithin(normalized, target);
@@ -449,7 +551,7 @@ export function auditWorkspace(projectRoot: string): WorkspaceAudit {
   const staleLeases = status.leases.filter((lease) =>
     (Date.now() - Date.parse(lease.heartbeatAt)) / 3_600_000 > status.config.leaseTtlHours);
   const protectedPaths = status.leases
-    .filter((lease) => protectedPath(status.config, lease.path))
+    .filter((lease) => protectedPath(status.hostBinding, lease.path))
     .map((lease) => `${lease.workItem}: ${lease.path}`);
   const doneValues = new Set(
     status.config.provider.project?.doneValues.map((value) => value.toLowerCase()) ?? [],
@@ -489,9 +591,20 @@ export function auditWorkspace(projectRoot: string): WorkspaceAudit {
       mappingErrors.length === 0 ? "Lease paths and branches match observed worktrees." : "Lease/worktree mappings drifted.",
       mappingErrors));
   }
-  add(result(status, "workspace.root-denylist", protectedPaths.length === 0,
-    protectedPaths.length === 0 ? "No lease targets a protected root." : "A lease targets a protected root.",
-    protectedPaths));
+  if (!status.enforced) {
+    add(blockedResult(
+      status,
+      "workspace.root-denylist",
+      "Host-local path binding is unavailable; protected roots cannot be enforced.",
+      status.errors.filter((error) => error.startsWith("WORKTREE_HOST_BINDING_")),
+    ));
+  } else {
+    add(result(status, "workspace.root-denylist", protectedPaths.length === 0,
+      protectedPaths.length === 0
+        ? "No lease targets a protected root."
+        : "A lease targets a protected root.",
+      protectedPaths));
+  }
   add(result(status, "workspace.capacity-budget", status.leases.length <= status.config.maxPersistentWorktrees,
     `${status.leases.length}/${status.config.maxPersistentWorktrees} persistent leases are present.`,
     status.leases.length <= status.config.maxPersistentWorktrees ? [] : status.leases.map((lease) => lease.path)));
@@ -565,19 +678,26 @@ function validateBranch(root: string, branch: string): void {
   git(root, ["check-ref-format", "--branch", branch]);
 }
 
-function validateTarget(config: WorktreeDeliveryConfig, target: string): string {
+function validateTarget(binding: WorktreeHostBinding, target: string): string {
   if (!isAbsolute(target)) throw new Error("WORKTREE_PATH_MUST_BE_ABSOLUTE");
   const resolved = canonicalPath(target);
-  if (protectedPath(config, resolved)) {
+  if (protectedPath(binding, resolved)) {
     throw new Error(`WORKTREE_PROTECTED_PATH: ${resolved}`);
   }
   if (
-    config.allowedRoots.length === 0 ||
-    !config.allowedRoots.some((allowedRoot) => isSameOrWithin(allowedRoot, resolved))
+    binding.allowedRoots.length === 0 ||
+    !binding.allowedRoots.some((allowedRoot) => isSameOrWithin(allowedRoot, resolved))
   ) {
     throw new Error(`WORKTREE_PATH_NOT_ALLOWED: ${resolved}`);
   }
   return resolved;
+}
+
+function requireHostBinding(status: WorkspaceStatus): void {
+  if (status.hostBinding.configured) return;
+  throw new Error(status.hostBinding.source === "legacy-config"
+    ? "WORKTREE_HOST_BINDING_MIGRATION_REQUIRED"
+    : "WORKTREE_HOST_BINDING_REQUIRED");
 }
 
 function planDraft(args: {
@@ -618,24 +738,42 @@ export function planWorkspaceConfiguration(args: {
 }): { plan: WorkspacePlan; path: string } {
   const status = workspaceStatus(args.projectRoot);
   const config = validConfig({
-    ...defaultConfig(status.projectDir, status.commonDir),
-    mode: args.mode ?? "audit-only",
-    maxPersistentWorktrees: args.maxPersistentWorktrees ?? 4,
-    leaseTtlHours: args.leaseTtlHours ?? 168,
-    reviewTtlMinutes: args.reviewTtlMinutes ?? 120,
-    remoteBranchRetentionDays: args.remoteBranchRetentionDays ?? 14,
-    allowedRoots: (args.allowedRoots ?? [dirname(status.projectDir)]).map(canonicalPath),
-    protectedRoots: (args.protectedRoots ?? [status.projectDir, status.commonDir, resolve("/")])
-      .map(canonicalPath),
-    provider: args.provider ?? { kind: "none" },
+    ...status.config,
+    mode: args.mode ?? status.config.mode,
+    maxPersistentWorktrees: args.maxPersistentWorktrees ?? status.config.maxPersistentWorktrees,
+    leaseTtlHours: args.leaseTtlHours ?? status.config.leaseTtlHours,
+    reviewTtlMinutes: args.reviewTtlMinutes ?? status.config.reviewTtlMinutes,
+    remoteBranchRetentionDays:
+      args.remoteBranchRetentionDays ?? status.config.remoteBranchRetentionDays,
+    provider: args.provider ?? status.config.provider,
+  });
+  const hostBinding = validHostBinding({
+    schemaVersion: WORKTREE_SCHEMA_VERSION,
+    allowedRoots: (
+      args.allowedRoots ??
+      (status.hostBinding.allowedRoots.length > 0
+        ? status.hostBinding.allowedRoots
+        : [dirname(status.projectDir)])
+    ).map(canonicalPath),
+    protectedRoots: (
+      args.protectedRoots ??
+      (status.hostBinding.protectedRoots.length > 0
+        ? status.hostBinding.protectedRoots
+        : [status.projectDir, status.commonDir, resolve("/")])
+    ).map(canonicalPath),
   });
   const content = prettyJson(config);
+  const hostBindingContent = prettyJson(hostBinding);
   const operation: WorkspacePlan["operation"] = {
     kind: "configure",
     configPath: ".harness/worktree-delivery.json",
     beforeHash: fileHash(join(status.projectDir, ".harness", "worktree-delivery.json")),
     afterHash: sha256(content),
     content,
+    hostBindingPath: HOST_BINDING_PATH,
+    beforeHostBindingHash: status.hostBinding.hash,
+    afterHostBindingHash: sha256(hostBindingContent),
+    hostBindingContent,
   };
   return savePlan(status.projectDir, planDraft({ status, operation, now: args.now }));
 }
@@ -653,13 +791,14 @@ export function planWorkspaceAllocation(args: {
   const status = workspaceStatus(args.projectRoot);
   if (!status.configured) throw new Error("WORKTREE_CONFIGURATION_REQUIRED");
   if (status.config.mode !== "enforced") throw new Error("WORKTREE_ENFORCEMENT_NOT_ENABLED");
+  requireHostBinding(status);
   if (status.provider.configured && !status.provider.available) {
     throw new Error(`PROVIDER_UNAVAILABLE: ${status.provider.error}`);
   }
   if (!args.workItem.trim()) throw new Error("WORK_ITEM_REQUIRED");
   if (!args.owner.trim()) throw new Error("OWNER_REQUIRED");
   validateBranch(status.projectDir, args.branch);
-  const target = validateTarget(status.config, args.path);
+  const target = validateTarget(status.hostBinding, args.path);
   if (existsSync(target)) throw new Error(`WORKTREE_PATH_EXISTS: ${target}`);
   if (status.leases.some((lease) => lease.workItem === args.workItem)) {
     throw new Error(`DUPLICATE_WORK_ITEM_LEASE: ${args.workItem}`);
@@ -723,6 +862,7 @@ export function planWorkspaceClose(args: {
   if (!status.configured || status.config.mode !== "enforced") {
     throw new Error("WORKTREE_ENFORCEMENT_NOT_ENABLED");
   }
+  requireHostBinding(status);
   const matching = status.leases.filter((lease) => lease.workItem === args.workItem);
   if (matching.length !== 1) {
     throw new Error(matching.length === 0
@@ -730,6 +870,7 @@ export function planWorkspaceClose(args: {
       : `DUPLICATE_WORK_ITEM_LEASE: ${args.workItem}`);
   }
   const lease = matching[0];
+  validateTarget(status.hostBinding, lease.path);
   const observed = status.worktrees.find((worktree) => samePath(worktree.path, lease.path));
   if (!observed) throw new Error(`WORKTREE_NOT_FOUND: ${lease.path}`);
   if (observed.dirty) {
@@ -762,7 +903,14 @@ function loadWorkspacePlan(root: string, path: string): WorkspacePlan {
   if (
     plan.schemaVersion !== "worktree-delivery/1.0" ||
     plan.kind !== "workspace-plan" ||
-    !["configure", "allocate", "close"].includes(plan.operation?.kind)
+    !["configure", "allocate", "close"].includes(plan.operation?.kind) ||
+    (plan.operation.kind === "configure" && (
+      plan.operation.hostBindingPath !== HOST_BINDING_PATH ||
+      typeof plan.operation.beforeHostBindingHash !== "string" &&
+        plan.operation.beforeHostBindingHash !== null ||
+      typeof plan.operation.afterHostBindingHash !== "string" ||
+      typeof plan.operation.hostBindingContent !== "string"
+    ))
   ) {
     throw new Error("WORKSPACE_PLAN_INVALID");
   }
@@ -848,22 +996,36 @@ export function applyWorkspacePlan(args: {
   };
   let worktreeCreated = false;
   let configWritten = false;
+  let hostBindingWritten = false;
   let worktreeRemoved = false;
   try {
     writeReceipt(receiptPath, receipt);
     if (plan.operation.kind === "configure") {
       const target = safePath(root, plan.operation.configPath);
+      const hostBindingTarget = safePath(plan.commonDir, plan.operation.hostBindingPath);
       assertCurrentHash(target, plan.operation.beforeHash);
+      assertCurrentHash(hostBindingTarget, plan.operation.beforeHostBindingHash);
       receipt.backupContent = plan.operation.beforeHash === null
         ? null
         : readFileSync(target, "utf8");
+      receipt.backupHostBindingContent = plan.operation.beforeHostBindingHash === null
+        ? null
+        : readFileSync(hostBindingTarget, "utf8");
       atomicWrite(target, plan.operation.content);
-      assertCurrentHash(target, plan.operation.afterHash);
       configWritten = true;
+      assertCurrentHash(target, plan.operation.afterHash);
       receipt.steps.push({ id: "write-config", status: "applied", detail: plan.operation.configPath });
+      atomicWrite(hostBindingTarget, plan.operation.hostBindingContent);
+      hostBindingWritten = true;
+      assertCurrentHash(hostBindingTarget, plan.operation.afterHostBindingHash);
+      receipt.steps.push({
+        id: "write-host-binding",
+        status: "applied",
+        detail: plan.operation.hostBindingPath,
+      });
     } else if (plan.operation.kind === "allocate") {
       const operation = plan.operation;
-      validateTarget(before.config, operation.lease.path);
+      validateTarget(before.hostBinding, operation.lease.path);
       const argv = operation.createBranch
         ? ["worktree", "add", "-b", operation.lease.branch, operation.lease.path, operation.startPoint]
         : ["worktree", "add", operation.lease.path, operation.lease.branch];
@@ -878,6 +1040,8 @@ export function applyWorkspacePlan(args: {
       receipt.steps.push({ id: "write-lease", status: "applied", detail: operation.lease.workItem });
     } else {
       const operation = plan.operation;
+      requireHostBinding(before);
+      validateTarget(before.hostBinding, operation.lease.path);
       assertCurrentHash(leaseFile(plan.commonDir, operation.lease.workItem), operation.expectedLeaseHash);
       const observed = before.worktrees.find(
         (worktree) => samePath(worktree.path, operation.lease.path),
@@ -902,13 +1066,27 @@ export function applyWorkspacePlan(args: {
     receipt.error = message;
     receipt.steps.push({ id: "apply", status: "failed", detail: message });
     try {
-      if (plan.operation.kind === "configure" && configWritten) {
+      if (plan.operation.kind === "configure") {
         const target = safePath(root, plan.operation.configPath);
-        if (receipt.backupContent === null) unlinkSync(target);
-        else if (typeof receipt.backupContent === "string") {
-          atomicWrite(target, receipt.backupContent);
+        const hostBindingTarget = safePath(plan.commonDir, plan.operation.hostBindingPath);
+        if (hostBindingWritten) {
+          if (receipt.backupHostBindingContent === null) unlinkSync(hostBindingTarget);
+          else if (typeof receipt.backupHostBindingContent === "string") {
+            atomicWrite(hostBindingTarget, receipt.backupHostBindingContent);
+          }
+          receipt.steps.push({
+            id: "restore-host-binding",
+            status: "compensated",
+            detail: hostBindingTarget,
+          });
         }
-        receipt.steps.push({ id: "restore-config", status: "compensated", detail: target });
+        if (configWritten) {
+          if (receipt.backupContent === null) unlinkSync(target);
+          else if (typeof receipt.backupContent === "string") {
+            atomicWrite(target, receipt.backupContent);
+          }
+          receipt.steps.push({ id: "restore-config", status: "compensated", detail: target });
+        }
       } else if (plan.operation.kind === "allocate" && worktreeCreated) {
         git(root, ["worktree", "remove", plan.operation.lease.path]);
         if (existsSync(leaseFile(plan.commonDir, plan.operation.lease.workItem))) {
@@ -960,15 +1138,28 @@ export function rollbackWorkspaceChange(args: {
   try {
     if (plan.operation.kind === "configure") {
       const target = safePath(status.projectDir, plan.operation.configPath);
+      const hostBindingTarget = safePath(status.commonDir, plan.operation.hostBindingPath);
       assertCurrentHash(target, plan.operation.afterHash);
+      assertCurrentHash(hostBindingTarget, plan.operation.afterHostBindingHash);
       if (receipt.backupContent === null) unlinkSync(target);
       else if (typeof receipt.backupContent === "string") atomicWrite(target, receipt.backupContent);
+      if (receipt.backupHostBindingContent === null) unlinkSync(hostBindingTarget);
+      else if (typeof receipt.backupHostBindingContent === "string") {
+        atomicWrite(hostBindingTarget, receipt.backupHostBindingContent);
+      }
       receipt.steps.push({ id: "rollback-config", status: "compensated", detail: target });
+      receipt.steps.push({
+        id: "rollback-host-binding",
+        status: "compensated",
+        detail: hostBindingTarget,
+      });
     } else if (plan.operation.kind === "allocate") {
       throw new Error(
         "WORKSPACE_ROLLBACK_REQUIRES_CLOSE_PLAN: an allocated worktree must pass a new exact-hash close plan",
       );
     } else {
+      requireHostBinding(status);
+      validateTarget(status.hostBinding, plan.operation.lease.path);
       if (existsSync(plan.operation.lease.path)) {
         throw new Error(`WORKSPACE_ROLLBACK_UNSAFE: path exists: ${plan.operation.lease.path}`);
       }

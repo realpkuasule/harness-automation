@@ -169,6 +169,7 @@ harness-automation worktree close \
 ```
 
 三者输出的计划都通过统一 `apply --plan ... --approve <sha256>` 执行。`status`、`audit`、保留期审计和 cleanup planning 创建零个 worktree。
+仓库中的 `.harness/worktree-delivery.json` 只保存可移植策略；允许根和保护根写入 Git common dir 的本机绑定。配置计划哈希同时覆盖两者，新机器必须批准自己的本机绑定。
 
 临时 Review 使用 detached HEAD、OS 临时目录且不创建本地 branch：
 
@@ -257,6 +258,7 @@ npm run lint
 - [Worktree Delivery 设计](docs/design/worktree-delivery.md)
 - [Policy v2 JSON Schema](docs/api/harness-policy-v2.schema.json)
 - [Worktree Delivery v1 JSON Schema](docs/api/worktree-delivery-v1.schema.json)
+- [Worktree Host Binding v1 JSON Schema](docs/api/worktree-host-binding-v1.schema.json)
 - [Skill](skill/SKILL.md)
 - [Worktree Skill](skills/manage-worktree-delivery/SKILL.md)
 
