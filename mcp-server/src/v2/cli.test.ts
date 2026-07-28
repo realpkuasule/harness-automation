@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -127,4 +127,35 @@ describe("v2 CLI forward flow", () => {
       expect.objectContaining({ stack: "godot", status: "blocked" }),
     ]);
   }, 30_000);
+
+  it("runs portable worktree audit without PRD and applies exact-hash configuration", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-cli-worktree-"));
+    projects.push(root);
+    execFileSync("git", ["init", "-b", "main"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "harness@example.test"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Harness Test"], { cwd: root });
+    write(root, "README.md", "# fixture\n");
+    execFileSync("git", ["add", "README.md"], { cwd: root });
+    execFileSync("git", ["commit", "-m", "test: initialize fixture"], { cwd: root });
+
+    expect(run(root, ["worktree", "status"]).configured).toBe(false);
+    expect(run(root, ["worktree", "audit"]).passing).toBe(true);
+    const planned = run(root, [
+      "worktree",
+      "configure",
+      "--mode",
+      "enforced",
+      "--allow-root",
+      join(root, ".."),
+    ]);
+    expect(planned.operation).toBe("configure");
+    run(root, [
+      "apply",
+      "--plan",
+      String(planned.planPath),
+      "--approve",
+      String(planned.planHash),
+    ]);
+    expect(run(root, ["worktree", "status"]).configured).toBe(true);
+  });
 });

@@ -49,6 +49,11 @@ export type StackProfile =
   | "go-performance"
   | "custom";
 
+export const DELIVERY_PROFILES = ["worktree-delivery"] as const;
+export const DOMAIN_PROFILES = ["game-development"] as const;
+export type DeliveryProfile = typeof DELIVERY_PROFILES[number];
+export type DomainProfile = typeof DOMAIN_PROFILES[number];
+
 export interface SourceSnapshot {
   id: string;
   kind: "prd" | "design" | "research" | "existing-policy";
@@ -148,6 +153,8 @@ export interface PolicyDocument {
     owner: string;
     phase: "design-approved" | "development" | "maintenance";
     stacks: Stack[];
+    deliveryProfiles: DeliveryProfile[];
+    domainProfiles: DomainProfile[];
   };
   sources: SourceSnapshot[];
   agents: {

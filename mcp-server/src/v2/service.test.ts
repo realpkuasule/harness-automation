@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -11,7 +12,9 @@ import {
   planProject,
   researchGitHub,
   rollbackChange,
+  runTrustedChecks,
 } from "./service.js";
+import { planWorkspaceConfiguration } from "../worktree/service.js";
 
 const roots: string[] = [];
 
@@ -220,6 +223,35 @@ describe("v2 custom stack planning", () => {
     expect(readFileSync(join(root, ".harness/generated/effective-policy.md"), "utf8"))
       .toContain("generic policies apply and stack-specific enforcement is blocked");
   });
+
+  it("keeps delivery and domain profiles orthogonal to stack selection", () => {
+    const root = temporaryProject();
+    approvedSources(root);
+    write(root, "package.json", JSON.stringify({ dependencies: { react: "1.0.0" } }));
+    write(root, "package-lock.json", "{}\n");
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    const discovery = discoverProject(root);
+    write(root, ".harness/discovery.json", `${JSON.stringify(discovery, null, 2)}\n`);
+
+    const { policy } = planProject({
+      projectRoot: root,
+      profile: "custom",
+      stacks: ["typescript"],
+      deliveryProfiles: ["worktree-delivery"],
+      domainProfiles: ["game-development"],
+    });
+
+    expect(policy.project.stacks).toEqual(["typescript"]);
+    expect(policy.project.deliveryProfiles).toEqual(["worktree-delivery"]);
+    expect(policy.project.domainProfiles).toEqual(["game-development"]);
+    expect(policy.policies.map((item) => item.id)).toEqual(expect.arrayContaining([
+      "worktree-delivery-gate",
+      "game-deterministic-replay",
+      "game-real-engine-smoke",
+      "game-target-performance",
+      "game-content-provenance",
+    ]));
+  });
 });
 
 describe("v2 GitHub research evidence", () => {
@@ -347,5 +379,57 @@ describe("v2 plan/apply/check/rollback", () => {
     const discovery = discoverProject(root);
     write(root, ".harness/discovery.json", `${JSON.stringify(discovery, null, 2)}\n`);
     expect(() => planProject({ projectRoot: root })).toThrow(/SYMLINK_TARGET_REJECTED/);
+  });
+
+  it("includes the local workspace gate in session checks and reports CI visibility honestly", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    execFileSync("git", ["init", "-b", "main"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "harness@example.test"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Harness Test"], { cwd: root });
+    execFileSync("git", ["add", "."], { cwd: root });
+    execFileSync("git", ["commit", "-m", "test: initialize fixture"], { cwd: root });
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    const discovery = discoverProject(root);
+    write(root, ".harness/discovery.json", `${JSON.stringify(discovery, null, 2)}\n`);
+    const policyPlan = planProject({ projectRoot: root });
+    applyPlan({
+      projectRoot: root,
+      planPath: policyPlan.path,
+      approval: policyPlan.plan.planHash,
+    });
+    const workspacePlan = planWorkspaceConfiguration({
+      projectRoot: root,
+      mode: "enforced",
+      allowedRoots: [join(root, "..")],
+    });
+    applyPlan({
+      projectRoot: root,
+      planPath: workspacePlan.path,
+      approval: workspacePlan.plan.planHash,
+    });
+
+    const local = runTrustedChecks({ projectRoot: root, mode: "session" });
+    expect(local.ok).toBe(true);
+    expect(local.workspace).toMatchObject({
+      configured: true,
+      available: true,
+      status: "verified",
+    });
+
+    const previousCi = process.env.CI;
+    process.env.CI = "1";
+    try {
+      const ci = runTrustedChecks({ projectRoot: root, mode: "session" });
+      expect(ci.ok).toBe(true);
+      expect(ci.workspace).toMatchObject({
+        configured: true,
+        available: false,
+        status: "blocked",
+      });
+    } finally {
+      if (previousCi === undefined) delete process.env.CI;
+      else process.env.CI = previousCi;
+    }
   });
 });

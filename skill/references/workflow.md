@@ -45,6 +45,8 @@ doctor
 
 `plan` writes only a new immutable file under `.harness/plans/`. `apply` performs all precondition checks before any target is written and restores already-written targets if a later write fails.
 
+After policy initialization, hand daily workspace lifecycle work to `manage-worktree-delivery`. Its read-only audit path does not require PRD intake. Persistent allocate/close/configure operations still use immutable plan, exact hash, drift recheck, apply, and durable receipt.
+
 ## Research evidence
 
 The deterministic `research github` command records queries and candidate metadata. It is discovery, not a final adoption recommendation. For shortlisted candidates, use available GitHub integration and official documentation to record:

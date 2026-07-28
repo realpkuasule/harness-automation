@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage Worktree Delivery"
+  short_description: "Govern safe AI coding worktree lifecycles"
+  default_prompt: "Use $manage-worktree-delivery to audit or safely manage this repository’s worktrees."

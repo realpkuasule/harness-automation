@@ -11,6 +11,8 @@ Each policy records:
 - argv-based verification commands and pass criteria;
 - examples and change-control requirements.
 
+`project.deliveryProfiles` and `project.domainProfiles` are orthogonal to `project.stacks`. `worktree-delivery` does not change stack selection. `game-development` can only append replay, real-engine, target-performance, and content-provenance policy; it cannot weaken common or delivery rules.
+
 ## Formalization classes
 
 - `deterministic`: an AST checker, formatter, compiler, schema validator, contract test or trusted command can return sound pass/fail evidence.
@@ -27,6 +29,8 @@ Observed state belongs in verification output, not the canonical policy:
 - `passing`: the current repository passes that verifier.
 
 The aggregate status is `verified`, `failing`, `blocked`, or `guidance`.
+
+Worktree observed state additionally records the resolved Git common dir, worktrees, leases, Provider availability, dirty-content evidence, and a canonical observation hash. Host-local state is visible to session checks; CI must report it as unavailable instead of claiming enforcement.
 
 ## Change control
 

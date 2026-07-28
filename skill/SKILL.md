@@ -114,6 +114,12 @@ node <skill目录>/scripts/run.mjs context --project <项目绝对路径> --agen
 
 然后读取 `.harness/generated/effective-policy.md`，搜索现有实现和所属模块，确认契约源，再开始编码。不同 Agent 的加载能力与降级行为见 [agent-adapters.md](references/agent-adapters.md)。
 
+## Worktree 交付衔接
+
+本 Skill 负责把可选 `deliveryProfiles` 和 `domainProfiles` 编译进项目策略。日常 worktree 分配、临时 Review、状态审计、关闭和保留期检查交给独立的 `manage-worktree-delivery` Skill；两个 Skill 复用同一 CLI、计划哈希和回执。
+
+普通 Git 仓库的 `worktree status|audit|review|retention-audit` 不要求 PRD intake。正式启用 worktree policy 仍必须先生成计划，并由负责人批准完整哈希。
+
 ## 回滚
 
 ```bash

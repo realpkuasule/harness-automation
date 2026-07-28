@@ -25,6 +25,8 @@ import type {
   AppliedChange,
   ChangePlan,
   Discovery,
+  DeliveryProfile,
+  DomainProfile,
   EnforcementResult,
   FileOperation,
   Intake,
@@ -36,6 +38,12 @@ import type {
 } from "./types.js";
 import { hasBuiltInStackAdapter, stackAdapterSupport } from "./types.js";
 import { checkGo, checkPython, checkTypeScript } from "./verifier.js";
+import {
+  applyWorkspacePlan,
+  auditWorkspace,
+  rollbackWorkspaceChange,
+} from "../worktree/service.js";
+import type { WorkspaceAudit, WorkspaceReceipt } from "../worktree/types.js";
 
 const HARNESS_DIR = ".harness";
 
@@ -193,6 +201,8 @@ export function planProject(args: {
   projectRoot: string;
   profile?: StackProfile;
   stacks?: Stack[];
+  deliveryProfiles?: DeliveryProfile[];
+  domainProfiles?: DomainProfile[];
   now?: Date;
 }): { plan: ChangePlan; path: string; policy: PolicyDocument } {
   const root = resolve(args.projectRoot);
@@ -203,7 +213,16 @@ export function planProject(args: {
   const intake = readJson<Intake>(intakeFile);
   const discovery = readJson<Discovery>(discoveryFile);
   ensureApprovedSources(root, intake);
-  const policy = compilePolicy({ projectRoot: root, owner: intake.owner, intake, discovery, profile: args.profile, stacks: args.stacks });
+  const policy = compilePolicy({
+    projectRoot: root,
+    owner: intake.owner,
+    intake,
+    discovery,
+    profile: args.profile,
+    stacks: args.stacks,
+    deliveryProfiles: args.deliveryProfiles,
+    domainProfiles: args.domainProfiles,
+  });
   const policyDigest = hashObject(policy);
   const effectivePolicy = renderEffectivePolicy(policy, policyDigest);
   const instruction = managedInstructionBlock(policyDigest);
@@ -236,6 +255,8 @@ export function planProject(args: {
     discovery: fileHash(discoveryFile),
     profile: args.profile ?? discovery.profile,
     stacks: args.stacks ?? null,
+    deliveryProfiles: args.deliveryProfiles ?? [],
+    domainProfiles: args.domainProfiles ?? [],
   });
   const id = `${createdAt.replace(/[:.]/gu, "-")}-${seed.slice(0, 12)}`;
   const draft: ChangePlan = {
@@ -279,7 +300,24 @@ function validatePlan(root: string, plan: ChangePlan, approval: string): void {
   for (const source of plan.sourceHashes) assertCurrentHash(safePath(root, source.path), source.sha256);
 }
 
-export function applyPlan(args: { projectRoot: string; planPath: string; approval: string; now?: Date }): AppliedChange {
+export function applyPlan(args: {
+  projectRoot: string;
+  planPath: string;
+  approval: string;
+  now?: Date;
+}): AppliedChange | WorkspaceReceipt {
+  const root = resolve(args.projectRoot);
+  const candidate = readJson<{ kind?: string }>(safePath(root, args.planPath));
+  if (candidate.kind === "workspace-plan") return applyWorkspacePlan(args);
+  return applyFilePlan(args);
+}
+
+function applyFilePlan(args: {
+  projectRoot: string;
+  planPath: string;
+  approval: string;
+  now?: Date;
+}): AppliedChange {
   const root = resolve(args.projectRoot);
   const plan = readJson<ChangePlan>(safePath(root, args.planPath));
   validatePlan(root, plan, args.approval);
@@ -348,10 +386,21 @@ function latestChangeId(root: string): string {
   return ids.at(-1)!;
 }
 
-export function rollbackChange(args: { projectRoot: string; changeId?: string; now?: Date }): { id: string; restored: string[] } {
+export function rollbackChange(args: {
+  projectRoot: string;
+  changeId?: string;
+  now?: Date;
+}): { id: string; restored: string[] } | WorkspaceReceipt {
   const root = resolve(args.projectRoot);
   const id = args.changeId ?? latestChangeId(root);
   const directory = harnessPath(root, `changes/${id}`);
+  if (!existsSync(join(directory, "change.json")) && args.changeId) {
+    return rollbackWorkspaceChange({
+      projectRoot: root,
+      changeId: args.changeId,
+      now: args.now,
+    });
+  }
   const marker = join(directory, "rolled-back.json");
   const change = readJson<AppliedChange>(join(directory, "change.json"));
   if (existsSync(marker)) return readJson<{ id: string; restored: string[] }>(marker);
@@ -380,20 +429,37 @@ interface Manifest {
 
 export function driftProject(projectRoot: string): {
   clean: boolean;
+  workspaceClean: boolean;
   sourceDrift: string[];
   outputDrift: Array<{ path: string; expected: string; actual: string | null }>;
+  workspace: WorkspaceAudit | null;
 } {
   const root = resolve(projectRoot);
-  const intake = readJson<Intake>(harnessPath(root, "intake.json"));
-  const manifest = readJson<Manifest>(harnessPath(root, "manifest.json"));
-  const sourceDrift = intake.sources
-    .filter((source) => fileHash(safePath(root, source.path)) !== source.sha256)
-    .map((source) => source.path);
-  const outputDrift = manifest.outputs.flatMap((output) => {
-    const actual = fileHash(safePath(root, output.path));
-    return actual === output.sha256 ? [] : [{ path: output.path, expected: output.sha256, actual }];
-  });
-  return { clean: sourceDrift.length === 0 && outputDrift.length === 0, sourceDrift, outputDrift };
+  const intakePath = harnessPath(root, "intake.json");
+  const manifestPath = harnessPath(root, "manifest.json");
+  const intake = existsSync(intakePath) ? readJson<Intake>(intakePath) : null;
+  const manifest = existsSync(manifestPath) ? readJson<Manifest>(manifestPath) : null;
+  const sourceDrift = intake
+    ? intake.sources
+        .filter((source) => fileHash(safePath(root, source.path)) !== source.sha256)
+        .map((source) => source.path)
+    : [];
+  const outputDrift = manifest
+    ? manifest.outputs.flatMap((output) => {
+        const actual = fileHash(safePath(root, output.path));
+        return actual === output.sha256 ? [] : [{ path: output.path, expected: output.sha256, actual }];
+      })
+    : [];
+  const workspace = existsSync(join(root, ".harness/worktree-delivery.json"))
+    ? auditWorkspace(root)
+    : null;
+  return {
+    clean: sourceDrift.length === 0 && outputDrift.length === 0,
+    workspaceClean: workspace?.passing ?? true,
+    sourceDrift,
+    outputDrift,
+    workspace,
+  };
 }
 
 export function checkProject(projectRoot: string): {
@@ -542,6 +608,13 @@ export function runTrustedChecks(args: {
   stackAdapters: StackAdapterResult[];
   stackCoverageComplete: boolean;
   commands: TrustedCommandResult[];
+  workspace: {
+    configured: boolean;
+    available: boolean;
+    status: "not-configured" | "verified" | "failing" | "blocked";
+    detail: string;
+    audit: WorkspaceAudit | null;
+  };
 } {
   const root = resolve(args.projectRoot);
   const policy = checkProject(root);
@@ -565,12 +638,48 @@ export function runTrustedChecks(args: {
     const passed = result.status === 0 && !gofmtDirty;
     return { id, command, status: passed ? "passed" : "failed", exitCode: result.status, output };
   });
+  const workspaceConfigured = existsSync(join(root, ".harness/worktree-delivery.json"));
+  const ciCannotObserveHost = args.mode === "ci" || process.env.CI === "1";
+  const workspace = !workspaceConfigured
+    ? {
+        configured: false,
+        available: true,
+        status: "not-configured" as const,
+        detail: "Worktree delivery governance is not configured.",
+        audit: null,
+      }
+    : ciCannotObserveHost
+      ? {
+          configured: true,
+          available: false,
+          status: "blocked" as const,
+          detail: "CI cannot observe host-local worktrees or Git common-dir leases; run the session gate locally.",
+          audit: null,
+        }
+      : (() => {
+          const audit = auditWorkspace(root);
+          return {
+            configured: true,
+            available: true,
+            status: audit.passing ? "verified" as const : "failing" as const,
+            detail: audit.passing
+              ? "Host-local worktree policies pass."
+              : "Host-local worktree policies failed.",
+            audit,
+          };
+        })();
+  const workspaceGatePassing = workspace.status === "not-configured" ||
+    workspace.status === "verified" ||
+    workspace.status === "blocked";
   return {
-    ok: policy.ok && commands.every((item) => item.status === "passed"),
+    ok: policy.ok &&
+      commands.every((item) => item.status === "passed") &&
+      workspaceGatePassing,
     policy,
     stackAdapters: policy.stackAdapters,
     stackCoverageComplete: policy.stackCoverageComplete,
     commands,
+    workspace,
   };
 }
 

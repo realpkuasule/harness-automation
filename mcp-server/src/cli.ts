@@ -24,7 +24,25 @@ import {
   rollbackChange,
   runTrustedChecks,
 } from "./v2/service.js";
-import { normalizeStackIds, type Stack, type StackProfile } from "./v2/types.js";
+import {
+  DELIVERY_PROFILES,
+  DOMAIN_PROFILES,
+  normalizeStackIds,
+  type DeliveryProfile,
+  type DomainProfile,
+  type Stack,
+  type StackProfile,
+} from "./v2/types.js";
+import {
+  auditWorkspace,
+  planWorkspaceAllocation,
+  planWorkspaceClose,
+  planWorkspaceConfiguration,
+  retentionAuditWorkspace,
+  reviewWorkspace,
+  workspaceStatus,
+} from "./worktree/service.js";
+import type { WorktreeDeliveryConfig } from "./worktree/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -98,9 +116,19 @@ function getMcpServerPath(packagePath: string): string {
   return join(packagePath, "dist", "index.js");
 }
 
-function getSkillSource(packagePath: string): string {
-  const built = join(packagePath, "dist", "skill");
-  return existsSync(built) ? built : join(packagePath, "skill");
+function getSkillSource(
+  packagePath: string,
+  name: "harness-automation" | "manage-worktree-delivery",
+): string {
+  const built = join(
+    packagePath,
+    "dist",
+    name === "harness-automation" ? "skill" : name,
+  );
+  if (existsSync(built)) return built;
+  return name === "harness-automation"
+    ? join(packagePath, "skill")
+    : join(packagePath, "skills", name);
 }
 
 function getClaudeJsonPath(): string {
@@ -128,8 +156,12 @@ function registerMcpViaJson(mcpServerPath: string): void {
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
-function installSkill(source: string, agentHome: ".agents" | ".claude" | ".codex"): string {
-  const destination = join(homedir(), agentHome, "skills", "harness-automation");
+function installSkill(
+  source: string,
+  agentHome: ".agents" | ".claude" | ".codex",
+  name: "harness-automation" | "manage-worktree-delivery",
+): string {
+  const destination = join(homedir(), agentHome, "skills", name);
   mkdirSync(dirname(destination), { recursive: true });
   cpSync(source, destination, { recursive: true, force: true });
   return destination;
@@ -167,11 +199,15 @@ function install(options: { syncGlobal: boolean }): void {
     ok(`Claude Code MCP 已写入 ${getClaudeJsonPath()}`);
   }
 
-  const skillSource = getSkillSource(packagePath);
-  if (!existsSync(join(skillSource, "SKILL.md"))) throw new Error(`SKILL_NOT_FOUND: ${skillSource}`);
-  ok(`Claude Code Skill: ${installSkill(skillSource, ".claude")}`);
-  ok(`Codex Skill: ${installSkill(skillSource, ".codex")}`);
-  ok(`Portable Agent Skill: ${installSkill(skillSource, ".agents")}`);
+  for (const name of ["harness-automation", "manage-worktree-delivery"] as const) {
+    const skillSource = getSkillSource(packagePath, name);
+    if (!existsSync(join(skillSource, "SKILL.md"))) {
+      throw new Error(`SKILL_NOT_FOUND: ${skillSource}`);
+    }
+    ok(`Claude Code Skill (${name}): ${installSkill(skillSource, ".claude", name)}`);
+    ok(`Codex Skill (${name}): ${installSkill(skillSource, ".codex", name)}`);
+    ok(`Portable Agent Skill (${name}): ${installSkill(skillSource, ".agents", name)}`);
+  }
   console.log("");
   ok("Harness Automation v2 已就绪；未修改 grill-me 或任何其他 Skill");
 }
@@ -192,6 +228,140 @@ function stacks(args: ParsedArguments): Stack[] | undefined {
   return normalizeStackIds(selected);
 }
 
+function selectedProfiles<T extends string>(
+  args: ParsedArguments,
+  name: string,
+  supported: readonly T[],
+): T[] | undefined {
+  const values = args.values.get(name);
+  if (!values) return undefined;
+  const selected = [...new Set(values)];
+  const invalid = selected.filter((profile) => !supported.includes(profile as T));
+  if (invalid.length > 0) {
+    throw new Error(`INVALID_${name.replaceAll("-", "_").toUpperCase()}: ${invalid.join(", ")}`);
+  }
+  return selected as T[];
+}
+
+function positiveInteger(args: ParsedArguments, name: string): number | undefined {
+  const selected = value(args, name);
+  if (selected === undefined) return undefined;
+  const number = Number(selected);
+  if (!Number.isInteger(number) || number < 1) {
+    throw new Error(`INVALID_INTEGER: --${name} must be a positive integer`);
+  }
+  return number;
+}
+
+function worktreeProvider(args: ParsedArguments): WorktreeDeliveryConfig["provider"] | undefined {
+  const selected = value(args, "provider");
+  if (!selected) return undefined;
+  if (!["none", "github", "gitlab", "jira"].includes(selected)) {
+    throw new Error("INVALID_PROVIDER: choose none, github, gitlab, or jira");
+  }
+  if (selected === "none") return { kind: "none" };
+  const projectNumber = positiveInteger(args, "project-number");
+  const project = projectNumber === undefined
+    ? undefined
+    : {
+        owner: required(args, "project-owner"),
+        number: projectNumber,
+        statusField: value(args, "status-field") ?? "Status",
+        doneValues: args.values.get("done-value") ?? ["Done"],
+      };
+  return {
+    kind: selected as "github" | "gitlab" | "jira",
+    repository: required(args, "provider-repository"),
+    project,
+  };
+}
+
+function printWorkspacePlan(result: ReturnType<typeof planWorkspaceConfiguration>): void {
+  printJson({
+    planPath: result.path,
+    planHash: result.plan.planHash,
+    operation: result.plan.operation.kind,
+    warnings: result.plan.warnings,
+  });
+}
+
+function runWorktreeCommand(
+  root: string,
+  args: ParsedArguments,
+  trailingCommand: string[],
+): void {
+  const action = args.positionals[0];
+  switch (action) {
+    case "status":
+      printJson(workspaceStatus(root));
+      return;
+    case "audit": {
+      const audit = auditWorkspace(root);
+      printJson(audit);
+      if (!audit.passing) process.exitCode = 2;
+      return;
+    }
+    case "configure": {
+      const mode = value(args, "mode") ?? "audit-only";
+      if (mode !== "audit-only" && mode !== "enforced") {
+        throw new Error("INVALID_WORKTREE_MODE: choose audit-only or enforced");
+      }
+      printWorkspacePlan(planWorkspaceConfiguration({
+        projectRoot: root,
+        mode,
+        maxPersistentWorktrees: positiveInteger(args, "max-persistent"),
+        leaseTtlHours: positiveInteger(args, "lease-ttl-hours"),
+        reviewTtlMinutes: positiveInteger(args, "review-ttl-minutes"),
+        remoteBranchRetentionDays: positiveInteger(args, "remote-retention-days"),
+        allowedRoots: args.values.get("allow-root"),
+        protectedRoots: args.values.get("protect-root"),
+        provider: worktreeProvider(args),
+      }));
+      return;
+    }
+    case "allocate":
+      printWorkspacePlan(planWorkspaceAllocation({
+        projectRoot: root,
+        workItem: required(args, "work-item"),
+        branch: required(args, "branch"),
+        path: required(args, "path"),
+        owner: required(args, "owner"),
+        thread: value(args, "thread"),
+        startPoint: value(args, "start-point"),
+      }));
+      return;
+    case "close":
+      printWorkspacePlan(planWorkspaceClose({
+        projectRoot: root,
+        workItem: required(args, "work-item"),
+        acceptedCommit: required(args, "accepted-commit"),
+      }));
+      return;
+    case "review": {
+      const receipt = reviewWorkspace({
+        projectRoot: root,
+        commit: value(args, "commit") ?? "HEAD",
+        command: trailingCommand,
+      });
+      printJson(receipt);
+      if (receipt.status !== "cleaned" || receipt.exitCode !== 0) process.exitCode = 2;
+      return;
+    }
+    case "retention-audit": {
+      const audit = retentionAuditWorkspace({ projectRoot: root });
+      printJson(audit);
+      if (audit.staleReviews.length > 0 || audit.staleLocks.length > 0) {
+        process.exitCode = 2;
+      }
+      return;
+    }
+    default:
+      throw new Error(
+        "WORKTREE_COMMAND_REQUIRED: choose configure, allocate, review, status, audit, close, or retention-audit",
+      );
+  }
+}
+
 function usage(): void {
   console.log(`Harness Automation v2
 
@@ -203,20 +373,29 @@ Usage:
   harness-automation discover [--project .]
   harness-automation plan [--project .] [--profile full-typescript|python-data-ai|go-performance]
   harness-automation plan --profile custom --stack <stack> [--stack <stack>...] [--project .]
+  harness-automation plan [--delivery-profile worktree-delivery] [--domain-profile game-development] [--project .]
   harness-automation apply --plan <relative-path> --approve <sha256> [--project .]
   harness-automation context [--project .]
   harness-automation check [--project .] [--mode session|commit|ci]
   harness-automation drift [--project .]
   harness-automation explain <policy-id> [--project .]
   harness-automation rollback [--project .] [--change <id>]
+  harness-automation worktree status|audit|retention-audit [--project .]
+  harness-automation worktree configure [--mode audit-only|enforced] [--allow-root <absolute-path>] [--project .]
+  harness-automation worktree allocate --work-item <provider:id> --branch <name> --path <absolute-path> --owner <name> [--project .]
+  harness-automation worktree review [--commit <sha>] [--project .] -- <command> [args...]
+  harness-automation worktree close --work-item <provider:id> --accepted-commit <sha> [--project .]
 
 All workflow commands emit stable JSON. Apply requires the exact hash printed by plan.
 Custom stack identifiers use lowercase kebab-case. Unknown stacks retain generic policies and report stack-specific enforcement as blocked.`);
 }
 
 function runWorkflow(argv: string[]): void {
-  const command = argv[0];
-  const args = parseArguments(argv.slice(1));
+  const separator = argv.indexOf("--");
+  const workflowArguments = separator === -1 ? argv : argv.slice(0, separator);
+  const trailingCommand = separator === -1 ? [] : argv.slice(separator + 1);
+  const command = workflowArguments[0];
+  const args = parseArguments(workflowArguments.slice(1));
   const root = projectRoot(args);
   switch (command) {
     case "doctor":
@@ -233,7 +412,21 @@ function runWorkflow(argv: string[]): void {
       printJson(discoverAndSave(root));
       return;
     case "plan": {
-      const result = planProject({ projectRoot: root, profile: profile(args), stacks: stacks(args) });
+      const result = planProject({
+        projectRoot: root,
+        profile: profile(args),
+        stacks: stacks(args),
+        deliveryProfiles: selectedProfiles<DeliveryProfile>(
+          args,
+          "delivery-profile",
+          DELIVERY_PROFILES,
+        ),
+        domainProfiles: selectedProfiles<DomainProfile>(
+          args,
+          "domain-profile",
+          DOMAIN_PROFILES,
+        ),
+      });
       printJson({ planPath: result.path, planHash: result.plan.planHash, stacks: result.policy.project.stacks, operations: result.plan.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash })), commands: result.plan.commands, warnings: result.plan.warnings });
       return;
     }
@@ -258,7 +451,7 @@ function runWorkflow(argv: string[]): void {
     case "drift": {
       const result = driftProject(root);
       printJson(result);
-      if (!result.clean) process.exitCode = 2;
+      if (!result.clean || !result.workspaceClean) process.exitCode = 2;
       return;
     }
     case "explain":
@@ -266,6 +459,9 @@ function runWorkflow(argv: string[]): void {
       return;
     case "rollback":
       printJson(rollbackChange({ projectRoot: root, changeId: value(args, "change") }));
+      return;
+    case "worktree":
+      runWorktreeCommand(root, args, trailingCommand);
       return;
     case "help":
     case "--help":

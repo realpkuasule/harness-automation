@@ -30,6 +30,13 @@ describe("v2 MCP transport", () => {
       "harness_apply",
       "harness_check",
       "harness_rollback",
+      "harness_worktree_status",
+      "harness_worktree_audit",
+      "harness_worktree_configure",
+      "harness_worktree_allocate",
+      "harness_worktree_review",
+      "harness_worktree_close",
+      "harness_worktree_retention_audit",
     ]));
     const planTool = tools.tools.find((tool) => tool.name === "harness_plan");
     expect(planTool?.inputSchema).toMatchObject({
