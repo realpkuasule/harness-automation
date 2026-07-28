@@ -39,7 +39,12 @@ jobs:
         run: npm run lint
 
       - name: Test
+        if: runner.os != 'Windows'
         run: npx vitest run --coverage
+
+      - name: Test portable worktree governance on Windows
+        if: runner.os == 'Windows'
+        run: npx vitest run src/worktree/service.test.ts --testTimeout=20000
 
       - name: Build
         run: npm run build

@@ -150,8 +150,14 @@ describe("portable worktree inventory", () => {
       heartbeatAt: "2026-01-01T00:00:00.000Z",
       status: "active",
     };
-    writeFileSync(join(leaseDir, "a.json"), JSON.stringify({ ...base, path: "/tmp/one" }));
-    writeFileSync(join(leaseDir, "b.json"), JSON.stringify({ ...base, path: "/tmp/two" }));
+    writeFileSync(join(leaseDir, "a.json"), JSON.stringify({
+      ...base,
+      path: join(root, "..", "one"),
+    }));
+    writeFileSync(join(leaseDir, "b.json"), JSON.stringify({
+      ...base,
+      path: join(root, "..", "two"),
+    }));
 
     const audit = auditWorkspace(root);
     const result = audit.policies.find(
@@ -521,7 +527,7 @@ describe("hash-approved worktree lifecycle", () => {
       schemaVersion: "1.0",
       workItem: "github:example/project#other",
       branch: "other",
-      path: "/tmp/other",
+      path: join(root, "..", "other"),
       owner: "owner",
       acceptedCommit: "abc123",
       createdAt: "2026-01-01T00:00:00.000Z",
@@ -881,7 +887,7 @@ describe("temporary review and retention", () => {
       projectDir: root,
       commonDir: git(root, "rev-parse", "--path-format=absolute", "--git-common-dir"),
       commit: git(root, "rev-parse", "HEAD"),
-      path: "/tmp/already-cleaned",
+      path: join(root, "..", "already-cleaned"),
       receiptPath: join(reviewDirectory, "complete.json"),
       command: ["true"],
       createdAt: "2026-01-01T00:00:00.000Z",
