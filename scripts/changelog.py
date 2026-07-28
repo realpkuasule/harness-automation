@@ -2,7 +2,7 @@
 """操作 CHANGELOG.jsonl 变更记录。
 
 用法:
-  python3 scripts/changelog.py add <type> <phase> <description> [--task-id <id>] [--files path1,path2] [--by agent-name]
+  python3 scripts/changelog.py add <type> <phase> <description> [--task-id <id>] [--issue <repo#123>] [--files path1,path2] [--by agent-name]
   python3 scripts/changelog.py list [n]
   python3 scripts/changelog.py search <keyword>
   python3 scripts/changelog.py show <index>   (1-indexed from most recent)
@@ -13,16 +13,18 @@ CHANGELOG.jsonl 每条记录的结构:
   phase        — 所属阶段版本号
   description  — 变更说明 (必填)
   taskId       — 关联的任务 ID (可选)
+  issueRef     — 关联的 GitHub Issue (可选)
   agent        — 执行变更的 agent (可选)
   relatedFiles — 关联文件路径列表 (可选)
 """
 
 import json
+import os
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(os.environ.get("HARNESS_REPO_ROOT", Path(__file__).resolve().parent.parent))
 CHANGELOG_FILE = ROOT / "CHANGELOG.jsonl"
 TZ = timezone(timedelta(hours=8))
 
@@ -86,7 +88,7 @@ def split_positional(args: list[str]) -> tuple[list[str], dict]:
 def cmd_add(args: list[str]) -> None:
     positional, opts = split_positional(args)
     if len(positional) < 3:
-        print("Usage: changelog.py add <type> <phase> <description> [--task-id <id>] [--files path1,path2] [--by agent-name]", file=sys.stderr)
+        print("Usage: changelog.py add <type> <phase> <description> [--task-id <id>] [--issue <repo#123>] [--files path1,path2] [--by agent-name]", file=sys.stderr)
         sys.exit(1)
 
     typ = positional[0]
@@ -106,6 +108,8 @@ def cmd_add(args: list[str]) -> None:
 
     if "task_id" in opts:
         entry["taskId"] = opts["task_id"]
+    if "issue" in opts:
+        entry["issueRef"] = opts["issue"]
     if "files" in opts:
         entry["relatedFiles"] = parse_list_arg(opts["files"])
     if "by" in opts:
@@ -130,9 +134,11 @@ def cmd_list(args: list[str]) -> None:
         desc = e["description"][:100]
         task_id = e.get("taskId", "")
         tid = f" [{task_id}]" if task_id else ""
+        issue_ref = e.get("issueRef", "")
+        iid = f" ({issue_ref})" if issue_ref else ""
         agent = e.get("agent", "")
         by = f" ({agent})" if agent else ""
-        print(f"  #{len(entries) - n + i:3d} [{typ:8s}] P{str(phase):4s} {ts}{tid}{by} — {desc}")
+        print(f"  #{len(entries) - n + i:3d} [{typ:8s}] P{str(phase):4s} {ts}{tid}{iid}{by} — {desc}")
 
 
 def cmd_search(args: list[str]) -> None:
@@ -149,7 +155,9 @@ def cmd_search(args: list[str]) -> None:
         desc = e["description"][:100]
         task_id = e.get("taskId", "")
         tid = f" [{task_id}]" if task_id else ""
-        print(f"  [{typ:8s}] {ts}{tid} — {desc}")
+        issue_ref = e.get("issueRef", "")
+        iid = f" ({issue_ref})" if issue_ref else ""
+        print(f"  [{typ:8s}] {ts}{tid}{iid} — {desc}")
 
 
 def cmd_show(args: list[str]) -> None:

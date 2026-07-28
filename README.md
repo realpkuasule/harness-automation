@@ -1,167 +1,238 @@
-# Harness Automation System
+# Harness Automation
 
 [![CI](https://github.com/realpkuasule/harness-automation/actions/workflows/ci.yml/badge.svg)](https://github.com/realpkuasule/harness-automation/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@realpkuasule/harness-automation)](https://www.npmjs.com/package/@realpkuasule/harness-automation)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-基于 MCP (Model Context Protocol) 的自动化约束配置工具。通过评估项目规则、生成配置文件、验证配置完整性，帮助项目建立有效的工程约束体系。
+Harness Automation 是面向 AI coding 工程的 repository-native policy compiler。它把已经确认的工程决策编译成跨会话、跨 Agent 的稳定上下文和可执行检查，使新的编码会话像同一个清醒工程师继续工作。
 
-**v1.2.0** 新增：GitLab CI/CD 支持、团队协作模式（MR 模板、AI Code Review、Onboarding）、Gitleaks 密钥扫描、双远程（GitHub + GitLab）支持。
+它不追求“生成更多规则文件”，而是保证三件事：
 
----
+- PRD、设计和技术调研是可追溯、带哈希的策略输入；
+- 能形式化的规则由真实检查器执行，不能形式化的规则明确标为 review guidance；
+- 所有变更先生成不可变计划，经项目负责人批准精确哈希后才原子应用并可精确回滚。
+
+典型使用场景是项目完成初始化、开始由多人或多个 AI 会话并行开发的第一周。Harness 重点控制三类最常见的失控：
+
+- 不同会话没有先搜索现有实现，重复建设同一能力；
+- 接口约定在局部实现中被悄悄改变，调用方和实现方逐渐分叉；
+- `camelCase`、`snake_case` 等命名边界因 Agent 理解不同反复返工。
+
+## 适用时机
+
+推荐流程：
+
+```text
+需求澄清 / grill-me
+  -> docs/PRD.md
+  -> GitHub 轮子调研（docs/research/）
+  -> PRD 与设计定稿
+  -> Harness intake / discover / plan / apply / check
+  -> 开始多人、多 Agent 并行开发
+```
+
+Harness 不修改或替代 `grill-me`，只消费它和设计流程留下的仓库产物。
+
+## 支持的技术栈
+
+| Profile | 组合 | 命名边界 |
+|---|---|---|
+| `full-typescript` | NestJS + Prisma + tRPC + Next.js | TS/JSON camelCase；PostgreSQL snake_case；Prisma 显式映射 |
+| `python-data-ai` | Django + Pydantic + PostgreSQL + Celery + React/TS + K8s | Python snake_case；JSON/TS camelCase；Pydantic 显式 alias |
+| `go-performance` | Go + sqlc/ent + PostgreSQL + gRPC + K8s + TS | Go mixedCaps；Proto/DB snake_case；Proto JSON/TS camelCase |
+| `custom` | 由负责人批准精确 stack 标识 | 只编译可用适配器，不继承最接近 preset 的框架 |
+
+TypeScript、Python 和 Go 的代码命名由 AST 检查器验证。数据库、RPC、API 和生成代码边界分别保留自己的惯用形式，通过 schema/compiler 显式转换。
+
+`custom` 接受小写 kebab-case stack 标识。`typescript`、`python`、`go`、`postgresql`、`grpc`、`kubernetes` 有内置适配器；`csharp`、`godot`、`rust` 等未知栈仍可进入完整 plan/apply/check/rollback 闭环，但栈级 enforcement 会如实报告为 `blocked`。例如 `custom + typescript` 不会隐式加入 NestJS、Prisma、tRPC、Next.js 或 PostgreSQL。
+
+## 安装
+
+要求 Node.js 18 或更高版本。安装分为两步：先安装全局 CLI，再把同一份 Skill 和可选 MCP 接入本机 coding agent。
+
+```bash
+npm install -g @realpkuasule/harness-automation@latest
+harness-automation install
+```
+
+验证安装：
+
+```bash
+npm list -g @realpkuasule/harness-automation --depth=0
+harness-automation help
+```
+
+`harness-automation install` 会部署：
+
+- `~/.claude/skills/harness-automation/`；
+- `~/.codex/skills/harness-automation/`；
+- `~/.agents/skills/harness-automation/`；
+- Claude Code 可选 MCP Server。
+
+安装后新建 coding-agent 会话，让 Agent 重新发现 Skill。CLI 是所有 Agent 的权威基线；即使某个 Agent 尚无专用 MCP，也可以通过仓库文件和 CLI 使用完整流程。
+
+从源码：
+
+```bash
+cd mcp-server
+npm ci
+npm run build
+cd ..
+./skill/install.sh
+```
 
 ## 快速开始
 
-### 安装
+准备以下输入：
 
-**方式一：npx 一键安装（推荐）**
+- `docs/PRD.md`；
+- `docs/research/` 中的 GitHub/官方文档调研证据；
+- 可选的 `docs/design/` 设计文档。
 
-```bash
-npx @realpkuasule/harness-automation@latest
-```
-
-npx 会自动完成：
-
-1. 全局安装包（`npm install -g`）
-2. 注册 MCP Server 到 Claude Code（`~/.claude.json`）
-3. 安装 Skill 文件（`~/.claude/skills/harness-automation/`）
-
-> 如果全局安装失败（权限问题），请手动运行 `npm install -g @realpkuasule/harness-automation` 后重新执行 npx。
-
-**方式二：从源码安装**
+然后执行：
 
 ```bash
-cd /path/to/harness-automation
-./skill/install.sh --dir /path/to/your-project
+# 只读预检
+harness-automation doctor --project .
+
+# 缺少调研证据时，执行确定性的 GitHub 候选发现
+harness-automation research github --project . --query "<需求概念>"
+
+# 项目负责人确认上游产物已经定稿
+harness-automation intake --project . --owner <负责人> --approve-sources
+
+# 自动发现仓库事实和 Agent 能力
+harness-automation discover --project .
+
+# 只生成计划，不修改目标文件
+harness-automation plan --project . --profile full-typescript
+
+# 无完整 preset 匹配时，由负责人批准精确 stack；--stack 可重复
+harness-automation plan --project . --profile custom \
+  --stack typescript \
+  --stack postgresql
+
+# 没有内置 adapter 的栈不会中断 Harness
+harness-automation plan --project . --profile custom \
+  --stack csharp \
+  --stack godot
+
+# 负责人审阅计划后，使用输出中的完整哈希批准
+harness-automation apply --project . \
+  --plan .harness/plans/<plan>.json \
+  --approve <sha256>
+
+# 验证真实执行状态和漂移
+harness-automation check --project . --mode session
+harness-automation drift --project .
 ```
 
-### 使用
+`plan` 的 JSON 输出包含最终 stack、目标文件、变更前后哈希、验证命令、warning 和完整 `planHash`。项目负责人必须审阅这些内容后，才能把该哈希交给 `apply`。
 
-安装后重新启动 Claude Code，在项目目录中输入触发短语：
+## 新会话接力
 
-> "给我的项目建立约束体系"
-
-系统会自动执行 11 步工作流：适用性评估 → 规则评估 → 配置生成 → 验证 → 完成。
-
-### 手动配置 MCP Server（可选）
-
-如果安装脚本不可用，也可以通过 Claude Code CLI 注册：
+每个新编码会话在修改代码前先运行：
 
 ```bash
-claude mcp add --scope user harness-automation \
-  node /path/to/harness/mcp-server/dist/index.js
+harness-automation context --project . --agent codex
 ```
 
-重新启动 Claude Code 后生效。
+`--agent` 可选 `auto`、`portable`、`claude-code` 或 `codex`。随后：
 
-## 22 个 MCP 工具
+1. 读取 `.harness/generated/effective-policy.md`；
+2. 搜索已有实现，避免重复建设；
+3. 确认所属模块、共享契约和命名边界；
+4. 完成前运行 `harness-automation check --project . --mode session`；
+5. 提交前运行 `--mode commit`，CI 使用 `--mode ci`。
 
-| 工具                                      | 功能                                            |
-| ----------------------------------------- | ----------------------------------------------- |
-| `assess_suitability`                      | 评估项目是否适合应用约束体系                    |
-| `evaluate_rules`                          | 评估并推荐规则（四问题判定流）                  |
-| `scan_codebase`                           | 扫描代码库发现违规模式                          |
-| `generate_config`                         | 生成配置文件（CLAUDE.md, ESLint, Husky, CI 等） |
-| `confirm_decisions`                       | 确认规则推荐结果                                |
-| `validate_setup`                          | 验证配置完整性和语法正确性                      |
-| `query_state`                             | 查询当前进度（支持断点续做）                    |
-| `rollback`                                | 回滚到备份状态                                  |
-| `cognitive_skill`                         | 认知层技能（诊断 / 教育 / 决策支持）            |
-| `optimize_error_message`                  | 错误信息优化和建议                              |
-| `start_ab_test`                           | 启动 A/B 测试对比介质效果                       |
-| `collect_ab_metrics`                      | 收集 A/B 测试数据                               |
-| `analyze_ab_results`                      | 分析 A/B 测试结果                               |
-| `get_rule_stats`                          | 规则效果统计                                    |
-| `analyze_rule_adjustments`                | 自适应调整建议                                  |
-| `export_rules` / `import_rules`           | 规则跨项目复用                                  |
-| `list_rule_presets` / `list_rule_exports` | 预设模板和导出列表                              |
-| `suggest_error_improvement`               | 错误信息模板效果评估                            |
-| `init_harness`                           | 一键初始化（v1.2.0: 支持 gitProvider + collaborationMode 参数） |
-| `reset_state`                             | 重置状态机                                      |
+## 安全模型
 
-完整接口定义见 [OpenAPI 规范](./docs/api/openapi.yaml)。
+- `plan` 是默认写入边界，只新增 `.harness/plans/*.json`。
+- `apply` 要求完整计划 SHA-256，并重新校验 PRD、设计、调研、发现快照和每个目标文件。
+- 写入使用临时文件 + rename；中途失败会恢复已经写过的文件。
+- Agent instruction 文件只维护标记区块，区块外内容保持不变。
+- 不自动执行 PRD 中的命令，不自动安装依赖、运行迁移、修改仓库设置或覆盖既有 CI。
+- 回滚拒绝覆盖应用后又被人或 Agent 修改的文件；只删除本次创建的文件。
 
-## GitLab 团队协作（v1.2.0 新增）
+## 仓库状态
 
-通过 `init_harness` 的 `gitProvider` 和 `collaborationMode` 参数启用：
-
-- **GitLab CI/CD** (`.gitlab-ci.yml`) — 5 阶段流水线：lint / test / security / ai-review / build，集成 GitLab SAST、Secret Detection、Dependency Scanning
-- **MR 模板** (`.gitlab/merge_request_templates/default.md`) — 含 AI 参与度追踪 checkbox
-- **Gitleaks 密钥扫描** (`.gitleaks.toml` + pre-commit hook) — 提交前拦截密钥泄露
-- **AI Code Review** — CI 中自动运行 AI 代码审查（soft check，不阻塞 pipeline）
-- **Onboarding 脚本** (`scripts/onboard.sh`) — 新成员一键配置开发环境
-- **GitLab Settings 脚本** (`scripts/gitlab-configure.sh` + `docs/gitlab-settings.md`) — 项目设置半自动化
-- **双远程支持** — GitHub + GitLab 双 remote，GitLab CI 为主
-- **新 Preset** `team-gitlab-ts` — TypeScript 团队完整 Harness 配置
-
-## 架构
-
-```
-Skill 层 (SKILL.md)             ← 用户交互、流程编排
-    ↓ MCP 协议调用
-MCP 层 (22 个工具)             ← 计算、文件操作
-    ├── 决策引擎               规则评估与介质推荐
-    ├── 配置生成器             15 种配置文件生成（v1.2.0: +6）
-    │   ├── 核心: CLAUDE.md, ESLint, settings.json, .gitignore
-    │   ├── CI:   GitHub Actions + GitLab CI/CD
-    │   ├── Hook: Husky pre-commit, commit-msg, gitleaks
-    │   └── Team: MR 模板, onboarding 脚本, GitLab settings
-    ├── 代码扫描器             AST 代码模式检测
-    ├── 配置验证器             13 项文件完整性检查
-    ├── 规则分析 + 自适应      效果统计与介质调优
-    ├── 认知层                 诊断/教育/决策支持
-    └── A/B 测试框架           介质效果对比实验
+```text
+.harness/
+  intake.json                  批准输入及 SHA-256
+  discovery.json               仓库事实、证据和能力
+  policy.yaml                  唯一策略源（JSON 形式的 YAML 1.2 子集）
+  manifest.json                编译器、策略和输出哈希
+  plans/                       不可变变更计划
+  changes/                     应用与逐文件回滚记录
+  sessions/                    本地新会话收据（忽略提交）
+  generated/
+    effective-policy.md        跨 Agent 有效策略
+    check_python_naming.py      Python profile 的 AST gate
+    check_go_naming.go          Go profile 的 AST gate
 ```
 
-## 内置规则（23 条）
+`AGENTS.md` 是 portable adapter。发现 Claude Code 时，Harness 也在 `CLAUDE.md` 写入同一策略摘要。未来或未知的 DeepSeek/GLM coding agent 默认使用 `AGENTS.md + CLI`，不会根据品牌名称虚构 hook 或 MCP 能力。
 
-覆盖五大类别：
+## 验证语义
 
-| 类别         | 规则示例                                                 |
-| ------------ | -------------------------------------------------------- |
-| **代码质量** | no-console-log, no-debugger, no-explicit-any, no-magic-numbers |
-| **架构规范** | prefer-early-return, no-duplicate-code, error-handling, no-large-files |
-| **工程流程** | conventional-commits, branch-naming, lint-before-commit, test-before-merge, mr-template-required, ai-code-review, team-onboarding |
-| **安全规范** | no-hardcoded-secrets, dependency-audit, input-validation, **secret-detection (NEW)** |
-| **代码风格** | consistent-imports, naming-conventions, max-complexity |
+`harness-automation check` 分开报告：
 
-**v1.2.0 新增 5 条规则：**
-| 规则 | 说明 | 推荐介质 |
-|------|------|---------|
-| R019 branch-naming-convention | 统一分支命名：feature/bugfix/hotfix/release | hook |
-| R020 mr-template-required | 所有 MR 使用团队模板 | claude_md |
-| R021 ai-code-review | CI 中自动运行 AI 代码审查 | ci |
-| R022 secret-detection | Gitleaks 密钥扫描（pre-commit + CI） | linter_error |
-| R023 team-onboarding | 新成员一键环境配置 | settings |
+- `configured`：目标配置存在；
+- `loaded`：Agent 能发现当前策略摘要；
+- `enforced`：真实检查器能拒绝已知无效 fixture；
+- `passing`：当前代码库通过检查。
 
-每条规则通过四问题判定流（是否可形式化 / 代价 / 反馈速度 / 频率）自动推荐最佳实施介质：`linter_error`、`linter_warn`、`claude_md`、`hook`、`ci`、`settings` 等。
+`stackAdapters` 另外报告每个 stack 的内置适配器覆盖，`stackCoverageComplete` 汇总是否全部覆盖。写入 instruction 文件不等于 enforced。设计判断类规则始终显示为 `guidance`；缺少运行时或适配器时显示为 `blocked`。未知栈的通用 Harness 基线可以成功应用，但不等于该语言已经获得确定性 enforcement。
+
+## CLI 与 MCP
+
+v2 CLI 命令：`doctor`、`research github`、`intake`、`discover`、`plan`、`apply`、`context`、`check`、`drift`、`explain`、`rollback`。`check --mode commit|ci` 会执行计划中可见的可信项目 gate，缺失运行时明确返回 `blocked`。
+
+MCP 暴露同一 service layer：`harness_doctor`、`harness_intake`、`harness_discover`、`harness_plan`、`harness_apply`、`harness_context`、`harness_check`、`harness_drift`、`harness_rollback` 和 `harness_research_github`。
+
+旧 v1 handler 仍为迁移已有调用保留，但默认不会暴露给 Agent。只有显式设置 `HARNESS_ENABLE_LEGACY_V1=1` 才会在 MCP tool list 中出现；新的 Skill 不使用 `init_harness`、`generate_config`、占位 AI review 或伪 A/B 路径。
 
 ## 开发
 
 ```bash
 cd mcp-server
-npm install
-npm run build          # 编译 TypeScript
-npm run dev            # 监听模式
-npm run test           # 运行测试（320+ 用例）
-npm run test:coverage  # 覆盖率报告
-npm run lint           # ESLint 检查
+npm ci
+npm run build
+npm test
+npm run lint
 ```
 
-## 文档
+设计与正式策略 schema：
 
-- [安装与使用指南](./docs/usage-as-claude-code-skill.md)
-- [OpenAPI 接口规范](./docs/api/openapi.yaml)
-- [npm 发布准备](./docs/preparing-npm.md)
+- [Harness Skill v2 设计](docs/design/harness-skill-v2.md)
+- [Policy v2 JSON Schema](docs/api/harness-policy-v2.schema.json)
+- [Skill](skill/SKILL.md)
 
-## 技术栈
+## 仓库开发机制
 
-- TypeScript (ES2022, strict mode)
-- Node.js >= 18
-- @modelcontextprotocol/sdk
-- Zod（输入校验）
-- Vitest（测试）
-- ESLint + typescript-eslint
+这个仓库自身的开发事实源已经从本地 `TASK.json` 切换为 GitHub Issues +
+GitHub Project。
+
+- 活跃任务追踪：GitHub Issues / GitHub Project
+- 历史归档：`TASK.json`
+- 变更记录：`CHANGELOG.jsonl`
+
+仓库级工作流命令：
+
+```bash
+python3 scripts/github_tracker.py doctor
+python3 scripts/github_tracker.py summary
+python3 scripts/github_tracker.py list --state open
+python3 scripts/github_tracker.py show 123
+python3 scripts/github_tracker.py create --title "Title" --body "Details" --priority high
+python3 scripts/github_tracker.py status 123 "In Progress"
+python3 scripts/github_tracker.py priority 123 critical
+python3 scripts/github_tracker.py close 123 --comment "Done"
+python3 scripts/changelog.py add feat 11 "Describe change" --issue realpkuasule/harness-automation#123
+```
+
+配置文件在 `.github/project-workflow.json`，详细说明见
+[GitHub Issue / Project Workflow](docs/development/github-project-workflow.md)。
 
 ## 许可证
 

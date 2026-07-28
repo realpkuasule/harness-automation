@@ -41,6 +41,20 @@ import { RuleAnalytics } from "./analytics/rule_analytics.js";
 import { RuleAdapter } from "./adapters/rule_adapter.js";
 import { RuleIO } from "./io/rule_io.js";
 import {
+  applyPlan as applyV2Plan,
+  createSessionContext as createV2SessionContext,
+  discoverAndSave as discoverV2AndSave,
+  doctorProject as doctorV2Project,
+  driftProject as driftV2Project,
+  explainPolicy as explainV2Policy,
+  intakeProject as intakeV2Project,
+  planProject as planV2Project,
+  researchGitHub as researchV2GitHub,
+  rollbackChange as rollbackV2Change,
+  runTrustedChecks as runV2TrustedChecks,
+} from "./v2/service.js";
+import { MAX_STACKS, STACK_ID_PATTERN_SOURCE, SUPPORTED_STACKS, type Stack, type StackProfile } from "./v2/types.js";
+import {
   EvaluateRulesInputSchema,
   GenerateConfigInputSchema,
   ScanCodebaseInputSchema,
@@ -70,8 +84,6 @@ import {
   type HarnessStatus,
   type HarnessError,
   type GenerateConfigOutput,
-  type GitProvider,
-  type CollaborationMode,
 } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -84,7 +96,7 @@ export async function createServer(): Promise<Server> {
   const server = new Server(
     {
       name: "harness-automation",
-      version: "1.0.0",
+      version: "2.0.0",
     },
     {
       capabilities: {
@@ -108,13 +120,84 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
       {
+        name: "harness_doctor",
+        description: "v2: read-only preflight for PRD, research, runtimes, and Harness state",
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" } } },
+      },
+      {
+        name: "harness_intake",
+        description: "v2: snapshot owner-approved PRD, design, and research sources",
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir", "owner", "approveSources"], properties: { projectDir: { type: "string" }, owner: { type: "string" }, approveSources: { type: "boolean", const: true } } },
+      },
+      {
+        name: "harness_discover",
+        description: "v2: inspect repository stack, commands, contracts, and agent capabilities without changing project code",
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" } } },
+      },
+      {
+        name: "harness_plan",
+        description: "v2: compile policy and write an immutable plan; does not apply target changes",
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["projectDir"],
+          properties: {
+            projectDir: { type: "string" },
+            profile: { enum: ["full-typescript", "python-data-ai", "go-performance", "custom"] },
+            stacks: {
+              type: "array",
+              minItems: 1,
+              maxItems: MAX_STACKS,
+              uniqueItems: true,
+              description: `Owner-approved lowercase stack identifiers. Built-in adapters: ${SUPPORTED_STACKS.join(", ")}; other identifiers retain generic policies and report stack-specific enforcement as blocked.`,
+              items: { type: "string", minLength: 1, maxLength: 64, pattern: STACK_ID_PATTERN_SOURCE },
+            },
+          },
+        },
+      },
+      {
+        name: "harness_apply",
+        description: "v2: atomically apply a plan after exact SHA-256 owner approval and all precondition checks",
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir", "planPath", "approval"], properties: { projectDir: { type: "string" }, planPath: { type: "string" }, approval: { type: "string", pattern: "^[a-f0-9]{64}$" } } },
+      },
+      {
+        name: "harness_context",
+        description: "v2: create a new-session receipt and return the effective policy digest and path",
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" }, agent: { enum: ["auto", "portable", "claude-code", "codex"] } } },
+      },
+      {
+        name: "harness_check",
+        description: "v2: report configured, loaded, enforced, and passing separately for each policy",
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" }, mode: { enum: ["session", "commit", "ci"] } } },
+      },
+      {
+        name: "harness_explain",
+        description: "v2: return one policy's rationale, scope, formalization, targets, and verification contract",
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir", "policyId"], properties: { projectDir: { type: "string" }, policyId: { type: "string" } } },
+      },
+      {
+        name: "harness_drift",
+        description: "v2: compare approved sources and generated targets with their recorded SHA-256 hashes",
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" } } },
+      },
+      {
+        name: "harness_rollback",
+        description: "v2: precisely restore one applied plan, refusing to overwrite files changed afterward",
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" }, changeId: { type: "string" } } },
+      },
+      {
+        name: "harness_research_github",
+        description: "v2: discover GitHub wheel candidates and write structured evidence under docs/research",
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" }, queries: { type: "array", maxItems: 5, items: { type: "string" } } } },
+      },
+      {
         name: "evaluate_rules",
-        description: "评估项目适用的规则，输出推荐介质（linter_error/linter_warn/linter+hook/claude_md/ci/hook/settings/none）",
+        description: "Legacy v1 compatibility API; use harness_discover + harness_plan for new projects",
         inputSchema: z(EvaluateRulesInputSchema),
       },
       {
         name: "generate_config",
-        description: "根据规则决策生成配置文件（CLAUDE.md, ESLint, settings.json, .gitignore）",
+        description: "Legacy v1 compatibility API; new projects must use hash-approved harness_apply",
         inputSchema: z(GenerateConfigInputSchema),
       },
       {
@@ -134,7 +217,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
       },
       {
         name: "init_harness",
-        description: "快捷入口：跳过交互，内部依次调用 evaluate_rules → 自动确认决策 → generate_config → validate_setup。额外生成：.husky/ Git hooks、.github/workflows/ci.yml CI 流水线、package.json 依赖检查与合并。适用于二次运行、CI 环境、有经验的用户。",
+        description: "Legacy v1 compatibility API; unsafe for new projects because it bypasses v2 exact-hash approval",
         inputSchema: z(InitHarnessInputSchema),
       },
       {
@@ -217,7 +300,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         description: "生成优化后的错误信息。根据规则 ID、场景或代码上下文返回包含 why/whatInstead/reference 三要素的结构化错误信息",
         inputSchema: z(OptimizeErrorMessageInputSchema),
       },
-    ],
+    ].filter((tool) => process.env.HARNESS_ENABLE_LEGACY_V1 === "1" || tool.name.startsWith("harness_")),
   }));
 
   // ============================================================
@@ -226,8 +309,84 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+  const v2Args = (args ?? {}) as Record<string, unknown>;
+  const v2String = (key: string): string => {
+    const value = v2Args[key];
+    if (typeof value !== "string" || value.length === 0) throw new Error(`ARGUMENT_REQUIRED: ${key}`);
+    return value;
+  };
+  const v2Result = (value: unknown) => ({
+    content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
+  });
 
   switch (name) {
+    case "harness_doctor":
+      return v2Result(doctorV2Project(v2String("projectDir")));
+
+    case "harness_intake":
+      return v2Result(intakeV2Project({
+        projectRoot: v2String("projectDir"),
+        owner: v2String("owner"),
+        approveSources: v2Args.approveSources === true,
+      }));
+
+    case "harness_discover":
+      return v2Result(discoverV2AndSave(v2String("projectDir")));
+
+    case "harness_plan": {
+      const result = planV2Project({
+        projectRoot: v2String("projectDir"),
+        profile: typeof v2Args.profile === "string" ? v2Args.profile as StackProfile : undefined,
+        stacks: Array.isArray(v2Args.stacks) ? v2Args.stacks as Stack[] : undefined,
+      });
+      return v2Result({
+        planPath: result.path,
+        planHash: result.plan.planHash,
+        stacks: result.policy.project.stacks,
+        operations: result.plan.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash })),
+        commands: result.plan.commands,
+        warnings: result.plan.warnings,
+      });
+    }
+
+    case "harness_apply":
+      return v2Result(applyV2Plan({
+        projectRoot: v2String("projectDir"),
+        planPath: v2String("planPath"),
+        approval: v2String("approval"),
+      }));
+
+    case "harness_context":
+      return v2Result(createV2SessionContext(
+        v2String("projectDir"),
+        undefined,
+        typeof v2Args.agent === "string" ? v2Args.agent as "auto" | "portable" | "claude-code" | "codex" : "auto",
+      ));
+
+    case "harness_check":
+      return v2Result(runV2TrustedChecks({
+        projectRoot: v2String("projectDir"),
+        mode: typeof v2Args.mode === "string" ? v2Args.mode as "session" | "commit" | "ci" : "session",
+      }));
+
+    case "harness_explain":
+      return v2Result(explainV2Policy(v2String("projectDir"), v2String("policyId")));
+
+    case "harness_drift":
+      return v2Result(driftV2Project(v2String("projectDir")));
+
+    case "harness_rollback":
+      return v2Result(rollbackV2Change({
+        projectRoot: v2String("projectDir"),
+        changeId: typeof v2Args.changeId === "string" ? v2Args.changeId : undefined,
+      }));
+
+    case "harness_research_github":
+      return v2Result(researchV2GitHub({
+        projectRoot: v2String("projectDir"),
+        queries: Array.isArray(v2Args.queries) ? v2Args.queries.filter((item): item is string => typeof item === "string") : undefined,
+      }));
+
     case "evaluate_rules": {
       const input = EvaluateRulesInputSchema.parse(args);
 
