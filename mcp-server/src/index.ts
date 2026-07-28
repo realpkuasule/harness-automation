@@ -53,7 +53,27 @@ import {
   rollbackChange as rollbackV2Change,
   runTrustedChecks as runV2TrustedChecks,
 } from "./v2/service.js";
-import { MAX_STACKS, STACK_ID_PATTERN_SOURCE, SUPPORTED_STACKS, type Stack, type StackProfile } from "./v2/types.js";
+import {
+  DELIVERY_PROFILES,
+  DOMAIN_PROFILES,
+  MAX_STACKS,
+  STACK_ID_PATTERN_SOURCE,
+  SUPPORTED_STACKS,
+  type DeliveryProfile,
+  type DomainProfile,
+  type Stack,
+  type StackProfile,
+} from "./v2/types.js";
+import {
+  auditWorkspace,
+  planWorkspaceAllocation,
+  planWorkspaceClose,
+  planWorkspaceConfiguration,
+  retentionAuditWorkspace,
+  reviewWorkspace,
+  workspaceStatus,
+} from "./worktree/service.js";
+import type { WorktreeDeliveryConfig } from "./worktree/types.js";
 import {
   EvaluateRulesInputSchema,
   GenerateConfigInputSchema,
@@ -152,6 +172,16 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
               description: `Owner-approved lowercase stack identifiers. Built-in adapters: ${SUPPORTED_STACKS.join(", ")}; other identifiers retain generic policies and report stack-specific enforcement as blocked.`,
               items: { type: "string", minLength: 1, maxLength: 64, pattern: STACK_ID_PATTERN_SOURCE },
             },
+            deliveryProfiles: {
+              type: "array",
+              uniqueItems: true,
+              items: { enum: [...DELIVERY_PROFILES] },
+            },
+            domainProfiles: {
+              type: "array",
+              uniqueItems: true,
+              items: { enum: [...DOMAIN_PROFILES] },
+            },
           },
         },
       },
@@ -189,6 +219,106 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         name: "harness_research_github",
         description: "v2: discover GitHub wheel candidates and write structured evidence under docs/research",
         inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" }, queries: { type: "array", maxItems: 5, items: { type: "string" } } } },
+      },
+      {
+        name: "harness_worktree_status",
+        description: "Read-only portable Git worktree, lease, provider, and enforcement observation; no PRD required",
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" } } },
+      },
+      {
+        name: "harness_worktree_audit",
+        description: "Read-only audit of persistent worktree invariants; creates zero worktrees",
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" } } },
+      },
+      {
+        name: "harness_worktree_configure",
+        description: "Write an immutable exact-hash plan for repository worktree-delivery configuration",
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["projectDir"],
+          properties: {
+            projectDir: { type: "string" },
+            mode: { enum: ["audit-only", "enforced"] },
+            maxPersistentWorktrees: { type: "integer", minimum: 1 },
+            leaseTtlHours: { type: "integer", minimum: 1 },
+            reviewTtlMinutes: { type: "integer", minimum: 1 },
+            remoteBranchRetentionDays: { type: "integer", minimum: 1 },
+            allowedRoots: { type: "array", items: { type: "string" } },
+            protectedRoots: { type: "array", items: { type: "string" } },
+            provider: {
+              type: "object",
+              additionalProperties: false,
+              required: ["kind"],
+              properties: {
+                kind: { enum: ["none", "github", "gitlab", "jira"] },
+                repository: { type: "string" },
+                project: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["owner", "number", "statusField", "doneValues"],
+                  properties: {
+                    owner: { type: "string" },
+                    number: { type: "integer", minimum: 1 },
+                    statusField: { type: "string" },
+                    doneValues: { type: "array", items: { type: "string" } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        name: "harness_worktree_allocate",
+        description: "Create an exact-hash plan for one persistent worktree lease; does not create a worktree",
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["projectDir", "workItem", "branch", "path", "owner"],
+          properties: {
+            projectDir: { type: "string" },
+            workItem: { type: "string" },
+            branch: { type: "string" },
+            path: { type: "string" },
+            owner: { type: "string" },
+            thread: { type: "string" },
+            startPoint: { type: "string" },
+          },
+        },
+      },
+      {
+        name: "harness_worktree_review",
+        description: "Run one command in a detached temporary worktree and clean it unless review content becomes dirty",
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["projectDir", "commit", "command"],
+          properties: {
+            projectDir: { type: "string" },
+            commit: { type: "string" },
+            command: { type: "array", minItems: 1, items: { type: "string" } },
+          },
+        },
+      },
+      {
+        name: "harness_worktree_close",
+        description: "Create an exact-hash close plan after clean, Accepted Commit, and remote-reference checks",
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["projectDir", "workItem", "acceptedCommit"],
+          properties: {
+            projectDir: { type: "string" },
+            workItem: { type: "string" },
+            acceptedCommit: { type: "string" },
+          },
+        },
+      },
+      {
+        name: "harness_worktree_retention_audit",
+        description: "Read-only audit of stale temporary reviews, lifecycle locks, and retained remote branches",
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" } } },
       },
       {
         name: "evaluate_rules",
@@ -338,6 +468,12 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         projectRoot: v2String("projectDir"),
         profile: typeof v2Args.profile === "string" ? v2Args.profile as StackProfile : undefined,
         stacks: Array.isArray(v2Args.stacks) ? v2Args.stacks as Stack[] : undefined,
+        deliveryProfiles: Array.isArray(v2Args.deliveryProfiles)
+          ? v2Args.deliveryProfiles as DeliveryProfile[]
+          : undefined,
+        domainProfiles: Array.isArray(v2Args.domainProfiles)
+          ? v2Args.domainProfiles as DomainProfile[]
+          : undefined,
       });
       return v2Result({
         planPath: result.path,
@@ -386,6 +522,92 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         projectRoot: v2String("projectDir"),
         queries: Array.isArray(v2Args.queries) ? v2Args.queries.filter((item): item is string => typeof item === "string") : undefined,
       }));
+
+    case "harness_worktree_status":
+      return v2Result(workspaceStatus(v2String("projectDir")));
+
+    case "harness_worktree_audit":
+      return v2Result(auditWorkspace(v2String("projectDir")));
+
+    case "harness_worktree_configure": {
+      const result = planWorkspaceConfiguration({
+        projectRoot: v2String("projectDir"),
+        mode: typeof v2Args.mode === "string"
+          ? v2Args.mode as "audit-only" | "enforced"
+          : undefined,
+        maxPersistentWorktrees: typeof v2Args.maxPersistentWorktrees === "number"
+          ? v2Args.maxPersistentWorktrees
+          : undefined,
+        leaseTtlHours: typeof v2Args.leaseTtlHours === "number"
+          ? v2Args.leaseTtlHours
+          : undefined,
+        reviewTtlMinutes: typeof v2Args.reviewTtlMinutes === "number"
+          ? v2Args.reviewTtlMinutes
+          : undefined,
+        remoteBranchRetentionDays: typeof v2Args.remoteBranchRetentionDays === "number"
+          ? v2Args.remoteBranchRetentionDays
+          : undefined,
+        allowedRoots: Array.isArray(v2Args.allowedRoots)
+          ? v2Args.allowedRoots.filter((item): item is string => typeof item === "string")
+          : undefined,
+        protectedRoots: Array.isArray(v2Args.protectedRoots)
+          ? v2Args.protectedRoots.filter((item): item is string => typeof item === "string")
+          : undefined,
+        provider: v2Args.provider && typeof v2Args.provider === "object"
+          ? v2Args.provider as WorktreeDeliveryConfig["provider"]
+          : undefined,
+      });
+      return v2Result({
+        planPath: result.path,
+        planHash: result.plan.planHash,
+        operation: result.plan.operation.kind,
+        warnings: result.plan.warnings,
+      });
+    }
+
+    case "harness_worktree_allocate": {
+      const result = planWorkspaceAllocation({
+        projectRoot: v2String("projectDir"),
+        workItem: v2String("workItem"),
+        branch: v2String("branch"),
+        path: v2String("path"),
+        owner: v2String("owner"),
+        thread: typeof v2Args.thread === "string" ? v2Args.thread : undefined,
+        startPoint: typeof v2Args.startPoint === "string" ? v2Args.startPoint : undefined,
+      });
+      return v2Result({
+        planPath: result.path,
+        planHash: result.plan.planHash,
+        operation: result.plan.operation.kind,
+        warnings: result.plan.warnings,
+      });
+    }
+
+    case "harness_worktree_review":
+      return v2Result(reviewWorkspace({
+        projectRoot: v2String("projectDir"),
+        commit: v2String("commit"),
+        command: Array.isArray(v2Args.command)
+          ? v2Args.command.filter((item): item is string => typeof item === "string")
+          : [],
+      }));
+
+    case "harness_worktree_close": {
+      const result = planWorkspaceClose({
+        projectRoot: v2String("projectDir"),
+        workItem: v2String("workItem"),
+        acceptedCommit: v2String("acceptedCommit"),
+      });
+      return v2Result({
+        planPath: result.path,
+        planHash: result.plan.planHash,
+        operation: result.plan.operation.kind,
+        warnings: result.plan.warnings,
+      });
+    }
+
+    case "harness_worktree_retention_audit":
+      return v2Result(retentionAuditWorkspace({ projectRoot: v2String("projectDir") }));
 
     case "evaluate_rules": {
       const input = EvaluateRulesInputSchema.parse(args);

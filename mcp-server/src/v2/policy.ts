@@ -1,6 +1,8 @@
 import { basename } from "node:path";
 import type {
   Discovery,
+  DeliveryProfile,
+  DomainProfile,
   Intake,
   PolicyDocument,
   PolicyRule,
@@ -215,6 +217,79 @@ function profileRules(profile: StackProfile, stacks: Stack[], owner: string, sou
   return rules;
 }
 
+function deliveryProfileRules(
+  profiles: DeliveryProfile[],
+  owner: string,
+  sources: SourceSnapshot[],
+): PolicyRule[] {
+  if (!profiles.includes("worktree-delivery")) return [];
+  return [rule({
+    id: "worktree-delivery-gate",
+    title: "Worktree delivery gate",
+    statement: "Run the host-local worktree audit before implementation and delivery; persistent lifecycle changes require an exact-hash plan and durable receipt.",
+    rationale: "One shared lease and cleanup protocol prevents duplicate worktrees and cross-session delivery drift.",
+    scope: { include: ["**/*"], exclude: [".git/**"], boundaries: ["code", "deployment"] },
+    formalization: "procedural",
+    severity: "error",
+    targets: [{ kind: "custom-command", adapter: "harness-worktree", command: ["harness-automation", "worktree", "audit", "--project", "."] }],
+    verification: { commands: [], passCriteria: "The local workspace audit is available and passing; CI reports host visibility as blocked." },
+  }, owner, sources)];
+}
+
+function domainProfileRules(
+  profiles: DomainProfile[],
+  owner: string,
+  sources: SourceSnapshot[],
+): PolicyRule[] {
+  if (!profiles.includes("game-development")) return [];
+  return [
+    rule({
+      id: "game-deterministic-replay",
+      title: "Deterministic simulation and replay",
+      statement: "Changes to simulation logic must record seed, inputs, deterministic state hash, and replay evidence in project-owned tests.",
+      rationale: "Gameplay regressions cannot be reproduced across sessions without deterministic evidence.",
+      scope: { include: ["**/*"], exclude: ["**/generated/**"], boundaries: ["code"] },
+      formalization: "procedural",
+      severity: "error",
+      targets: [{ kind: "contract-test", adapter: "project-tests" }],
+      verification: { commands: [], passCriteria: "A project-owned replay test reproduces the accepted state hash from a fixed seed and input stream." },
+    }, owner, sources),
+    rule({
+      id: "game-real-engine-smoke",
+      title: "Real engine smoke evidence",
+      statement: "Engine-facing changes require a smoke run in the real engine/runtime, not only mocked unit tests.",
+      rationale: "Serialization, lifecycle, rendering, and engine integration failures are invisible to isolated mocks.",
+      scope: { include: ["**/*"], exclude: ["**/generated/**"], boundaries: ["code", "deployment"] },
+      formalization: "procedural",
+      severity: "error",
+      targets: [{ kind: "contract-test", adapter: "project-engine" }],
+      verification: { commands: [], passCriteria: "The repository records the approved real-engine smoke command and its successful evidence." },
+    }, owner, sources),
+    rule({
+      id: "game-target-performance",
+      title: "Target-device performance budget",
+      statement: "Performance-sensitive changes must state the target device and approved frame-time, P95/P99 latency, memory, and GC budgets.",
+      rationale: "Desktop averages do not establish performance on the intended device.",
+      scope: { include: ["**/*"], exclude: ["**/generated/**"], boundaries: ["code", "deployment"] },
+      formalization: "cognitive",
+      severity: "error",
+      targets: [{ kind: "agent-instruction", adapter: "portable" }],
+      verification: { commands: [], passCriteria: "Owner review confirms target-device evidence and explicit budgets." },
+    }, owner, sources),
+    rule({
+      id: "game-content-provenance",
+      title: "Content provenance",
+      statement: "Every shipped content asset must record origin, license, attribution obligations, and AI-generation status where applicable.",
+      rationale: "Asset provenance and legal disposition require explicit evidence that code-only checks cannot infer.",
+      scope: { include: ["**/*"], exclude: ["**/generated/**"], boundaries: ["deployment"] },
+      formalization: "cognitive",
+      severity: "error",
+      targets: [{ kind: "agent-instruction", adapter: "portable" }],
+      verification: { commands: [], passCriteria: "Owner or legal review confirms the repository provenance record." },
+    }, owner, sources),
+  ];
+}
+
 export function compilePolicy(args: {
   projectRoot: string;
   owner: string;
@@ -222,6 +297,8 @@ export function compilePolicy(args: {
   discovery: Discovery;
   profile?: StackProfile;
   stacks?: Stack[];
+  deliveryProfiles?: DeliveryProfile[];
+  domainProfiles?: DomainProfile[];
 }): PolicyDocument {
   const profile = args.profile ?? args.discovery.profile;
   if (profile !== "custom" && args.stacks?.length) {
@@ -236,6 +313,8 @@ export function compilePolicy(args: {
     throw new Error("STACK_SELECTION_REQUIRED: use --profile custom with one or more explicit --stack values");
   }
   const adapters = new Map(args.discovery.agents.map(({ id, capabilities }) => [id, { id, capabilities }]));
+  const deliveryProfiles = [...new Set(args.deliveryProfiles ?? [])];
+  const domainProfiles = [...new Set(args.domainProfiles ?? [])];
   adapters.set("portable", {
     id: "portable",
     capabilities: ["root-instructions", "scoped-instructions", "structured-output"],
@@ -255,13 +334,20 @@ export function compilePolicy(args: {
       owner: args.owner,
       phase: "design-approved",
       stacks,
+      deliveryProfiles,
+      domainProfiles,
     },
     sources: args.intake.sources,
     agents: {
       portableInstructionFile: "AGENTS.md",
       adapters: [...adapters.values()],
     },
-    policies: [...commonRules(args.owner, args.intake.sources), ...profileRules(profile, stacks, args.owner, args.intake.sources)],
+    policies: [
+      ...commonRules(args.owner, args.intake.sources),
+      ...profileRules(profile, stacks, args.owner, args.intake.sources),
+      ...deliveryProfileRules(deliveryProfiles, args.owner, args.intake.sources),
+      ...domainProfileRules(domainProfiles, args.owner, args.intake.sources),
+    ],
   };
 }
 

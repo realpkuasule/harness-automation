@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/realpkuasule/harness-automation/main/docs/api/worktree-delivery-v1.schema.json",
+  "title": "Harness Worktree Delivery Configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "mode",
+    "maxPersistentWorktrees",
+    "leaseTtlHours",
+    "reviewTtlMinutes",
+    "remoteBranchRetentionDays",
+    "allowedRoots",
+    "protectedRoots",
+    "remoteBranchDeletion",
+    "provider"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "mode": {
+      "enum": ["audit-only", "enforced"]
+    },
+    "maxPersistentWorktrees": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "leaseTtlHours": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "reviewTtlMinutes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "remoteBranchRetentionDays": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "allowedRoots": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Absolute host paths under which persistent worktrees may be allocated.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "protectedRoots": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Absolute paths that cannot contain a managed worktree.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "remoteBranchDeletion": {
+      "const": false
+    },
+    "provider": {
+      "$ref": "#/$defs/provider"
+    }
+  },
+  "$defs": {
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": ["none", "github", "gitlab", "jira"]
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["owner", "number", "statusField", "doneValues"],
+          "properties": {
+            "owner": {
+              "type": "string",
+              "minLength": 1
+            },
+            "number": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "statusField": {
+              "type": "string",
+              "minLength": 1
+            },
+            "doneValues": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "none"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": ["repository"]
+            }
+          },
+          "else": {
+            "required": ["repository"]
+          }
+        }
+      ]
+    }
+  }
+}

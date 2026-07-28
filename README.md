@@ -67,6 +67,7 @@ harness-automation help
 - `~/.claude/skills/harness-automation/`；
 - `~/.codex/skills/harness-automation/`；
 - `~/.agents/skills/harness-automation/`；
+- 同位置的 `manage-worktree-delivery/`；
 - Claude Code 可选 MCP Server。
 
 安装后新建 coding-agent 会话，让 Agent 重新发现 Skill。CLI 是所有 Agent 的权威基线；即使某个 Agent 尚无专用 MCP，也可以通过仓库文件和 CLI 使用完整流程。
@@ -117,6 +118,13 @@ harness-automation plan --project . --profile custom \
   --stack csharp \
   --stack godot
 
+# delivery/domain profile 与技术栈正交，可独立追加
+harness-automation plan --project . --profile custom \
+  --stack csharp \
+  --stack godot \
+  --delivery-profile worktree-delivery \
+  --domain-profile game-development
+
 # 负责人审阅计划后，使用输出中的完整哈希批准
 harness-automation apply --project . \
   --plan .harness/plans/<plan>.json \
@@ -128,6 +136,47 @@ harness-automation drift --project .
 ```
 
 `plan` 的 JSON 输出包含最终 stack、目标文件、变更前后哈希、验证命令、warning 和完整 `planHash`。项目负责人必须审阅这些内容后，才能把该哈希交给 `apply`。
+
+## Worktree 交付治理
+
+普通 Git 仓库无需 PRD 或 Provider 即可只读检查：
+
+```bash
+harness-automation worktree status --project .
+harness-automation worktree audit --project .
+harness-automation worktree retention-audit --project .
+```
+
+正式启用、分配和关闭默认只生成计划：
+
+```bash
+harness-automation worktree configure \
+  --project . \
+  --mode enforced \
+  --allow-root /absolute/worktree-parent
+
+harness-automation worktree allocate \
+  --project . \
+  --work-item github:owner/repository#24 \
+  --branch issue-24 \
+  --path /absolute/worktree-parent/issue-24 \
+  --owner <负责人>
+
+harness-automation worktree close \
+  --project . \
+  --work-item github:owner/repository#24 \
+  --accepted-commit <sha>
+```
+
+三者输出的计划都通过统一 `apply --plan ... --approve <sha256>` 执行。`status`、`audit`、保留期审计和 cleanup planning 创建零个 worktree。
+
+临时 Review 使用 detached HEAD、OS 临时目录且不创建本地 branch：
+
+```bash
+harness-automation worktree review --project . --commit <sha> -- npm test
+```
+
+clean checkout 会立即回收；产生未提交内容时返回 `blocked`，保留精确路径、文件大小、SHA-256、binary patch 摘要和耐久回执。远端 branch 默认只审计，永不自动删除。
 
 ## 新会话接力
 
@@ -186,9 +235,9 @@ harness-automation context --project . --agent codex
 
 ## CLI 与 MCP
 
-v2 CLI 命令：`doctor`、`research github`、`intake`、`discover`、`plan`、`apply`、`context`、`check`、`drift`、`explain`、`rollback`。`check --mode commit|ci` 会执行计划中可见的可信项目 gate，缺失运行时明确返回 `blocked`。
+v2 CLI 命令：`doctor`、`research github`、`intake`、`discover`、`plan`、`apply`、`context`、`check`、`drift`、`explain`、`rollback`，以及 `worktree configure|allocate|review|status|audit|close|retention-audit`。`check --mode commit|ci` 会执行计划中可见的可信项目 gate，缺失运行时明确返回 `blocked`。CI 无法观察宿主机 worktree 时会如实报告 workspace enforcement 不可用。
 
-MCP 暴露同一 service layer：`harness_doctor`、`harness_intake`、`harness_discover`、`harness_plan`、`harness_apply`、`harness_context`、`harness_check`、`harness_drift`、`harness_rollback` 和 `harness_research_github`。
+MCP 暴露同一 service layer，包括核心 `harness_*` 工具和对应的 `harness_worktree_*` 工具。CLI 仍是 Claude Code、Codex、DeepSeek/GLM 等 Agent 的 portable 基线。
 
 旧 v1 handler 仍为迁移已有调用保留，但默认不会暴露给 Agent。只有显式设置 `HARNESS_ENABLE_LEGACY_V1=1` 才会在 MCP tool list 中出现；新的 Skill 不使用 `init_harness`、`generate_config`、占位 AI review 或伪 A/B 路径。
 
@@ -205,8 +254,11 @@ npm run lint
 设计与正式策略 schema：
 
 - [Harness Skill v2 设计](docs/design/harness-skill-v2.md)
+- [Worktree Delivery 设计](docs/design/worktree-delivery.md)
 - [Policy v2 JSON Schema](docs/api/harness-policy-v2.schema.json)
+- [Worktree Delivery v1 JSON Schema](docs/api/worktree-delivery-v1.schema.json)
 - [Skill](skill/SKILL.md)
+- [Worktree Skill](skills/manage-worktree-delivery/SKILL.md)
 
 ## 仓库开发机制
 

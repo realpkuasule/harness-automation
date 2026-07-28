@@ -26,11 +26,16 @@ HOME="$TEST_HOME" PATH="$FAKE_BIN:$PATH" node "$HARNESS_ROOT/mcp-server/dist/cli
 test -f "$TEST_HOME/.claude/skills/harness-automation/SKILL.md"
 test -f "$TEST_HOME/.codex/skills/harness-automation/SKILL.md"
 test -f "$TEST_HOME/.agents/skills/harness-automation/SKILL.md"
+test -f "$TEST_HOME/.claude/skills/manage-worktree-delivery/SKILL.md"
+test -f "$TEST_HOME/.codex/skills/manage-worktree-delivery/SKILL.md"
+test -f "$TEST_HOME/.agents/skills/manage-worktree-delivery/SKILL.md"
+test -f "$TEST_HOME/.codex/skills/manage-worktree-delivery/references/safety-model.md"
 test -f "$TEST_HOME/.claude/skills/harness-automation/references/policy-model.md"
 test -f "$TEST_HOME/.codex/skills/harness-automation/agents/openai.yaml"
 test -f "$TEST_HOME/.claude.json"
 
 grep -q 'harness-automation' "$TEST_HOME/.claude.json"
 grep -q 'Harness Automation' "$TEST_HOME/.codex/skills/harness-automation/SKILL.md"
+grep -q 'worktree audit' "$TEST_HOME/.codex/skills/manage-worktree-delivery/SKILL.md"
 
 echo "Installer test passed"

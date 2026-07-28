@@ -34,7 +34,7 @@
   ],
   "license": "MIT",
   "scripts": {
-    "build": "tsc && cp src/rules.json dist/rules.json && rm -rf dist/skill && mkdir -p dist/skill && cp ../skill/SKILL.md dist/skill/SKILL.md && cp -R ../skill/agents ../skill/references ../skill/scripts dist/skill/ && mkdir -p dist/scripts && cp ../scripts/task.py ../scripts/changelog.py dist/scripts/",
+    "build": "tsc && cp src/rules.json dist/rules.json && rm -rf dist/skill dist/manage-worktree-delivery && mkdir -p dist/skill dist/manage-worktree-delivery && cp ../skill/SKILL.md dist/skill/SKILL.md && cp -R ../skill/agents ../skill/references ../skill/scripts dist/skill/ && cp ../skills/manage-worktree-delivery/SKILL.md dist/manage-worktree-delivery/SKILL.md && cp -R ../skills/manage-worktree-delivery/agents ../skills/manage-worktree-delivery/references ../skills/manage-worktree-delivery/scripts dist/manage-worktree-delivery/ && mkdir -p dist/scripts && cp ../scripts/task.py ../scripts/changelog.py dist/scripts/",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "lint": "eslint src/",
