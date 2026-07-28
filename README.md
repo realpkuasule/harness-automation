@@ -208,6 +208,32 @@ npm run lint
 - [Policy v2 JSON Schema](docs/api/harness-policy-v2.schema.json)
 - [Skill](skill/SKILL.md)
 
+## 仓库开发机制
+
+这个仓库自身的开发事实源已经从本地 `TASK.json` 切换为 GitHub Issues +
+GitHub Project。
+
+- 活跃任务追踪：GitHub Issues / GitHub Project
+- 历史归档：`TASK.json`
+- 变更记录：`CHANGELOG.jsonl`
+
+仓库级工作流命令：
+
+```bash
+python3 scripts/github_tracker.py doctor
+python3 scripts/github_tracker.py summary
+python3 scripts/github_tracker.py list --state open
+python3 scripts/github_tracker.py show 123
+python3 scripts/github_tracker.py create --title "Title" --body "Details" --priority high
+python3 scripts/github_tracker.py status 123 "In Progress"
+python3 scripts/github_tracker.py priority 123 critical
+python3 scripts/github_tracker.py close 123 --comment "Done"
+python3 scripts/changelog.py add feat 11 "Describe change" --issue realpkuasule/harness-automation#123
+```
+
+配置文件在 `.github/project-workflow.json`，详细说明见
+[GitHub Issue / Project Workflow](docs/development/github-project-workflow.md)。
+
 ## 许可证
 
 MIT

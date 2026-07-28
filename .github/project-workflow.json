@@ -1,0 +1,16 @@
+{
+  "repo": "realpkuasule/harness-automation",
+  "project": {
+    "owner": "realpkuasule",
+    "number": 2,
+    "statusField": "Status",
+    "defaultStatus": "Todo",
+    "priorityField": "Priority",
+    "defaultPriority": "medium"
+  },
+  "workflow": {
+    "sourceOfTruth": "github-issues-project",
+    "legacyTaskFile": "TASK.json",
+    "legacyTaskMode": "archive-only"
+  }
+}

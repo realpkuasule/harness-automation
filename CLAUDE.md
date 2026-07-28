@@ -17,25 +17,30 @@ Harness Automation System 是一个基于 MCP (Model Context Protocol) 的自动
 
 ## 协作
 
-- 任务看板: "TASK.json"。
+- 开发事实源: GitHub Issues + 配置好的 GitHub Project。
+- `TASK.json` 仅保留为历史归档，不再新增或更新。
 - 变更记录: "CHANGELOG.jsonl"
 
 ## 项目管理脚本
 
 ```bash
-# 任务看板操作 (scripts/task.py)
-python3 scripts/task.py summary                 # 按状态/优先级统计
-python3 scripts/task.py list [--status pending|completed|in_progress]
-python3 scripts/task.py list --phase 6
-python3 scripts/task.py show P6-5               # 查看任务详情
-python3 scripts/task.py update P6-5 completed   # 更新任务状态
+# GitHub Issue / Project 操作 (scripts/github_tracker.py)
+python3 scripts/github_tracker.py doctor
+python3 scripts/github_tracker.py summary
+python3 scripts/github_tracker.py list --state open
+python3 scripts/github_tracker.py show 123
+python3 scripts/github_tracker.py create --title "标题" --body "描述"
+python3 scripts/github_tracker.py status 123 "In Progress"
+python3 scripts/github_tracker.py close 123 --comment "Done"
 
 # 变更记录操作 (scripts/changelog.py)
-python3 scripts/changelog.py add feat 6 "P6-X: 实现某功能"
-python3 scripts/changelog.py add fix 4 "P4-Y: 修复某问题"
+python3 scripts/changelog.py add feat 11 "实现某功能" --issue realpkuasule/harness-automation#123
+python3 scripts/changelog.py add fix 11 "修复某问题" --issue realpkuasule/harness-automation#123
 python3 scripts/changelog.py list [n]           # 查看最近 n 条
 python3 scripts/changelog.py search <keyword>   # 搜索变更
 ```
+
+GitHub Project 配置文件: `.github/project-workflow.json`
 
 ## 目录结构
 
@@ -61,7 +66,7 @@ mcp-server/
 │   │   ├── gitlab_settings.ts     # GitLab 项目设置 script + doc（NEW）
 │   │   ├── team_onboarding.ts     # scripts/onboard.sh（NEW）
 │   │   ├── package_json.ts   # package.json 依赖合并
-│   │   └── scripts_deployment.ts  # task.py / changelog.py 部署
+│   │   └── scripts_deployment.ts  # legacy task.py / changelog.py 部署
 │   ├── scanners/             # 代码扫描器
 │   ├── validators/           # 配置验证器
 │   ├── analytics/            # 规则效果统计
@@ -90,6 +95,13 @@ npx vitest run --coverage  # 覆盖率报告
 3. **Zod 校验输入**: 所有 MCP 工具输入通过 Zod Schema 校验
 4. **状态驱动**: 通过 `.harness/state.json` 持久化状态，支持断点续做
 5. **测试覆盖**: 单元测试 + 集成测试，所有模块必须有测试覆盖
+
+## 仓库开发约束
+
+1. 每个非琐碎改动都应绑定 GitHub Issue。
+2. Issue 的流程状态由 GitHub Project 管理。
+3. `TASK.json` 是只读历史，不再作为当前开发真相源。
+4. `CHANGELOG.jsonl` 记录重大变更时优先写入 `issueRef`。
 
 ## v1.2.0 团队协作新增
 
