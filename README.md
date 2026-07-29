@@ -153,6 +153,7 @@ harness-automation worktree retention-audit --project .
 harness-automation worktree configure \
   --project . \
   --mode enforced \
+  --management-branch main \
   --allow-root /absolute/worktree-parent
 
 harness-automation worktree allocate \
@@ -169,7 +170,7 @@ harness-automation worktree close \
 ```
 
 三者输出的计划都通过统一 `apply --plan ... --approve <sha256>` 执行。`status`、`audit`、保留期审计和 cleanup planning 创建零个 worktree。
-仓库中的 `.harness/worktree-delivery.json` 只保存可移植策略；允许根和保护根写入 Git common dir 的本机绑定。配置计划哈希同时覆盖两者，新机器必须批准自己的本机绑定。
+仓库中的 `.harness/worktree-delivery.json` 只保存可移植策略，包括唯一 management checkout 的分支选择器；允许根和保护根写入 Git common dir 的本机绑定。配置计划哈希同时覆盖两者，新机器必须批准自己的本机绑定。
 
 临时 Review 使用 detached HEAD、OS 临时目录且不创建本地 branch：
 

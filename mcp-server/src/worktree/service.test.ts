@@ -135,6 +135,57 @@ describe("portable worktree inventory", () => {
     expect(existsSync(join(root, ".harness"))).toBe(false);
   });
 
+  it("keeps the configured management checkout out of detached Review orphan findings", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main" });
+    git(root, "add", ".harness/worktree-delivery.json");
+    git(root, "commit", "-m", "test: configure management checkout");
+    const reviewPath = `${root}-review`;
+    repositories.push(reviewPath);
+    git(root, "worktree", "add", "--detach", reviewPath, "HEAD");
+
+    const audit = auditWorkspace(reviewPath);
+
+    expect(audit.passing).toBe(true);
+    expect(audit.policies.find(
+      (policy) => policy.id === "workspace.mapping-consistency",
+    )?.evidence).toEqual([]);
+    git(root, "worktree", "remove", reviewPath);
+  });
+
+  it("fails closed when the configured management branch has no checkout", () => {
+    const root = repository();
+    configure(root, { managementBranch: "trunk" });
+
+    const mapping = auditWorkspace(root).policies.find(
+      (policy) => policy.id === "workspace.mapping-consistency",
+    );
+
+    expect(mapping).toMatchObject({ passing: false, status: "failing" });
+    expect(mapping?.evidence).toEqual([
+      "management checkout not found for branch: trunk",
+    ]);
+  });
+
+  it("fails closed when multiple checkouts claim the management branch", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main" });
+    const duplicatePath = `${root}-duplicate-main`;
+    repositories.push(duplicatePath);
+    git(root, "worktree", "add", "--detach", duplicatePath, "HEAD");
+    git(duplicatePath, "symbolic-ref", "HEAD", "refs/heads/main");
+
+    const mapping = auditWorkspace(root).policies.find(
+      (policy) => policy.id === "workspace.mapping-consistency",
+    );
+
+    expect(mapping).toMatchObject({ passing: false, status: "failing" });
+    expect(mapping?.evidence).toEqual([
+      "multiple management checkouts found for branch: main",
+    ]);
+    git(root, "worktree", "remove", duplicatePath);
+  });
+
   it("reports duplicate persistent leases for one work item", () => {
     const root = repository();
     const commonDir = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir");
@@ -183,6 +234,7 @@ describe("portable worktree inventory", () => {
     const invalid: Array<[string, Record<string, unknown>]> = [
       ["schemaVersion", { schemaVersion: "2.0" }],
       ["mode", { mode: "maybe" }],
+      ["managementBranch", { managementBranch: "" }],
       ["maxPersistentWorktrees", { maxPersistentWorktrees: 0 }],
       ["leaseTtlHours", { leaseTtlHours: 0 }],
       ["reviewTtlMinutes", { reviewTtlMinutes: 0 }],

@@ -240,6 +240,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
           properties: {
             projectDir: { type: "string" },
             mode: { enum: ["audit-only", "enforced"] },
+            managementBranch: { type: "string", minLength: 1 },
             maxPersistentWorktrees: { type: "integer", minimum: 1 },
             leaseTtlHours: { type: "integer", minimum: 1 },
             reviewTtlMinutes: { type: "integer", minimum: 1 },
@@ -534,6 +535,9 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         projectRoot: v2String("projectDir"),
         mode: typeof v2Args.mode === "string"
           ? v2Args.mode as "audit-only" | "enforced"
+          : undefined,
+        managementBranch: typeof v2Args.managementBranch === "string"
+          ? v2Args.managementBranch
           : undefined,
         maxPersistentWorktrees: typeof v2Args.maxPersistentWorktrees === "number"
           ? v2Args.maxPersistentWorktrees

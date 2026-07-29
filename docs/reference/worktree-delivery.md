@@ -18,6 +18,7 @@ lifecycle locks, and remote branches; it deletes none of them.
 harness-automation worktree configure \
   --project . \
   --mode audit-only|enforced \
+  --management-branch main \
   --allow-root /absolute/parent \
   [--protect-root /absolute/protected] \
   [--max-persistent 4] \
@@ -32,6 +33,7 @@ GitHub Provider example:
 harness-automation worktree configure \
   --project . \
   --mode enforced \
+  --management-branch main \
   --allow-root /absolute/parent \
   --provider github \
   --provider-repository owner/repository \
@@ -42,12 +44,19 @@ harness-automation worktree configure \
 ```
 
 `--done-value` may repeat. GitLab and Jira currently report `blocked`.
+`--management-branch` identifies the one persistent management checkout without
+putting a host-specific path in repository policy. Enforced audit fails closed
+when that branch has zero or multiple observed checkouts. A detached Review
+checkout is exempt only while it is the command checkout; persistent task
+worktrees still require leases.
 
 The approved plan writes portable policy to
 `.harness/worktree-delivery.json` and host-specific canonical roots to
 `<git-common-dir>/harness/worktree-delivery/host-binding.json`. The plan hash
 covers both. On a new host, run configure again to approve that host's roots;
 omitted portable options preserve the existing repository policy.
+Existing v1 configurations without `managementBranch` retain the legacy
+command-checkout behavior until an approved configure plan adds the selector.
 
 ## Allocate
 

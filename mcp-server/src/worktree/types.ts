@@ -22,6 +22,7 @@ export type WorktreePolicyId = typeof WORKTREE_POLICY_IDS[number];
 export interface WorktreeDeliveryConfig {
   schemaVersion: "1.0";
   mode: "audit-only" | "enforced";
+  managementBranch?: string;
   maxPersistentWorktrees: number;
   leaseTtlHours: number;
   reviewTtlMinutes: number;

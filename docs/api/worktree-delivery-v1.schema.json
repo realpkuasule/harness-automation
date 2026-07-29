@@ -25,6 +25,11 @@
     "mode": {
       "enum": ["audit-only", "enforced"]
     },
+    "managementBranch": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Portable branch selector for the single persistent management checkout."
+    },
     "maxPersistentWorktrees": {
       "type": "integer",
       "minimum": 1
