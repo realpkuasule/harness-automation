@@ -309,6 +309,7 @@ function runWorktreeCommand(
       printWorkspacePlan(planWorkspaceConfiguration({
         projectRoot: root,
         mode: selectedMode,
+        managementBranch: value(args, "management-branch"),
         maxPersistentWorktrees: positiveInteger(args, "max-persistent"),
         leaseTtlHours: positiveInteger(args, "lease-ttl-hours"),
         reviewTtlMinutes: positiveInteger(args, "review-ttl-minutes"),
@@ -381,7 +382,7 @@ Usage:
   harness-automation explain <policy-id> [--project .]
   harness-automation rollback [--project .] [--change <id>]
   harness-automation worktree status|audit|retention-audit [--project .]
-  harness-automation worktree configure [--mode audit-only|enforced] [--allow-root <absolute-path>] [--project .]
+  harness-automation worktree configure [--mode audit-only|enforced] [--management-branch <branch>] [--allow-root <absolute-path>] [--project .]
   harness-automation worktree allocate --work-item <provider:id> --branch <name> --path <absolute-path> --owner <name> [--project .]
   harness-automation worktree review [--commit <sha>] [--project .] -- <command> [args...]
   harness-automation worktree close --work-item <provider:id> --accepted-commit <sha> [--project .]

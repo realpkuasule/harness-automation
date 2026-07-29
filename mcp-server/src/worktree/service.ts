@@ -127,6 +127,7 @@ const providerSchema = z.object({
 const worktreeConfigShape = {
   schemaVersion: z.literal(WORKTREE_SCHEMA_VERSION),
   mode: z.enum(["audit-only", "enforced"]),
+  managementBranch: z.string().trim().min(1).optional(),
   maxPersistentWorktrees: z.number().int().positive(),
   leaseTtlHours: z.number().int().positive(),
   reviewTtlMinutes: z.number().int().positive(),
@@ -522,6 +523,24 @@ function blockedResult(
 
 export function auditWorkspace(projectRoot: string): WorkspaceAudit {
   const status = workspaceStatus(projectRoot);
+  const managementMatches = status.config.managementBranch
+    ? status.worktrees.filter((worktree) =>
+      !worktree.bare &&
+      !worktree.prunable &&
+      worktree.branch === status.config.managementBranch)
+    : [];
+  const managementPath = status.config.managementBranch && managementMatches.length === 1
+    ? managementMatches[0].path
+    : status.config.managementBranch
+      ? null
+      : status.projectDir;
+  const managementErrors = !status.config.managementBranch
+    ? []
+    : managementMatches.length === 0
+      ? [`management checkout not found for branch: ${status.config.managementBranch}`]
+      : managementMatches.length > 1
+        ? [`multiple management checkouts found for branch: ${status.config.managementBranch}`]
+        : [];
   const duplicateItems = [...new Set(status.leases.map((lease) => lease.workItem))]
     .filter((workItem) => status.leases.filter((lease) => lease.workItem === workItem).length > 1);
   const leaseMappingErrors = status.leases.flatMap((lease) => {
@@ -532,11 +551,12 @@ export function auditWorkspace(projectRoot: string): WorkspaceAudit {
     }
     return [];
   });
-  const orphanWorktrees = status.worktrees
+  const orphanWorktrees = managementErrors.length > 0 ? [] : status.worktrees
     .filter((worktree) =>
       !worktree.bare &&
       !worktree.prunable &&
-      !samePath(worktree.path, status.projectDir) &&
+      !(worktree.detached && samePath(worktree.path, status.projectDir)) &&
+      !(managementPath && samePath(worktree.path, managementPath)) &&
       !status.leases.some((lease) => samePath(lease.path, worktree.path)))
     .map((worktree) => `unleased worktree: ${worktree.path}`);
   const projectMappingErrors = status.config.provider.project
@@ -547,7 +567,12 @@ export function auditWorkspace(projectRoot: string): WorkspaceAudit {
         : [];
     })
     : [];
-  const mappingErrors = [...leaseMappingErrors, ...orphanWorktrees, ...projectMappingErrors];
+  const mappingErrors = [
+    ...managementErrors,
+    ...leaseMappingErrors,
+    ...orphanWorktrees,
+    ...projectMappingErrors,
+  ];
   const staleLeases = status.leases.filter((lease) =>
     (Date.now() - Date.parse(lease.heartbeatAt)) / 3_600_000 > status.config.leaseTtlHours);
   const protectedPaths = status.leases
@@ -727,6 +752,7 @@ function planDraft(args: {
 export function planWorkspaceConfiguration(args: {
   projectRoot: string;
   mode?: "audit-only" | "enforced";
+  managementBranch?: string;
   maxPersistentWorktrees?: number;
   leaseTtlHours?: number;
   reviewTtlMinutes?: number;
@@ -740,6 +766,7 @@ export function planWorkspaceConfiguration(args: {
   const config = validConfig({
     ...status.config,
     mode: args.mode ?? status.config.mode,
+    managementBranch: args.managementBranch ?? status.config.managementBranch,
     maxPersistentWorktrees: args.maxPersistentWorktrees ?? status.config.maxPersistentWorktrees,
     leaseTtlHours: args.leaseTtlHours ?? status.config.leaseTtlHours,
     reviewTtlMinutes: args.reviewTtlMinutes ?? status.config.reviewTtlMinutes,

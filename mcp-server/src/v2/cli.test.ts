@@ -145,6 +145,8 @@ describe("v2 CLI forward flow", () => {
       "configure",
       "--mode",
       "enforced",
+      "--management-branch",
+      "main",
       "--allow-root",
       join(root, ".."),
     ]);
@@ -156,6 +158,9 @@ describe("v2 CLI forward flow", () => {
       "--approve",
       String(planned.planHash),
     ]);
-    expect(run(root, ["worktree", "status"]).configured).toBe(true);
+    expect(run(root, ["worktree", "status"])).toMatchObject({
+      configured: true,
+      config: { managementBranch: "main" },
+    });
   });
 });

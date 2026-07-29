@@ -33,10 +33,11 @@ node <skill目录>/scripts/run.mjs worktree audit --project <项目绝对路径>
 node <skill目录>/scripts/run.mjs worktree configure \
   --project <项目绝对路径> \
   --mode enforced \
+  --management-branch <管理checkout分支> \
   --allow-root <worktree允许父目录的绝对路径>
 ```
 
-向项目负责人展示 `planPath`、完整 `planHash`、配置模式、主机绑定中的允许根/保护根、容量和 Provider 映射。仓库配置不得写入主机绝对路径；同一个哈希计划同时覆盖仓库策略和 Git common dir 下的主机绑定。
+向项目负责人展示 `planPath`、完整 `planHash`、配置模式、management 分支选择器、主机绑定中的允许根/保护根、容量和 Provider 映射。仓库配置不得写入主机绝对路径；同一个哈希计划同时覆盖仓库策略和 Git common dir 下的主机绑定。缺失或歧义的 management checkout 在 enforced audit 中必须 fail closed。
 
 新机器缺少主机绑定、或旧配置仍内嵌绝对路径时，enforced 分配必须停止并重新生成 configure 迁移计划。未显式提供的 portable 选项沿用现有仓库策略。
 
