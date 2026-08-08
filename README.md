@@ -118,12 +118,13 @@ harness-automation plan --project . --profile custom \
   --stack csharp \
   --stack godot
 
-# delivery/domain profile 与技术栈正交，可独立追加
+# delivery/domain/quality profile 与技术栈正交，可独立追加
 harness-automation plan --project . --profile custom \
   --stack csharp \
   --stack godot \
   --delivery-profile worktree-delivery \
-  --domain-profile game-development
+  --domain-profile game-development \
+  --quality-profile eval-driven-development
 
 # 负责人审阅计划后，使用输出中的完整哈希批准
 harness-automation apply --project . \
@@ -136,6 +137,28 @@ harness-automation drift --project .
 ```
 
 `plan` 的 JSON 输出包含最终 stack、目标文件、变更前后哈希、验证命令、warning 和完整 `planHash`。项目负责人必须审阅这些内容后，才能把该哈希交给 `apply`。
+
+## Eval-driven development
+
+对 Agent、生成、检索或模型判断等非确定性产品行为，可以启用 EDD quality profile。普通确定性项目继续使用现有类型、单元、集成和契约门禁，不必强制启用。
+
+启用前先创建 `evals/evals.json`，记录代表性任务、实现前 baseline、目标、grader 和跨栈 argv runner；格式见 [Eval Contract v1](docs/api/eval-contract-v1.schema.json) 与 [EDD 工作流](skill/references/eval-driven-development.md)。然后重新 intake/discover 并规划：
+
+```bash
+harness-automation intake --project . --owner <负责人> --approve-sources
+harness-automation discover --project .
+harness-automation plan --project . --profile custom \
+  --stack typescript \
+  --quality-profile eval-driven-development
+```
+
+Eval runner 只在 CI mode 执行：
+
+```bash
+harness-automation check --project . --mode ci
+```
+
+Harness 验证批准契约、执行项目 runner，并生成只包含 argv、退出状态和输出 SHA-256 的 `.harness/eval-runs/` 回执。它不直接调用模型 Provider、不保存凭据/原始 transcript，也不允许未经人工校准的模型 grader 成为硬门禁。
 
 ## Worktree 交付治理
 
@@ -237,7 +260,7 @@ harness-automation context --project . --agent codex
 
 ## CLI 与 MCP
 
-v2 CLI 命令：`doctor`、`research github`、`intake`、`discover`、`plan`、`apply`、`context`、`check`、`drift`、`explain`、`rollback`，以及 `worktree configure|allocate|review|status|audit|close|retention-audit`。`check --mode commit|ci` 会执行计划中可见的可信项目 gate，缺失运行时明确返回 `blocked`。CI 无法观察宿主机 worktree 时会如实报告 workspace enforcement 不可用。
+v2 CLI 命令：`doctor`、`research github`、`intake`、`discover`、`plan`、`apply`、`context`、`check`、`drift`、`explain`、`rollback`，以及 `worktree configure|allocate|review|status|audit|close|retention-audit`。`plan` 支持正交的 `deliveryProfile`、`domainProfile` 和 `qualityProfile`。`check --mode commit|ci` 会执行计划中可见的可信项目 gate；EDD runner 只在 CI mode 执行，缺失运行时明确返回 `blocked`。CI 无法观察宿主机 worktree 时会如实报告 workspace enforcement 不可用。
 
 MCP 暴露同一 service layer，包括核心 `harness_*` 工具和对应的 `harness_worktree_*` 工具。CLI 仍是 Claude Code、Codex、DeepSeek/GLM 等 Agent 的 portable 基线。
 
@@ -258,6 +281,7 @@ npm run lint
 - [Harness Skill v2 设计](docs/design/harness-skill-v2.md)
 - [Worktree Delivery 设计](docs/design/worktree-delivery.md)
 - [Policy v2 JSON Schema](docs/api/harness-policy-v2.schema.json)
+- [Eval Contract v1 JSON Schema](docs/api/eval-contract-v1.schema.json)
 - [Worktree Delivery v1 JSON Schema](docs/api/worktree-delivery-v1.schema.json)
 - [Worktree Host Binding v1 JSON Schema](docs/api/worktree-host-binding-v1.schema.json)
 - [Skill](skill/SKILL.md)

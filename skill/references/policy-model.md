@@ -11,7 +11,7 @@ Each policy records:
 - argv-based verification commands and pass criteria;
 - examples and change-control requirements.
 
-`project.deliveryProfiles` and `project.domainProfiles` are orthogonal to `project.stacks`. `worktree-delivery` does not change stack selection. `game-development` can only append replay, real-engine, target-performance, and content-provenance policy; it cannot weaken common or delivery rules.
+`project.deliveryProfiles`, `project.domainProfiles`, and `project.qualityProfiles` are orthogonal to `project.stacks`. `worktree-delivery` does not change stack selection. `game-development` can only append replay, real-engine, target-performance, and content-provenance policy; it cannot weaken common or delivery rules. `eval-driven-development` adds approved evaluation contracts and CI evidence without changing the technology stack.
 
 ## Formalization classes
 
@@ -31,6 +31,8 @@ Observed state belongs in verification output, not the canonical policy:
 The aggregate status is `verified`, `failing`, `blocked`, or `guidance`.
 
 Worktree observed state additionally records the resolved Git common dir, worktrees, leases, Provider availability, dirty-content evidence, and a canonical observation hash. Host-local state is visible to session checks; CI must report it as unavailable instead of claiming enforcement.
+
+EDD observed state records whether the contract is configured, whether approved runners are available, their CI status, and a receipt hash. Session and commit modes report `not-run`; they never spend model quota. The receipt stores output hashes instead of raw transcripts or credentials.
 
 ## Change control
 

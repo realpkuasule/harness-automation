@@ -2,7 +2,7 @@
 name: harness-automation
 description: >
   为主流 AI coding 工程建立跨会话、跨 Agent 的形式化约束与工程连续性。用户说“建立约束体系”“初始化约束”
-  “设置 harness”“配置项目规则”“PRD 已定稿/设计已定稿，准备开发”“检查或回滚项目约束”时使用。
+  “设置 harness”“配置项目规则”“PRD 已定稿/设计已定稿，准备开发”“采用 EDD/evals”“检查或回滚项目约束”时使用。
 ---
 
 # Harness Automation
@@ -16,8 +16,9 @@ description: >
 - 默认在 PRD、调研与设计定稿后、开始并行开发前启动。
 - 启动本 Skill 的项目负责人是唯一策略批准人。AI 推荐不等于批准。
 - CLI 是所有 Agent 可用的基线；MCP 只是可选传输层。
+- EDD 是可选质量策略；普通确定性项目继续使用类型、测试和契约门禁，不强制改称 eval。
 
-完整流程和交互规则见 [workflow.md](references/workflow.md)。策略语义见 [policy-model.md](references/policy-model.md)。
+完整流程和交互规则见 [workflow.md](references/workflow.md)。策略语义见 [policy-model.md](references/policy-model.md)。启用 EDD 时读取 [eval-driven-development.md](references/eval-driven-development.md)。
 
 ## 强制执行流程
 
@@ -39,7 +40,15 @@ node <skill目录>/scripts/run.mjs research github --project <项目绝对路径
 
 可重复传入 `--query`。有 GitHub 连接器时，用它深查已经确定的候选仓库；不要只按 stars 选择。
 
-### 2. 确认负责人和定稿状态
+### 2. 决定是否启用 EDD
+
+用户明确要求 EDD/evals，或 PRD 包含 Agent、生成、检索、模型判断等非确定性产品行为时，推荐 `eval-driven-development` quality profile。若是否属于评测对象不清楚，只向负责人确认这一项。
+
+启用后，先按 [eval-driven-development.md](references/eval-driven-development.md) 建立 `evals/evals.json`、代表性任务、实现前 baseline 和 grader 证据。模型 grader 未记录人工校准证据时只能作为 `guidance`。不得先实现功能再补写 baseline。
+
+确定性业务项目默认不启用；已有单元测试、类型检查和契约测试继续通过普通 gate 管理。
+
+### 3. 确认负责人和定稿状态
 
 只问尚未确认的关键问题，一次一个。必须由负责人明确确认 PRD、设计和调研是本轮开发的批准输入，然后运行：
 
@@ -49,7 +58,7 @@ node <skill目录>/scripts/run.mjs intake --project <项目绝对路径> --owner
 
 不得自行添加 `--approve-sources`。上游文件变更后，旧计划自动失效，必须重新 intake。
 
-### 3. 自动发现，不让用户重复填写事实
+### 4. 自动发现，不让用户重复填写事实
 
 ```bash
 node <skill目录>/scripts/run.mjs discover --project <项目绝对路径>
@@ -67,7 +76,7 @@ node <skill目录>/scripts/run.mjs discover --project <项目绝对路径>
 
 未知栈不得中断 Harness，也不得在业务仓库复制另一套 intake、哈希批准、apply、drift 或 rollback 系统。继续使用 `custom plan/apply` 建立通用跨会话基线；让 Harness 把缺失的栈级适配器如实报告为 `blocked`。专用架构规则可写在 `AGENTS.md` 的 Harness managed block 之外，由计划完整保留并纳入输出哈希。现有仓库 gate 应暴露为 `verify:*`、`*:check`、`test:*` 或 `build:*` 包脚本，让 discovery 纳入 commit/CI 检查。
 
-### 4. 只生成计划
+### 5. 只生成计划
 
 ```bash
 node <skill目录>/scripts/run.mjs plan --project <项目绝对路径> --profile <profile>
@@ -77,11 +86,14 @@ node <skill目录>/scripts/run.mjs plan --project <项目绝对路径> --profile
 
 # 未知栈仍走同一计划，例如 C# + Godot
 node <skill目录>/scripts/run.mjs plan --project <项目绝对路径> --profile custom --stack csharp --stack godot
+
+# EDD 与 stack/delivery/domain 正交
+node <skill目录>/scripts/run.mjs plan --project <项目绝对路径> --profile custom --stack typescript --quality-profile eval-driven-development
 ```
 
 向负责人展示：选定 stack、未在仓库中观察到的 stack 警告、将修改的路径、每个旧/新哈希、建议验证命令、未自动形式化的 guidance 和计划哈希。计划不得安装依赖、运行迁移、修改仓库设置或覆盖既有 CI。preset 不接受 `--stack` 裁剪；需要裁剪时改用 `custom` 并显式列出 stack。
 
-### 5. 精确批准后应用
+### 6. 精确批准后应用
 
 只有负责人明确批准当前计划哈希后才运行：
 
@@ -91,7 +103,7 @@ node <skill目录>/scripts/run.mjs apply --project <项目绝对路径> --plan <
 
 不要把“继续”“都可以”解释成对未展示哈希的批准。Apply 会校验计划、PRD/设计/调研、发现快照和每个目标文件的当前哈希；任何漂移都应重新规划。
 
-### 6. 验证真实执行状态
+### 7. 验证真实执行状态
 
 ```bash
 node <skill目录>/scripts/run.mjs check --project <项目绝对路径> --mode session
@@ -101,6 +113,8 @@ node <skill目录>/scripts/run.mjs drift --project <项目绝对路径>
 分别报告 `configured`、`loaded`、`enforced`、`passing`，并展示 `stackAdapters` 和 `stackCoverageComplete`。写进 Agent 文档不等于 enforced；认知规则必须显示为 `guidance`；没有内置适配器的 stack 必须显示为 `blocked`。通用 Harness 基线可以成功应用，但不得把它描述成未知栈已经获得语言级 enforcement。
 
 提交前可用 `--mode commit` 追加格式、lint、类型、Django、Go、Proto 等已发现的快速 gate；CI 用 `--mode ci` 追加测试与构建。命令始终以 argv 执行，缺失工具显示 `blocked`。
+
+EDD suite 只在 `--mode ci` 执行，避免新会话、提交和 apply 隐式消耗模型额度或凭据。CI 输出包含 evaluation 状态以及只保存 argv、退出状态和输出哈希的本地回执；原始 transcript 仍由项目自己的 runner/CI artifact 管理。
 
 需要解释单条规则时运行 `node <skill目录>/scripts/run.mjs explain <policy-id> --project <项目绝对路径>`。
 
@@ -136,3 +150,4 @@ node <skill目录>/scripts/run.mjs rollback --project <项目绝对路径> [--ch
 - 不自动编辑已有 CI；独立 Harness workflow 也必须进入批准计划。
 - 不把未来 DeepSeek/GLM runtime 的能力写死；未知 Agent 使用 `AGENTS.md` + CLI 的 portable adapter。
 - 不把 A/B 测试、AI review 或“统计显著性”作为已实现能力，除非存在真实分组、样本和检验结果。
+- 不直接调用模型 Provider、不托管 eval 数据集，也不把未经人工校准的模型 grader 当作硬门禁。

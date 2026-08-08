@@ -31,12 +31,14 @@ import type {
   FileOperation,
   Intake,
   PolicyDocument,
+  QualityProfile,
   SourceSnapshot,
   Stack,
   StackAdapterResult,
   StackProfile,
 } from "./types.js";
 import { hasBuiltInStackAdapter, stackAdapterSupport } from "./types.js";
+import { EVAL_CONTRACT_PATH, evaluationSourcePaths, inspectEvaluations, readEvalContract } from "./evals.js";
 import { checkGo, checkPython, checkTypeScript } from "./verifier.js";
 import {
   applyWorkspacePlan,
@@ -108,10 +110,12 @@ function collectSources(root: string): SourceSnapshot[] {
     throw new Error("RESEARCH_REQUIRED: docs/research/ has no Markdown or JSON evidence. Run `harness-automation research github` first.");
   }
   const used = new Set<string>();
+  const evaluations = evaluationSourcePaths(root);
   return [
     { kind: "prd" as const, path: prd },
     ...designs.sort().map((path) => ({ kind: "design" as const, path })),
     ...research.map((path) => ({ kind: "research" as const, path })),
+    ...evaluations.map((path) => ({ kind: "eval" as const, path })),
   ].map(({ kind, path }) => ({
     id: sourceId(kind, path, used),
     kind,
@@ -203,6 +207,7 @@ export function planProject(args: {
   stacks?: Stack[];
   deliveryProfiles?: DeliveryProfile[];
   domainProfiles?: DomainProfile[];
+  qualityProfiles?: QualityProfile[];
   now?: Date;
 }): { plan: ChangePlan; path: string; policy: PolicyDocument } {
   const root = resolve(args.projectRoot);
@@ -213,6 +218,19 @@ export function planProject(args: {
   const intake = readJson<Intake>(intakeFile);
   const discovery = readJson<Discovery>(discoveryFile);
   ensureApprovedSources(root, intake);
+  const qualityProfiles = [...new Set(args.qualityProfiles ?? [])];
+  if (qualityProfiles.includes("eval-driven-development")) {
+    const approvedEvalPaths = new Set(
+      intake.sources.filter((source) => source.kind === "eval").map((source) => source.path),
+    );
+    if (!approvedEvalPaths.has(EVAL_CONTRACT_PATH)) {
+      throw new Error(`EVAL_CONTRACT_REQUIRED: create ${EVAL_CONTRACT_PATH}, then run intake and discover again`);
+    }
+    readEvalContract(root, approvedEvalPaths);
+    if (!discovery.evaluations?.valid) {
+      throw new Error("EVAL_DISCOVERY_REQUIRED: run discover again after approving the evaluation contract");
+    }
+  }
   const policy = compilePolicy({
     projectRoot: root,
     owner: intake.owner,
@@ -222,6 +240,7 @@ export function planProject(args: {
     stacks: args.stacks,
     deliveryProfiles: args.deliveryProfiles,
     domainProfiles: args.domainProfiles,
+    qualityProfiles,
   });
   const policyDigest = hashObject(policy);
   const effectivePolicy = renderEffectivePolicy(policy, policyDigest);
@@ -232,7 +251,7 @@ export function planProject(args: {
     operation(root, ".harness/generated/effective-policy.md", effectivePolicy),
     operation(root, "AGENTS.md", upsertManagedBlock(existingText(root, "AGENTS.md"), instruction)),
     operation(root, "CLAUDE.md", upsertManagedBlock(existingText(root, "CLAUDE.md"), instruction)),
-    operation(root, ".harness/.gitignore", "sessions/*\n!sessions/.gitkeep\n"),
+    operation(root, ".harness/.gitignore", "sessions/*\n!sessions/.gitkeep\neval-runs/*\n"),
   ];
   if (policy.project.stacks.includes("python")) {
     operations.push(operation(root, ".harness/generated/check_python_naming.py", PYTHON_NAMING_CHECKER));
@@ -257,6 +276,7 @@ export function planProject(args: {
     stacks: args.stacks ?? null,
     deliveryProfiles: args.deliveryProfiles ?? [],
     domainProfiles: args.domainProfiles ?? [],
+    qualityProfiles,
   });
   const id = `${createdAt.replace(/[:.]/gu, "-")}-${seed.slice(0, 12)}`;
   const draft: ChangePlan = {
@@ -576,6 +596,7 @@ function trustedCommands(root: string, discovery: Discovery, mode: "session" | "
       name.startsWith("build:");
     if (commitGate) add(id, command);
     if (mode === "ci" && ciGate) add(id, command);
+    if (mode === "ci" && id.startsWith("eval:")) add(id, command);
   }
   if (discovery.stacks.includes("python") && existsSync(join(root, "manage.py"))) {
     add("django:check", ["python3", "manage.py", "check"]);
@@ -602,12 +623,24 @@ function trustedCommands(root: string, discovery: Discovery, mode: "session" | "
 export function runTrustedChecks(args: {
   projectRoot: string;
   mode: "session" | "commit" | "ci";
+  now?: Date;
 }): {
   ok: boolean;
   policy: ReturnType<typeof checkProject>;
   stackAdapters: StackAdapterResult[];
   stackCoverageComplete: boolean;
   commands: TrustedCommandResult[];
+  evaluations: {
+    configured: boolean;
+    loaded: boolean;
+    enforced: boolean;
+    passing: boolean;
+    available: boolean;
+    status: "not-configured" | "not-run" | "verified" | "failing" | "blocked";
+    contractPath: string | null;
+    receiptPath: string | null;
+    receiptHash: string | null;
+  };
   workspace: {
     configured: boolean;
     available: boolean;
@@ -618,6 +651,7 @@ export function runTrustedChecks(args: {
 } {
   const root = resolve(args.projectRoot);
   const policy = checkProject(root);
+  const policyDocument = readJson<PolicyDocument>(harnessPath(root, "policy.yaml"));
   const discovery = readJson<Discovery>(harnessPath(root, "discovery.json"));
   const commands = trustedCommands(root, discovery, args.mode).map<TrustedCommandResult>(({ id, command }) => {
     if (!executableAvailable(command[0], root)) {
@@ -671,14 +705,110 @@ export function runTrustedChecks(args: {
   const workspaceGatePassing = workspace.status === "not-configured" ||
     workspace.status === "verified" ||
     workspace.status === "blocked";
+  const evaluationEnabled = (policyDocument.project.qualityProfiles ?? [])
+    .includes("eval-driven-development");
+  const evaluationLoaded = policy.results
+    .find((item) => item.id === "eval-contract-before-implementation")?.loaded ?? false;
+  const evaluationCommands = commands.filter((item) => item.id.startsWith("eval:"));
+  let evaluations: {
+    configured: boolean;
+    loaded: boolean;
+    enforced: boolean;
+    passing: boolean;
+    available: boolean;
+    status: "not-configured" | "not-run" | "verified" | "failing" | "blocked";
+    contractPath: string | null;
+    receiptPath: string | null;
+    receiptHash: string | null;
+  };
+  if (!evaluationEnabled) {
+    evaluations = {
+      configured: false,
+      loaded: false,
+      enforced: false,
+      passing: false,
+      available: true,
+      status: "not-configured",
+      contractPath: null,
+      receiptPath: null,
+      receiptHash: null,
+    };
+  } else if (args.mode !== "ci") {
+    evaluations = {
+      configured: true,
+      loaded: evaluationLoaded,
+      enforced: false,
+      passing: false,
+      available: Boolean(discovery.evaluations?.valid),
+      status: "not-run",
+      contractPath: EVAL_CONTRACT_PATH,
+      receiptPath: null,
+      receiptHash: null,
+    };
+  } else {
+    const status = evaluationCommands.length === 0 || evaluationCommands.some((item) => item.status === "blocked")
+      ? "blocked" as const
+      : evaluationCommands.some((item) => item.status === "failed")
+        ? "failing" as const
+        : "verified" as const;
+    const createdAt = (args.now ?? new Date()).toISOString();
+    const receiptPath = `.harness/eval-runs/${createdAt.replace(/[:.]/gu, "-")}.json`;
+    const receipt = {
+      schemaVersion: "1.0",
+      createdAt,
+      policyDigest: policy.policyDigest,
+      contractSha256: policyDocument.sources.find((source) => source.path === EVAL_CONTRACT_PATH)?.sha256 ?? null,
+      suites: evaluationCommands.map((item) => ({
+        id: item.id,
+        command: item.command,
+        status: item.status,
+        exitCode: item.exitCode,
+        outputSha256: sha256(item.output),
+      })),
+    };
+    const receiptHash = hashObject(receipt);
+    atomicWrite(safePath(root, receiptPath), prettyJson({ ...receipt, receiptHash }));
+    evaluations = {
+      configured: true,
+      loaded: evaluationLoaded,
+      enforced: status !== "blocked",
+      passing: status === "verified",
+      available: status !== "blocked",
+      status,
+      contractPath: EVAL_CONTRACT_PATH,
+      receiptPath,
+      receiptHash,
+    };
+  }
+  if (evaluationEnabled && args.mode === "ci") {
+    const gate = policy.results.find((item) => item.id === "eval-regression-gate");
+    if (gate) {
+      gate.configured = evaluations.configured;
+      gate.loaded = evaluations.loaded;
+      gate.enforced = evaluations.enforced;
+      gate.passing = evaluations.passing;
+      gate.status = evaluations.status === "verified"
+        ? "verified"
+        : evaluations.status === "failing"
+          ? "failing"
+          : "blocked";
+      gate.detail = evaluations.status === "verified"
+        ? "Every approved evaluation suite passed in CI mode."
+        : `Evaluation CI gate is ${evaluations.status}.`;
+    }
+    policy.ok = policy.ok && evaluations.passing;
+  }
   return {
     ok: policy.ok &&
       commands.every((item) => item.status === "passed") &&
-      workspaceGatePassing,
+      workspaceGatePassing &&
+      evaluations.status !== "blocked" &&
+      evaluations.status !== "failing",
     policy,
     stackAdapters: policy.stackAdapters,
     stackCoverageComplete: policy.stackCoverageComplete,
     commands,
+    evaluations,
     workspace,
   };
 }
@@ -732,6 +862,7 @@ export function doctorProject(projectRoot: string): Record<string, unknown> {
     go: command("go"),
     prd: existsSync(join(root, "docs/PRD.md")),
     research: markdownFiles(safePath(root, "docs/research"), root).length,
+    evaluations: inspectEvaluations(root),
     intake: existsSync(harnessPath(root, "intake.json")),
     discovery: existsSync(harnessPath(root, "discovery.json")),
     policy: existsSync(harnessPath(root, "policy.yaml")),

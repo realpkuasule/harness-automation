@@ -1,0 +1,38 @@
+{
+  "skill_name": "harness-automation",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我们的 PRD 和设计已经定稿，准备开发一个会调用模型自动回复客户的功能。请启动 harness，但项目里还没有任何 eval 文件。",
+      "expected_output": "The skill recommends EDD, stops before intake/plan, and asks for an eval contract with tasks, baseline, target, and graders.",
+      "files": [],
+      "expectations": [
+        "Does not run plan or apply without evals/evals.json",
+        "Requires an implementation-before baseline rather than a reconstructed post-implementation baseline",
+        "Explains that paid eval runners execute only in CI mode"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "给这个普通 Go CRUD 服务建立 harness。所有行为都能通过类型、数据库契约和集成测试确定，不包含模型或生成式功能。",
+      "expected_output": "The skill uses normal deterministic gates and does not force the EDD quality profile.",
+      "files": [],
+      "expectations": [
+        "Does not enable eval-driven-development by default",
+        "Keeps type, contract, test, and stack policy enforcement",
+        "Does not rename ordinary tests as evals"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "我们的 eval 只有一个 LLM judge，产品经理觉得它大概靠谱，想让它直接阻止 PR 合并。请配置 harness。",
+      "expected_output": "The skill keeps the model grader as guidance until human calibration evidence is recorded.",
+      "files": [],
+      "expectations": [
+        "Rejects an uncalibrated model grader with role gate",
+        "Allows the grader as guidance",
+        "Requests repository evidence comparing model grades with human judgment before hard gating"
+      ]
+    }
+  ]
+}

@@ -163,4 +163,42 @@ describe("v2 CLI forward flow", () => {
       config: { managementBranch: "main" },
     });
   });
+
+  it("accepts the EDD quality profile and runs its eval only in CI mode", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-cli-eval-"));
+    projects.push(root);
+    write(root, "docs/PRD.md", "# AI feature\n");
+    write(root, "docs/design/architecture.md", "# Architecture\n");
+    write(root, "docs/research/github.md", "# Evidence\n");
+    write(root, "evals/tasks.jsonl", "{}\n");
+    write(root, "evals/baseline.json", "{}\n");
+    write(root, "evals/evals.json", JSON.stringify({
+      schemaVersion: "1.0",
+      suites: [{
+        id: "cli-quality",
+        kind: "regression",
+        owner: "owner",
+        description: "CLI quality regression.",
+        command: ["node", "-e", "process.exit(0)"],
+        tasks: ["evals/tasks.jsonl"],
+        baseline: { score: 1, trials: 1, evidence: "evals/baseline.json" },
+        target: { metric: "pass-at-1", threshold: 1, trials: 1 },
+        graders: [{ id: "tests", kind: "code", role: "gate" }],
+      }],
+    }));
+
+    run(root, ["intake", "--owner", "owner", "--approve-sources"]);
+    run(root, ["discover"]);
+    const planned = run(root, [
+      "plan",
+      "--profile", "custom",
+      "--stack", "typescript",
+      "--quality-profile", "eval-driven-development",
+    ]);
+    expect(planned.qualityProfiles).toEqual(["eval-driven-development"]);
+    run(root, ["apply", "--plan", String(planned.planPath), "--approve", String(planned.planHash)]);
+
+    expect(run(root, ["check", "--mode", "session"]).evaluations).toMatchObject({ status: "not-run" });
+    expect(run(root, ["check", "--mode", "ci"]).evaluations).toMatchObject({ status: "verified" });
+  });
 });

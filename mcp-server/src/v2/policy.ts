@@ -6,11 +6,13 @@ import type {
   Intake,
   PolicyDocument,
   PolicyRule,
+  QualityProfile,
   SourceSnapshot,
   Stack,
   StackProfile,
 } from "./types.js";
 import { normalizeStackIds, stackAdapterSupport } from "./types.js";
+import { DELIVERY_PROFILES, DOMAIN_PROFILES, QUALITY_PROFILES } from "./types.js";
 
 export const MANAGED_START = "<!-- harness-automation:v2:start -->";
 export const MANAGED_END = "<!-- harness-automation:v2:end -->";
@@ -36,6 +38,17 @@ function rule(
     status: "active",
     changeControl: { approvalRequired: true, migrationRequired: base.id.includes("naming") },
   };
+}
+
+function validateProfiles<T extends string>(
+  values: readonly T[],
+  supported: readonly T[],
+  name: string,
+): T[] {
+  const selected = [...new Set(values)];
+  const invalid = selected.filter((value) => !supported.includes(value));
+  if (invalid.length > 0) throw new Error(`INVALID_${name}_PROFILE: ${invalid.join(", ")}`);
+  return selected;
 }
 
 function commonRules(owner: string, sources: SourceSnapshot[]): PolicyRule[] {
@@ -290,6 +303,64 @@ function domainProfileRules(
   ];
 }
 
+function qualityProfileRules(
+  profiles: QualityProfile[],
+  discovery: Discovery,
+  owner: string,
+  sources: SourceSnapshot[],
+): PolicyRule[] {
+  if (!profiles.includes("eval-driven-development")) return [];
+  const commands = Object.entries(discovery.commands)
+    .filter(([id]) => id.startsWith("eval:"))
+    .map(([, command]) => command);
+  return [
+    rule({
+      id: "eval-contract-before-implementation",
+      title: "Evaluation contract before implementation",
+      statement: "Define representative tasks, graders, an implementation-before baseline, and an explicit target in evals/evals.json before implementing an evaluated capability.",
+      rationale: "An approved evaluation contract turns ambiguous success criteria into stable cross-session development evidence.",
+      scope: { include: ["evals/**/*", "docs/evals/**/*"], exclude: [], boundaries: ["evaluation"] },
+      formalization: "procedural",
+      severity: "error",
+      targets: [{ kind: "agent-instruction", adapter: "portable", configPath: ".harness/generated/effective-policy.md" }],
+      verification: { commands: [], passCriteria: "The approved eval contract and every referenced source exist and match intake hashes." },
+    }, owner, sources),
+    rule({
+      id: "eval-regression-gate",
+      title: "Evaluation regression gate",
+      statement: "Run every approved evaluation suite in CI and reject delivery when its project-owned runner does not meet the contract target.",
+      rationale: "A repeatable project runner makes quality regressions visible across model, prompt, tool, and implementation changes.",
+      scope: { include: ["evals/**/*", "**/*"], exclude: [".harness/eval-runs/**"], boundaries: ["evaluation"] },
+      formalization: "deterministic",
+      severity: "error",
+      targets: commands.map((command, index) => ({ kind: "evaluation" as const, adapter: `project-eval-${index + 1}`, command })),
+      verification: { commands, passCriteria: "Every approved evaluation runner exits successfully in `check --mode ci`." },
+    }, owner, sources),
+    rule({
+      id: "eval-evidence-provenance",
+      title: "Evaluation evidence provenance",
+      statement: "Keep evaluation tasks, baselines, and grader calibration evidence in approved repository sources protected by SHA-256 drift checks.",
+      rationale: "Changing the measurement while changing the implementation makes quality comparisons unreliable.",
+      scope: { include: ["evals/**/*", "docs/evals/**/*"], exclude: [".harness/eval-runs/**"], boundaries: ["evaluation"] },
+      formalization: "procedural",
+      severity: "error",
+      targets: [{ kind: "agent-instruction", adapter: "portable" }],
+      verification: { commands: [], passCriteria: "All referenced evidence remains inside the repository and matches its approved intake hash." },
+    }, owner, sources),
+    rule({
+      id: "eval-judge-calibration",
+      title: "Model grader calibration",
+      statement: "Treat model graders as guidance unless human calibration evidence is recorded; only calibrated model graders may participate in a hard gate.",
+      rationale: "Uncalibrated model judgments are stochastic opinions, not sound deterministic enforcement.",
+      scope: { include: ["evals/**/*", "docs/evals/**/*"], exclude: [], boundaries: ["evaluation"] },
+      formalization: "cognitive",
+      severity: "error",
+      targets: [{ kind: "agent-instruction", adapter: "portable" }],
+      verification: { commands: [], passCriteria: "Human review confirms that every gating model grader cites calibration evidence." },
+    }, owner, sources),
+  ];
+}
+
 export function compilePolicy(args: {
   projectRoot: string;
   owner: string;
@@ -299,6 +370,7 @@ export function compilePolicy(args: {
   stacks?: Stack[];
   deliveryProfiles?: DeliveryProfile[];
   domainProfiles?: DomainProfile[];
+  qualityProfiles?: QualityProfile[];
 }): PolicyDocument {
   const profile = args.profile ?? args.discovery.profile;
   if (profile !== "custom" && args.stacks?.length) {
@@ -313,8 +385,9 @@ export function compilePolicy(args: {
     throw new Error("STACK_SELECTION_REQUIRED: use --profile custom with one or more explicit --stack values");
   }
   const adapters = new Map(args.discovery.agents.map(({ id, capabilities }) => [id, { id, capabilities }]));
-  const deliveryProfiles = [...new Set(args.deliveryProfiles ?? [])];
-  const domainProfiles = [...new Set(args.domainProfiles ?? [])];
+  const deliveryProfiles = validateProfiles(args.deliveryProfiles ?? [], DELIVERY_PROFILES, "DELIVERY");
+  const domainProfiles = validateProfiles(args.domainProfiles ?? [], DOMAIN_PROFILES, "DOMAIN");
+  const qualityProfiles = validateProfiles(args.qualityProfiles ?? [], QUALITY_PROFILES, "QUALITY");
   adapters.set("portable", {
     id: "portable",
     capabilities: ["root-instructions", "scoped-instructions", "structured-output"],
@@ -336,6 +409,7 @@ export function compilePolicy(args: {
       stacks,
       deliveryProfiles,
       domainProfiles,
+      qualityProfiles,
     },
     sources: args.intake.sources,
     agents: {
@@ -347,6 +421,7 @@ export function compilePolicy(args: {
       ...profileRules(profile, stacks, args.owner, args.intake.sources),
       ...deliveryProfileRules(deliveryProfiles, args.owner, args.intake.sources),
       ...domainProfileRules(domainProfiles, args.owner, args.intake.sources),
+      ...qualityProfileRules(qualityProfiles, args.discovery, args.owner, args.intake.sources),
     ],
   };
 }
