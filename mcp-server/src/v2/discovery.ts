@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { hasBuiltInStackAdapter, type AgentDiscovery, type Discovery, type Evidence, type Stack, type StackProfile } from "./types.js";
+import { inspectEvaluations } from "./evals.js";
 
 const IGNORED_DIRECTORIES = new Set([
   ".git",
@@ -194,7 +195,10 @@ export function discoverProject(root: string, now = new Date()): Discovery {
     { fact: `Detected stack profile: ${profile}`, paths: manifests, confidence: profile === "custom" ? 0.5 : 0.95 },
     { fact: `Detected stacks: ${stacks.join(", ") || "none"}`, paths: manifests, confidence: 0.9 },
   ];
-  const warnings: string[] = [];
+  const evaluations = inspectEvaluations(root);
+  const commands = commandFromProject(packageFiles, files, root);
+  for (const suite of evaluations.suites) commands[`eval:${suite.id}`] = suite.command;
+  const warnings = evaluations.errors.map((error) => `Evaluation contract blocked: ${error}`);
   if (profile === "custom") warnings.push("No preset stack profile matched exactly; owner-approved custom stacks are required.");
   const stacksWithoutAdapters = stacks.filter((stack) => !hasBuiltInStackAdapter(stack));
   if (stacksWithoutAdapters.length > 0) {
@@ -212,10 +216,11 @@ export function discoverProject(root: string, now = new Date()): Discovery {
     manifests,
     lockfiles,
     packages: packageFiles.map((path) => path.replace(/\/package\.json$/u, "") || "."),
-    commands: commandFromProject(packageFiles, files, root),
+    commands,
     boundaries,
     agents,
     evidence,
     warnings,
+    evaluations,
   };
 }

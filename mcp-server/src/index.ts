@@ -56,11 +56,13 @@ import {
 import {
   DELIVERY_PROFILES,
   DOMAIN_PROFILES,
+  QUALITY_PROFILES,
   MAX_STACKS,
   STACK_ID_PATTERN_SOURCE,
   SUPPORTED_STACKS,
   type DeliveryProfile,
   type DomainProfile,
+  type QualityProfile,
   type Stack,
   type StackProfile,
 } from "./v2/types.js";
@@ -181,6 +183,11 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
               type: "array",
               uniqueItems: true,
               items: { enum: [...DOMAIN_PROFILES] },
+            },
+            qualityProfiles: {
+              type: "array",
+              uniqueItems: true,
+              items: { enum: [...QUALITY_PROFILES] },
             },
           },
         },
@@ -475,11 +482,15 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         domainProfiles: Array.isArray(v2Args.domainProfiles)
           ? v2Args.domainProfiles as DomainProfile[]
           : undefined,
+        qualityProfiles: Array.isArray(v2Args.qualityProfiles)
+          ? v2Args.qualityProfiles as QualityProfile[]
+          : undefined,
       });
       return v2Result({
         planPath: result.path,
         planHash: result.plan.planHash,
         stacks: result.policy.project.stacks,
+        qualityProfiles: result.policy.project.qualityProfiles ?? [],
         operations: result.plan.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash })),
         commands: result.plan.commands,
         warnings: result.plan.warnings,

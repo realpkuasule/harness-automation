@@ -51,12 +51,14 @@ export type StackProfile =
 
 export const DELIVERY_PROFILES = ["worktree-delivery"] as const;
 export const DOMAIN_PROFILES = ["game-development"] as const;
+export const QUALITY_PROFILES = ["eval-driven-development"] as const;
 export type DeliveryProfile = typeof DELIVERY_PROFILES[number];
 export type DomainProfile = typeof DOMAIN_PROFILES[number];
+export type QualityProfile = typeof QUALITY_PROFILES[number];
 
 export interface SourceSnapshot {
   id: string;
-  kind: "prd" | "design" | "research" | "existing-policy";
+  kind: "prd" | "design" | "research" | "eval" | "existing-policy";
   path: string;
   sha256: string;
   approved: boolean;
@@ -100,6 +102,44 @@ export interface Discovery {
   agents: AgentDiscovery[];
   evidence: Evidence[];
   warnings: string[];
+  evaluations?: EvaluationDiscovery;
+}
+
+export interface EvalGrader {
+  id: string;
+  kind: "code" | "model" | "human";
+  role: "gate" | "guidance";
+  calibrationEvidence?: string;
+}
+
+export interface EvalSuite {
+  id: string;
+  kind: "capability" | "regression";
+  owner: string;
+  description: string;
+  command: string[];
+  tasks: string[];
+  baseline: { score: number; trials: number; evidence: string };
+  target: {
+    metric: "pass-rate" | "pass-at-1" | "pass-all-trials";
+    threshold: number;
+    trials: number;
+  };
+  graders: EvalGrader[];
+}
+
+export interface EvalContract {
+  $schema?: string;
+  schemaVersion: "1.0";
+  suites: EvalSuite[];
+}
+
+export interface EvaluationDiscovery {
+  configured: boolean;
+  valid: boolean;
+  contractPath: string | null;
+  suites: Array<Pick<EvalSuite, "id" | "kind" | "command">>;
+  errors: string[];
 }
 
 export type PolicyTargetKind =
@@ -112,7 +152,8 @@ export type PolicyTargetKind =
   | "git-hook"
   | "ci"
   | "repository-setting"
-  | "custom-command";
+  | "custom-command"
+  | "evaluation";
 
 export interface PolicyRule {
   id: string;
@@ -125,7 +166,7 @@ export interface PolicyRule {
     include: string[];
     exclude: string[];
     boundaries: Array<
-      "code" | "api" | "rpc" | "database" | "queue" | "generated-code" | "deployment"
+      "code" | "api" | "rpc" | "database" | "queue" | "generated-code" | "deployment" | "evaluation"
     >;
   };
   formalization: "deterministic" | "procedural" | "cognitive";
@@ -155,6 +196,7 @@ export interface PolicyDocument {
     stacks: Stack[];
     deliveryProfiles: DeliveryProfile[];
     domainProfiles: DomainProfile[];
+    qualityProfiles?: QualityProfile[];
   };
   sources: SourceSnapshot[];
   agents: {

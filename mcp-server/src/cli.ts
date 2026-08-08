@@ -27,9 +27,11 @@ import {
 import {
   DELIVERY_PROFILES,
   DOMAIN_PROFILES,
+  QUALITY_PROFILES,
   normalizeStackIds,
   type DeliveryProfile,
   type DomainProfile,
+  type QualityProfile,
   type Stack,
   type StackProfile,
 } from "./v2/types.js";
@@ -375,6 +377,7 @@ Usage:
   harness-automation plan [--project .] [--profile full-typescript|python-data-ai|go-performance]
   harness-automation plan --profile custom --stack <stack> [--stack <stack>...] [--project .]
   harness-automation plan [--delivery-profile worktree-delivery] [--domain-profile game-development] [--project .]
+  harness-automation plan [--quality-profile eval-driven-development] [--project .]
   harness-automation apply --plan <relative-path> --approve <sha256> [--project .]
   harness-automation context [--project .]
   harness-automation check [--project .] [--mode session|commit|ci]
@@ -427,8 +430,13 @@ function runWorkflow(argv: string[]): void {
           "domain-profile",
           DOMAIN_PROFILES,
         ),
+        qualityProfiles: selectedProfiles<QualityProfile>(
+          args,
+          "quality-profile",
+          QUALITY_PROFILES,
+        ),
       });
-      printJson({ planPath: result.path, planHash: result.plan.planHash, stacks: result.policy.project.stacks, operations: result.plan.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash })), commands: result.plan.commands, warnings: result.plan.warnings });
+      printJson({ planPath: result.path, planHash: result.plan.planHash, stacks: result.policy.project.stacks, qualityProfiles: result.policy.project.qualityProfiles ?? [], operations: result.plan.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash })), commands: result.plan.commands, warnings: result.plan.warnings });
       return;
     }
     case "apply":

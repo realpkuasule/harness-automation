@@ -50,6 +50,10 @@ describe("v2 MCP transport", () => {
             pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
           },
         },
+        qualityProfiles: {
+          type: "array",
+          items: { enum: ["eval-driven-development"] },
+        },
       },
     });
 

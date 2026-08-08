@@ -54,6 +54,25 @@ function fullTypeScriptProject(root: string): void {
   write(root, "src/userService.ts", "export const userId = 1;\nexport class UserService {}\n");
 }
 
+function evaluationContract(root: string, exitCode = 0): void {
+  write(root, "evals/tasks.jsonl", "{\"id\":\"representative-task\"}\n");
+  write(root, "evals/baselines/initial.json", "{\"score\":0}\n");
+  write(root, "evals/evals.json", JSON.stringify({
+    schemaVersion: "1.0",
+    suites: [{
+      id: "representative-quality",
+      kind: "capability",
+      owner: "owner",
+      description: "Representative project behavior.",
+      command: ["node", "-e", `process.exit(${exitCode})`],
+      tasks: ["evals/tasks.jsonl"],
+      baseline: { score: 0, trials: 1, evidence: "evals/baselines/initial.json" },
+      target: { metric: "pass-at-1", threshold: 1, trials: 1 },
+      graders: [{ id: "outcome-test", kind: "code", role: "gate" }],
+    }],
+  }));
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -252,6 +271,60 @@ describe("v2 custom stack planning", () => {
       "game-content-provenance",
     ]));
   });
+
+  it("keeps the EDD quality profile orthogonal and requires an approved eval contract", () => {
+    const missing = temporaryProject();
+    approvedSources(missing);
+    intakeProject({ projectRoot: missing, owner: "owner", approveSources: true });
+    write(missing, ".harness/discovery.json", `${JSON.stringify(discoverProject(missing), null, 2)}\n`);
+    expect(() => planProject({
+      projectRoot: missing,
+      profile: "custom",
+      stacks: ["typescript"],
+      qualityProfiles: ["eval-driven-development"],
+    })).toThrow(/EVAL_CONTRACT_REQUIRED/);
+    expect(() => planProject({
+      projectRoot: missing,
+      profile: "custom",
+      stacks: ["typescript"],
+      qualityProfiles: ["unknown" as "eval-driven-development"],
+    })).toThrow(/INVALID_QUALITY_PROFILE/);
+
+    const root = temporaryProject();
+    approvedSources(root);
+    evaluationContract(root);
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    const discovery = discoverProject(root);
+    write(root, ".harness/discovery.json", `${JSON.stringify(discovery, null, 2)}\n`);
+
+    const { path, plan, policy } = planProject({
+      projectRoot: root,
+      profile: "custom",
+      stacks: ["typescript"],
+      deliveryProfiles: ["worktree-delivery"],
+      domainProfiles: ["game-development"],
+      qualityProfiles: ["eval-driven-development"],
+    });
+
+    expect(policy.project).toMatchObject({
+      stacks: ["typescript"],
+      deliveryProfiles: ["worktree-delivery"],
+      domainProfiles: ["game-development"],
+      qualityProfiles: ["eval-driven-development"],
+    });
+    expect(policy.policies.map((item) => item.id)).toEqual(expect.arrayContaining([
+      "eval-contract-before-implementation",
+      "eval-regression-gate",
+      "eval-evidence-provenance",
+      "eval-judge-calibration",
+    ]));
+    expect(discovery.commands["eval:representative-quality"])
+      .toEqual(["node", "-e", "process.exit(0)"]);
+
+    write(root, "evals/tasks.jsonl", "{\"changed\":true}\n");
+    expect(() => applyPlan({ projectRoot: root, planPath: path, approval: plan.planHash }))
+      .toThrow(/STALE_PRECONDITION/);
+  });
 });
 
 describe("v2 GitHub research evidence", () => {
@@ -431,5 +504,72 @@ describe("v2 plan/apply/check/rollback", () => {
       if (previousCi === undefined) delete process.env.CI;
       else process.env.CI = previousCi;
     }
+  });
+
+  it("runs approved eval suites only in CI mode and writes a hash-only receipt", () => {
+    const root = temporaryProject();
+    approvedSources(root);
+    evaluationContract(root);
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    const planned = planProject({
+      projectRoot: root,
+      profile: "custom",
+      stacks: ["typescript"],
+      qualityProfiles: ["eval-driven-development"],
+    });
+    applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+
+    expect(runTrustedChecks({ projectRoot: root, mode: "session" }).evaluations.status).toBe("not-run");
+    expect(runTrustedChecks({ projectRoot: root, mode: "commit" }).commands)
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "eval:representative-quality" })]));
+
+    const ci = runTrustedChecks({
+      projectRoot: root,
+      mode: "ci",
+      now: new Date("2026-08-09T00:00:00Z"),
+    });
+    expect(ci.ok).toBe(true);
+    expect(ci.commands).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "eval:representative-quality", status: "passed" }),
+    ]));
+    expect(ci.evaluations).toMatchObject({
+      configured: true,
+      loaded: true,
+      enforced: true,
+      passing: true,
+      status: "verified",
+      receiptPath: ".harness/eval-runs/2026-08-09T00-00-00-000Z.json",
+    });
+    const receipt = JSON.parse(readFileSync(join(root, String(ci.evaluations.receiptPath)), "utf8"));
+    expect(receipt.receiptHash).toBe(ci.evaluations.receiptHash);
+    expect(JSON.stringify(receipt)).not.toContain("stdout");
+    expect(JSON.stringify(receipt)).not.toContain("stderr");
+  });
+
+  it("fails the CI gate and records evidence when an approved eval runner fails", () => {
+    const root = temporaryProject();
+    approvedSources(root);
+    evaluationContract(root, 7);
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    const planned = planProject({
+      projectRoot: root,
+      profile: "custom",
+      stacks: ["typescript"],
+      qualityProfiles: ["eval-driven-development"],
+    });
+    applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+
+    const ci = runTrustedChecks({ projectRoot: root, mode: "ci" });
+    expect(ci.ok).toBe(false);
+    expect(ci.evaluations.status).toBe("failing");
+    expect(ci.evaluations).toMatchObject({ enforced: true, passing: false });
+    expect(ci.policy.results.find((item) => item.id === "eval-regression-gate"))
+      .toMatchObject({ status: "failing", enforced: true, passing: false });
+    expect(ci.commands).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "eval:representative-quality", status: "failed", exitCode: 7 }),
+    ]));
+    expect(ci.evaluations.receiptHash).toMatch(/^[a-f0-9]{64}$/u);
   });
 });

@@ -8,7 +8,8 @@ Harness starts after this sequence:
 2. Reusable GitHub projects are researched under `docs/research/`.
 3. The PRD and design are revised using that evidence.
 4. The project owner declares the source set ready.
-5. Harness compiles and verifies policy before parallel implementation begins.
+5. If EDD is selected, representative tasks, graders, and an implementation-before baseline are recorded under `evals/` before intake.
+6. Harness compiles and verifies policy before parallel implementation begins.
 
 When the current conversation finalizes a PRD or design, ask: “需求与设计已经达到可冻结状态，是否现在启动 Harness，在开发前建立跨会话约束？” This is a handoff prompt only. Do not edit the `grill-me` Skill.
 
@@ -42,6 +43,8 @@ doctor
   -> check --mode session
   -> drift
 ```
+
+When `eval-driven-development` is selected, `evals/evals.json` and every referenced task/baseline/calibration file must already belong to the approved intake. Discovery exposes each suite as an `eval:<suite-id>` argv command. Only `check --mode ci` executes these commands; plan, apply, session, and commit paths remain free of paid/non-deterministic execution.
 
 `plan` writes only a new immutable file under `.harness/plans/`. `apply` performs all precondition checks before any target is written and restores already-written targets if a later write fails.
 
