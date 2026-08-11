@@ -112,6 +112,19 @@ export interface EvalGrader {
   calibrationEvidence?: string;
 }
 
+export type EvalBaselineOrigin = "pre-implementation" | "adoption" | "legacy-unknown";
+
+export interface EvalTraceability {
+  requirementId: string;
+  ruleIds: string[];
+}
+
+export interface EvalNegativeControl {
+  command: string[];
+  fixture: string;
+  expectedExitCode: number;
+}
+
 export interface EvalSuite {
   id: string;
   kind: "capability" | "regression";
@@ -119,18 +132,22 @@ export interface EvalSuite {
   description: string;
   command: string[];
   tasks: string[];
-  baseline: { score: number; trials: number; evidence: string };
+  baseline: { origin: EvalBaselineOrigin; score: number; trials: number; evidence: string };
   target: {
     metric: "pass-rate" | "pass-at-1" | "pass-all-trials";
     threshold: number;
     trials: number;
   };
   graders: EvalGrader[];
+  /** Repository-relative runner and manifest inputs whose approved contents make an eval reproducible. */
+  runnerSources?: string[];
+  traceability?: EvalTraceability[];
+  negativeControl?: EvalNegativeControl;
 }
 
 export interface EvalContract {
   $schema?: string;
-  schemaVersion: "1.0";
+  schemaVersion: "1.0" | "1.1";
   suites: EvalSuite[];
 }
 
@@ -138,8 +155,9 @@ export interface EvaluationDiscovery {
   configured: boolean;
   valid: boolean;
   contractPath: string | null;
-  suites: Array<Pick<EvalSuite, "id" | "kind" | "command">>;
+  suites: Array<Pick<EvalSuite, "id" | "kind" | "command" | "baseline" | "runnerSources" | "traceability" | "negativeControl">>;
   errors: string[];
+  unmanagedCandidates: string[];
 }
 
 export type PolicyTargetKind =

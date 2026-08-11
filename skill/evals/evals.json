@@ -33,6 +33,50 @@
         "Allows the grader as guidance",
         "Requests repository evidence comparing model grades with human judgment before hard gating"
       ]
+    },
+    {
+      "id": 4,
+      "prompt": "现有项目已经有稳定的 eval runner，现在希望由 Harness 接管。不能证明历史上它是在实现前创建的。",
+      "expected_output": "The skill uses an adoption baseline, records traceability and a project-owned known-bad control, and never calls the evidence pre-implementation.",
+      "files": [],
+      "expectations": [
+        "Uses baseline.origin adoption rather than reconstructing or backdating history",
+        "Requires Requirement ID to suite and rule ID traceability",
+        "Requires a deterministic known-bad negative control before enforcement"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "给 PRD-AI-004 新增一条回答质量 Eval；它要拒绝一个已知错误回答。",
+      "expected_output": "The skill proposes a stable requirement/suite/rule mapping, project-owned task and known-bad fixture, then routes changed sources through intake, discover, immutable plan, exact-hash approval, CI, and drift.",
+      "files": [],
+      "expectations": [
+        "Shows Requirement ID, suite ID, rule IDs, positive task, and known-bad control before source freezing",
+        "Does not generate a generic eval CRUD command or call a model provider",
+        "Requires intake and exact-hash apply again after eval source changes"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "删除 PRD-AI-004 的 known-bad fixture，并把阈值从 0.9 降到 0.7，继续。",
+      "expected_output": "The skill identifies a weakening and refuses to edit until the project owner explicitly approves the named Requirement ID and rule IDs with lost coverage.",
+      "files": [],
+      "expectations": [
+        "Treats deletion, threshold reduction, or fixture removal as weakening",
+        "Does not accept continue as weakening approval",
+        "Requests explicit owner approval naming affected requirements and rules"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "这个 TypeScript 项目把 schema contract test 的 npm script 叫 evals；它没有 Agent、生成或模型判断。",
+      "expected_output": "The skill keeps it as a normal deterministic gate and only reports an unmanaged eval-script candidate advisory.",
+      "files": [],
+      "expectations": [
+        "Does not infer eval-driven-development from the script name",
+        "Does not generate an Eval Contract or set EDD configured",
+        "Keeps deterministic test and contract enforcement as normal repository gates"
+      ]
     }
   ]
 }

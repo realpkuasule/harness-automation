@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,7 @@ function run(root: string, args: string[]): Record<string, unknown> {
   const result = spawnSync(process.execPath, ["--import", "tsx", cli, ...args, "--project", root], {
     cwd: packageRoot,
     encoding: "utf8",
+    env: { ...process.env, HOME: join(root, ".test-home") },
     timeout: 30_000,
   });
   if (result.status !== 0) throw new Error(`${result.stderr}\n${result.stdout}`);
@@ -30,6 +31,27 @@ afterEach(() => {
   for (const project of projects.splice(0)) rmSync(project, { recursive: true, force: true });
 });
 describe("v2 CLI forward flow", () => {
+  it("keeps a conventional eval script advisory until EDD is explicitly selected", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-cli-unmanaged-eval-"));
+    projects.push(root);
+    write(root, "package.json", JSON.stringify({ scripts: {
+      evals: "node evals/run.mjs",
+      "test:evals": "node evals/run.mjs",
+    } }));
+
+    expect(existsSync(join(root, ".test-home"))).toBe(false);
+    const doctor = run(root, ["doctor"]);
+    expect(existsSync(join(root, ".test-home"))).toBe(false);
+    expect(doctor.evaluations).toMatchObject({
+      configured: false,
+      valid: false,
+      unmanagedCandidates: ["npm:.:evals", "npm:.:test:evals"],
+    });
+    expect(run(root, ["discover"]).evaluations).toMatchObject({
+      unmanagedCandidates: ["npm:.:evals", "npm:.:test:evals"],
+    });
+  });
+
   it("runs the owner-approved workflow in a fresh process for every step", () => {
     const root = mkdtempSync(join(tmpdir(), "harness-cli-v2-"));
     projects.push(root);
@@ -172,18 +194,27 @@ describe("v2 CLI forward flow", () => {
     write(root, "docs/research/github.md", "# Evidence\n");
     write(root, "evals/tasks.jsonl", "{}\n");
     write(root, "evals/baseline.json", "{}\n");
+    write(root, "evals/fixtures/known-bad.json", "{}\n");
+    write(root, "evals/runner-manifest.json", "{}\n");
     write(root, "evals/evals.json", JSON.stringify({
-      schemaVersion: "1.0",
+      schemaVersion: "1.1",
       suites: [{
         id: "cli-quality",
         kind: "regression",
         owner: "owner",
         description: "CLI quality regression.",
         command: ["node", "-e", "process.exit(0)"],
+        runnerSources: ["evals/runner-manifest.json"],
         tasks: ["evals/tasks.jsonl"],
-        baseline: { score: 1, trials: 1, evidence: "evals/baseline.json" },
+        traceability: [{ requirementId: "PRD-AI-004", ruleIds: ["cli-quality-gate"] }],
+        baseline: { origin: "adoption", score: 1, trials: 1, evidence: "evals/baseline.json" },
         target: { metric: "pass-at-1", threshold: 1, trials: 1 },
         graders: [{ id: "tests", kind: "code", role: "gate" }],
+        negativeControl: {
+          command: ["node", "-e", "process.exit(1)"],
+          fixture: "evals/fixtures/known-bad.json",
+          expectedExitCode: 1,
+        },
       }],
     }));
 

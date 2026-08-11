@@ -19,6 +19,7 @@ import {
   driftProject,
   explainPolicy,
   intakeProject,
+  packagedSkillPath,
   planProject,
   researchGitHub,
   rollbackChange,
@@ -118,21 +119,6 @@ function getMcpServerPath(packagePath: string): string {
   return join(packagePath, "dist", "index.js");
 }
 
-function getSkillSource(
-  packagePath: string,
-  name: "harness-automation" | "manage-worktree-delivery",
-): string {
-  const built = join(
-    packagePath,
-    "dist",
-    name === "harness-automation" ? "skill" : name,
-  );
-  if (existsSync(built)) return built;
-  return name === "harness-automation"
-    ? join(packagePath, "skill")
-    : join(packagePath, "skills", name);
-}
-
 function getClaudeJsonPath(): string {
   return join(homedir(), ".claude.json");
 }
@@ -202,7 +188,7 @@ function install(options: { syncGlobal: boolean }): void {
   }
 
   for (const name of ["harness-automation", "manage-worktree-delivery"] as const) {
-    const skillSource = getSkillSource(packagePath, name);
+    const skillSource = packagedSkillPath(packagePath, name);
     if (!existsSync(join(skillSource, "SKILL.md"))) {
       throw new Error(`SKILL_NOT_FOUND: ${skillSource}`);
     }
@@ -403,7 +389,7 @@ function runWorkflow(argv: string[]): void {
   const root = projectRoot(args);
   switch (command) {
     case "doctor":
-      printJson(doctorProject(root));
+      printJson(doctorProject(root, { packagePath: pkgRoot }));
       return;
     case "research":
       if (args.positionals[0] !== "github") throw new Error("RESEARCH_PROVIDER_REQUIRED: only `research github` is available");
