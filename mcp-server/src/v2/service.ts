@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { basename, join, relative, resolve } from "node:path";
+import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, delimiter, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { discoverProject } from "./discovery.js";
 import {
   assertCurrentHash,
@@ -48,6 +50,107 @@ import {
 import type { WorkspaceAudit, WorkspaceReceipt } from "../worktree/types.js";
 
 const HARNESS_DIR = ".harness";
+const PACKAGE_ROOT = resolve(join(fileURLToPath(new URL(".", import.meta.url)), "../.."));
+const SKILL_NAMES = ["harness-automation", "manage-worktree-delivery"] as const;
+
+export type SkillName = typeof SKILL_NAMES[number];
+
+export function packagedSkillPath(packagePath: string, name: SkillName): string {
+  const built = join(packagePath, "dist", name === "harness-automation" ? "skill" : name);
+  if (existsSync(built)) return built;
+  return name === "harness-automation" ? join(packagePath, "skill") : join(packagePath, "skills", name);
+}
+
+function skillDirectoryDigest(path: string): { digest: string | null; blocked: boolean } {
+  let rootStat: ReturnType<typeof lstatSync>;
+  try {
+    rootStat = lstatSync(path);
+  } catch (error) {
+    return { digest: null, blocked: (error as NodeJS.ErrnoException).code !== "ENOENT" };
+  }
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) return { digest: null, blocked: true };
+  const entries: Array<{ path: string; sha256: string }> = [];
+  const visit = (directory: string, prefix: string): boolean => {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((left, right) =>
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+    )) {
+      const target = join(directory, entry.name);
+      const entryPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isSymbolicLink()) return false;
+      if (entry.isDirectory()) {
+        if (!visit(target, entryPath)) return false;
+      } else if (entry.isFile()) {
+        entries.push({ path: entryPath, sha256: sha256(readFileSync(target)) });
+      } else {
+        return false;
+      }
+    }
+    return true;
+  };
+  try {
+    return visit(path, "")
+      ? { digest: sha256(entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0).map((entry) => `${entry.path}\0${entry.sha256}\n`).join("")), blocked: false }
+      : { digest: null, blocked: true };
+  } catch {
+    return { digest: null, blocked: true };
+  }
+}
+
+function skillPathHasSymlinkAncestor(homeDirectory: string, agentHome: string, name: SkillName): boolean {
+  for (const path of [join(homeDirectory, agentHome), join(homeDirectory, agentHome, "skills"), join(homeDirectory, agentHome, "skills", name)]) {
+    try {
+      if (lstatSync(path).isSymbolicLink()) return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+export function inspectSkillInstallations(options: {
+  packagePath?: string;
+  homeDirectory?: string;
+} = {}): Record<string, unknown> {
+  const packagePath = resolve(options.packagePath ?? PACKAGE_ROOT);
+  const homeDirectory = resolve(options.homeDirectory ?? homedir());
+  let version: string | null = null;
+  try {
+    version = (readJson<{ version?: string }>(join(packagePath, "package.json")).version ?? null);
+  } catch {
+    // A source digest remains useful when package metadata is unavailable.
+  }
+  const skills = SKILL_NAMES.map((name) => {
+    const sourcePath = packagedSkillPath(packagePath, name);
+    const source = skillDirectoryDigest(sourcePath);
+    const targets = [".claude", ".codex", ".agents"].map((agentHome) => {
+      const path = join(homeDirectory, agentHome, "skills", name);
+      const ancestorBlocked = skillPathHasSymlinkAncestor(homeDirectory, agentHome, name);
+      const observed = ancestorBlocked ? { digest: null, blocked: true } : skillDirectoryDigest(path);
+      const status = observed.blocked
+        ? "blocked"
+        : observed.digest === null
+          ? "missing"
+          : source.digest !== null && observed.digest === source.digest
+            ? "current"
+            : "stale";
+      return { path, digest: observed.digest, status };
+    });
+    return {
+      name,
+      source: { path: sourcePath, digest: source.digest, status: source.blocked ? "blocked" : source.digest ? "available" : "missing" },
+      targets,
+      inSync: !source.blocked && source.digest !== null && targets.every((target) => target.status === "current"),
+      repairHint: "harness-automation install",
+    };
+  });
+  return {
+    package: { path: packagePath, version },
+    skills,
+    inSync: skills.every((skill) => skill.inSync),
+    repairHint: "harness-automation install",
+  };
+}
 
 function harnessPath(root: string, path: string): string {
   return safePath(root, `${HARNESS_DIR}/${path}`);
@@ -571,12 +674,63 @@ export interface TrustedCommandResult {
   status: "passed" | "failed" | "blocked";
   exitCode: number | null;
   output: string;
+  outputSha256: string;
+}
+
+function executableOnPath(command: string): boolean {
+  const extensions = process.platform === "win32"
+    ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")
+    : [""];
+  return (process.env.PATH ?? "").split(delimiter).filter(Boolean).some((directory) =>
+    extensions.some((extension) => {
+      try {
+        accessSync(join(directory, `${command}${extension}`), constants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    })
+  );
+}
+
+export function hasExecutableFileHeader(header: Uint8Array): boolean {
+  if (header.length < 2) return false;
+  if (header[0] === 0x23 && header[1] === 0x21) return true;
+  if (header.length < 4) return false;
+  const magic = ((header[0] << 24) | (header[1] << 16) | (header[2] << 8) | header[3]) >>> 0;
+  return [
+    0x7f454c46, // ELF
+    0xfeedface, 0xcefaedfe, // Mach-O 32-bit, both endian orders
+    0xfeedfacf, 0xcffaedfe, // Mach-O 64-bit, both endian orders
+    0xcafebabe, 0xbebafeca, // Mach-O fat, both endian orders
+    0xcafebabf, 0xbfbafeca, // Mach-O fat 64-bit, both endian orders
+    0x4d5a0000, // PE/DOS MZ (only the first two bytes are significant)
+  ].includes(magic) || (header[0] === 0x4d && header[1] === 0x5a);
+}
+
+function hasRecognizedExecutableFileHeader(path: string): boolean {
+  let descriptor: number | null = null;
+  try {
+    descriptor = openSync(path, "r");
+    const header = Buffer.alloc(4);
+    const bytesRead = readSync(descriptor, header, 0, header.length, 0);
+    return hasExecutableFileHeader(header.subarray(0, bytesRead));
+  } catch {
+    return false;
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
+  }
 }
 
 function executableAvailable(command: string, root: string): boolean {
-  if (command.includes("/") || command.includes("\\")) return existsSync(resolve(root, command));
-  const result = spawnSync(command, ["--version"], { cwd: root, encoding: "utf8", timeout: 5_000 });
-  return !result.error;
+  if (!command.includes("/") && !command.includes("\\")) return executableOnPath(command);
+  try {
+    const path = resolve(root, command);
+    accessSync(path, constants.X_OK);
+    return hasRecognizedExecutableFileHeader(path);
+  } catch {
+    return false;
+  }
 }
 
 function trustedCommands(root: string, discovery: Discovery, mode: "session" | "commit" | "ci"): Array<{ id: string; command: string[] }> {
@@ -596,7 +750,7 @@ function trustedCommands(root: string, discovery: Discovery, mode: "session" | "
       name.startsWith("build:");
     if (commitGate) add(id, command);
     if (mode === "ci" && ciGate) add(id, command);
-    if (mode === "ci" && id.startsWith("eval:")) add(id, command);
+    if (mode === "ci" && (id.startsWith("eval:") || id.startsWith("eval-negative:"))) add(id, command);
   }
   if (discovery.stacks.includes("python") && existsSync(join(root, "manage.py"))) {
     add("django:check", ["python3", "manage.py", "check"]);
@@ -620,10 +774,57 @@ function trustedCommands(root: string, discovery: Discovery, mode: "session" | "
   return selected;
 }
 
+function runTrustedCommand(
+  root: string,
+  id: string,
+  command: string[],
+  mode: "session" | "commit" | "ci",
+  expectedExitCode = 0,
+  timeoutMs?: number,
+): TrustedCommandResult {
+  if (!executableAvailable(command[0], root)) {
+    return {
+      id,
+      command,
+      status: "blocked",
+      exitCode: null,
+      output: `${command[0]} is not installed`,
+      outputSha256: hashObject({ stdout: "", stderr: "" }),
+    };
+  }
+  const result = spawnSync(command[0], command.slice(1), {
+    cwd: root,
+    encoding: "utf8",
+    timeout: timeoutMs ?? (mode === "ci" ? 15 * 60_000 : 5 * 60_000),
+    maxBuffer: 10 * 1024 * 1024,
+    env: { ...process.env, CI: "1" },
+  });
+  const stdout = typeof result.stdout === "string" ? result.stdout : "";
+  const stderr = typeof result.stderr === "string" ? result.stderr : "";
+  const outputSha256 = hashObject({ stdout, stderr });
+  const output = `${stdout}${stderr}`.trim().slice(-20_000);
+  if (result.error) {
+    const errorCode = (result.error as NodeJS.ErrnoException).code;
+    return {
+      id,
+      command,
+      status: errorCode === "ETIMEDOUT" || errorCode === "ENOBUFS" ? "failed" : "blocked",
+      exitCode: null,
+      output: (output || String(result.error)).slice(-20_000),
+      outputSha256,
+    };
+  }
+  const gofmtDirty = id === "go:format" && output.length > 0;
+  const passed = result.status === expectedExitCode && !gofmtDirty;
+  return { id, command, status: passed ? "passed" : "failed", exitCode: result.status, output, outputSha256 };
+}
+
 export function runTrustedChecks(args: {
   projectRoot: string;
   mode: "session" | "commit" | "ci";
   now?: Date;
+  /** Test seam; production callers use the fixed mode-specific timeout. */
+  commandTimeoutMs?: number;
 }): {
   ok: boolean;
   policy: ReturnType<typeof checkProject>;
@@ -653,25 +854,45 @@ export function runTrustedChecks(args: {
   const policy = checkProject(root);
   const policyDocument = readJson<PolicyDocument>(harnessPath(root, "policy.yaml"));
   const discovery = readJson<Discovery>(harnessPath(root, "discovery.json"));
-  const commands = trustedCommands(root, discovery, args.mode).map<TrustedCommandResult>(({ id, command }) => {
-    if (!executableAvailable(command[0], root)) {
-      return { id, command, status: "blocked", exitCode: null, output: `${command[0]} is not installed` };
+  const evaluationEnabled = (policyDocument.project.qualityProfiles ?? [])
+    .includes("eval-driven-development");
+  const approvedEvalPaths = new Set(
+    policyDocument.sources.filter((source) => source.kind === "eval").map((source) => source.path),
+  );
+  let approvedEvalContract: ReturnType<typeof readEvalContract> | null = null;
+  let evalPreflightError: string | null = null;
+  if (evaluationEnabled && args.mode === "ci") {
+    const currentEvalPaths = evaluationSourcePaths(root);
+    const sameEvalSourceSet = currentEvalPaths.length === approvedEvalPaths.size &&
+      currentEvalPaths.every((path) => approvedEvalPaths.has(path));
+    if (!sameEvalSourceSet) {
+      evalPreflightError = "approved eval source set changed";
+    } else if (driftProject(root).sourceDrift.some((path) => approvedEvalPaths.has(path))) {
+      evalPreflightError = "approved eval sources drifted";
+    } else {
+      try {
+        approvedEvalContract = readEvalContract(root, approvedEvalPaths);
+      } catch (error) {
+        evalPreflightError = error instanceof Error ? error.message : String(error);
+      }
     }
-    const result = spawnSync(command[0], command.slice(1), {
-      cwd: root,
-      encoding: "utf8",
-      timeout: args.mode === "ci" ? 15 * 60_000 : 5 * 60_000,
-      maxBuffer: 10 * 1024 * 1024,
-      env: { ...process.env, CI: "1" },
-    });
-    const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim().slice(-20_000);
-    if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { id, command, status: "blocked", exitCode: null, output: String(result.error) };
-    }
-    const gofmtDirty = id === "go:format" && output.length > 0;
-    const passed = result.status === 0 && !gofmtDirty;
-    return { id, command, status: passed ? "passed" : "failed", exitCode: result.status, output };
-  });
+  }
+  const evaluationArgv = approvedEvalContract
+    ? approvedEvalContract.suites.flatMap((suite) => [
+        suite.command,
+        ...(suite.negativeControl ? [suite.negativeControl.command] : []),
+      ])
+    : [];
+  const isEvaluationArgv = (command: string[]): boolean => evaluationArgv.some((evaluation) =>
+    command.length === evaluation.length && command.every((value, index) => value === evaluation[index])
+  );
+  const commands = evaluationEnabled && args.mode === "ci" && evalPreflightError
+    ? []
+    : trustedCommands(root, discovery, args.mode)
+    .filter(({ id, command }) =>
+      !id.startsWith("eval:") && !id.startsWith("eval-negative:") && !isEvaluationArgv(command)
+    )
+    .map<TrustedCommandResult>(({ id, command }) => runTrustedCommand(root, id, command, args.mode, 0, args.commandTimeoutMs));
   const workspaceConfigured = existsSync(join(root, ".harness/worktree-delivery.json"));
   const ciCannotObserveHost = args.mode === "ci" || process.env.CI === "1";
   const workspace = !workspaceConfigured
@@ -705,11 +926,8 @@ export function runTrustedChecks(args: {
   const workspaceGatePassing = workspace.status === "not-configured" ||
     workspace.status === "verified" ||
     workspace.status === "blocked";
-  const evaluationEnabled = (policyDocument.project.qualityProfiles ?? [])
-    .includes("eval-driven-development");
   const evaluationLoaded = policy.results
     .find((item) => item.id === "eval-contract-before-implementation")?.loaded ?? false;
-  const evaluationCommands = commands.filter((item) => item.id.startsWith("eval:"));
   let evaluations: {
     configured: boolean;
     loaded: boolean;
@@ -746,37 +964,87 @@ export function runTrustedChecks(args: {
       receiptHash: null,
     };
   } else {
-    const status = evaluationCommands.length === 0 || evaluationCommands.some((item) => item.status === "blocked")
+    const contract = approvedEvalContract;
+    const contractVersion = contract?.schemaVersion ?? null;
+    let suites: Array<{
+      id: string;
+      baselineOrigin: string;
+      requirementIds: string[];
+      ruleIds: string[];
+      positive: TrustedCommandResult;
+      negative: TrustedCommandResult | null;
+    }> = [];
+    const contractError = evalPreflightError;
+    if (contract) {
+      suites = contract.suites.map((suite) => ({
+          id: suite.id,
+          baselineOrigin: suite.baseline.origin,
+          requirementIds: (suite.traceability ?? []).map((trace) => trace.requirementId),
+          ruleIds: (suite.traceability ?? []).flatMap((trace) => trace.ruleIds),
+          positive: runTrustedCommand(root, `eval:${suite.id}`, suite.command, args.mode, 0, args.commandTimeoutMs),
+          negative: contract.schemaVersion === "1.1" && suite.negativeControl
+            ? runTrustedCommand(
+                root,
+                `eval-negative:${suite.id}`,
+                suite.negativeControl.command,
+                args.mode,
+                suite.negativeControl.expectedExitCode,
+                args.commandTimeoutMs,
+              )
+            : null,
+        }));
+    }
+    const positiveFailed = suites.some((suite) => suite.positive.status === "failed");
+    const unavailable = Boolean(contractError) || suites.length === 0 || suites.some((suite) =>
+      suite.positive.status === "blocked" || suite.negative === null || suite.negative.status === "blocked",
+    );
+    const negativeFailed = suites.some((suite) => suite.negative?.status === "failed");
+    const passing = suites.length > 0 && suites.every((suite) => suite.positive.status === "passed");
+    const enforced = contractVersion === "1.1" && suites.length > 0 && suites.every((suite) => suite.negative?.status === "passed");
+    const available = !unavailable;
+    const status = unavailable
       ? "blocked" as const
-      : evaluationCommands.some((item) => item.status === "failed")
-        ? "failing" as const
-        : "verified" as const;
+      : positiveFailed || negativeFailed
+          ? "failing" as const
+          : "verified" as const;
     const createdAt = (args.now ?? new Date()).toISOString();
     const receiptPath = `.harness/eval-runs/${createdAt.replace(/[:.]/gu, "-")}.json`;
-    const receipt = {
-      schemaVersion: "1.0",
+    const receipt = contractError ? null : {
+      schemaVersion: "1.1",
       createdAt,
       policyDigest: policy.policyDigest,
       contractSha256: policyDocument.sources.find((source) => source.path === EVAL_CONTRACT_PATH)?.sha256 ?? null,
-      suites: evaluationCommands.map((item) => ({
-        id: item.id,
-        command: item.command,
-        status: item.status,
-        exitCode: item.exitCode,
-        outputSha256: sha256(item.output),
+      suites: suites.map((suite) => ({
+        id: suite.id,
+        baselineOrigin: suite.baselineOrigin,
+        requirementIds: suite.requirementIds,
+        ruleIds: suite.ruleIds,
+        positive: {
+          command: suite.positive.command,
+          status: suite.positive.status,
+          exitCode: suite.positive.exitCode,
+          outputSha256: suite.positive.outputSha256,
+        },
+        negative: suite.negative && {
+          command: suite.negative.command,
+          status: suite.negative.status,
+          exitCode: suite.negative.exitCode,
+          outputSha256: suite.negative.outputSha256,
+        },
       })),
+      error: contractError,
     };
-    const receiptHash = hashObject(receipt);
-    atomicWrite(safePath(root, receiptPath), prettyJson({ ...receipt, receiptHash }));
+    const receiptHash = receipt ? hashObject(receipt) : null;
+    if (receipt && receiptHash) atomicWrite(safePath(root, receiptPath), prettyJson({ ...receipt, receiptHash }));
     evaluations = {
       configured: true,
       loaded: evaluationLoaded,
-      enforced: status !== "blocked",
-      passing: status === "verified",
-      available: status !== "blocked",
+      enforced,
+      passing,
+      available,
       status,
       contractPath: EVAL_CONTRACT_PATH,
-      receiptPath,
+      receiptPath: receipt ? receiptPath : null,
       receiptHash,
     };
   }
@@ -796,7 +1064,7 @@ export function runTrustedChecks(args: {
         ? "Every approved evaluation suite passed in CI mode."
         : `Evaluation CI gate is ${evaluations.status}.`;
     }
-    policy.ok = policy.ok && evaluations.passing;
+    policy.ok = policy.ok && evaluations.status === "verified";
   }
   return {
     ok: policy.ok &&
@@ -846,23 +1114,20 @@ export function createSessionContext(projectRoot: string, now?: Date, requestedA
   };
 }
 
-export function doctorProject(projectRoot: string): Record<string, unknown> {
+export function doctorProject(projectRoot: string, options?: { packagePath?: string; homeDirectory?: string }): Record<string, unknown> {
   const root = resolve(projectRoot);
-  const command = (name: string): boolean => {
-    const result = spawnSync(name, ["--version"], { encoding: "utf8", timeout: 5_000 });
-    return !result.error && result.status === 0;
-  };
   return {
     projectDir: root,
     exists: existsSync(root) && statSync(root).isDirectory(),
-    git: command("git"),
-    githubCli: command("gh"),
-    node: command("node"),
-    python: command("python3"),
-    go: command("go"),
+    git: executableOnPath("git"),
+    githubCli: executableOnPath("gh"),
+    node: executableOnPath("node"),
+    python: executableOnPath("python3"),
+    go: executableOnPath("go"),
     prd: existsSync(join(root, "docs/PRD.md")),
     research: markdownFiles(safePath(root, "docs/research"), root).length,
     evaluations: inspectEvaluations(root),
+    skillInstallations: inspectSkillInstallations(options),
     intake: existsSync(harnessPath(root, "intake.json")),
     discovery: existsSync(harnessPath(root, "discovery.json")),
     policy: existsSync(harnessPath(root, "policy.yaml")),

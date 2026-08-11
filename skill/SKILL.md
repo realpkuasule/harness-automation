@@ -44,7 +44,7 @@ node <skill目录>/scripts/run.mjs research github --project <项目绝对路径
 
 用户明确要求 EDD/evals，或 PRD 包含 Agent、生成、检索、模型判断等非确定性产品行为时，推荐 `eval-driven-development` quality profile。若是否属于评测对象不清楚，只向负责人确认这一项。
 
-启用后，先按 [eval-driven-development.md](references/eval-driven-development.md) 建立 `evals/evals.json`、代表性任务、实现前 baseline 和 grader 证据。模型 grader 未记录人工校准证据时只能作为 `guidance`。不得先实现功能再补写 baseline。
+启用后，先按 [eval-driven-development.md](references/eval-driven-development.md) 建立 `evals/evals.json`、Requirement ID → suite → rule ID traceability、代表性任务、baseline、repo-relative `runnerSources`（runner/manifest 输入）、known-bad negative control 和 grader 证据。新行为只可记录真实的 `pre-implementation` baseline；接管已有系统时记录诚实的 `adoption` baseline，绝不回填或冒充历史。模型 grader 未记录人工校准证据时只能作为 `guidance`。
 
 确定性业务项目默认不启用；已有单元测试、类型检查和契约测试继续通过普通 gate 管理。
 
@@ -114,7 +114,15 @@ node <skill目录>/scripts/run.mjs drift --project <项目绝对路径>
 
 提交前可用 `--mode commit` 追加格式、lint、类型、Django、Go、Proto 等已发现的快速 gate；CI 用 `--mode ci` 追加测试与构建。命令始终以 argv 执行，缺失工具显示 `blocked`。
 
-EDD suite 只在 `--mode ci` 执行，避免新会话、提交和 apply 隐式消耗模型额度或凭据。CI 输出包含 evaluation 状态以及只保存 argv、退出状态和输出哈希的本地回执；原始 transcript 仍由项目自己的 runner/CI artifact 管理。
+EDD suite 只在 `--mode ci` 执行，避免新会话、提交和 apply 隐式消耗模型额度或凭据；与 suite argv 相同的普通 CI command 也由专用 runner 只执行一次。`passing` 只来自正常 suite runner 成功；`enforced` 只来自 `1.1` project-owned known-bad control 以准确预期退出码被拒绝，两者独立报告。CI 回执只保存 argv、退出状态和完整 stdout/stderr 的边界明确 SHA-256；原始 transcript 仍由项目自己的 runner/CI artifact 管理。
+
+### Eval 规则的自然语言变更
+
+当负责人要求新增、修改、删除、降低阈值、移除任务或 fixture 时，先读取批准的 PRD/设计、现有 contract、任务/fixture/runner、policy digest 和 Requirement IDs。复用已有稳定 ID；没有 Requirement ID 就停止并请负责人命名或批准一个。先展示语义差异：受影响 Requirement/suite/rule IDs、正向任务、known-bad fixture、runner/gate、baseline origin、目标及丢失覆盖。
+
+只编辑项目拥有的来源；Harness 不生成通用 Eval CRUD、不托管数据集或调用模型 Provider。变更后运行最小确定性 contract/runner 检查（包括 known-bad control），随后重新执行 owner-approved `intake`、`discover`、生成新 immutable `plan`、展示完整 hash、等待 exact-hash `apply`、最后 `check --mode ci` 与 `drift`。
+
+删除、阈值降低、grader 降级、任务/fixture 移除、扩大排除范围或覆盖影响不清楚的变更均是 weakening。编辑前必须取得负责人明确批准，且批准文本必须列出受影响的 Requirement IDs 和 rule IDs；“继续”或批准其他 plan 不足以授权 weakening。
 
 需要解释单条规则时运行 `node <skill目录>/scripts/run.mjs explain <policy-id> --project <项目绝对路径>`。
 

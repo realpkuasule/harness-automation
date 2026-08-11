@@ -197,8 +197,18 @@ export function discoverProject(root: string, now = new Date()): Discovery {
   ];
   const evaluations = inspectEvaluations(root);
   const commands = commandFromProject(packageFiles, files, root);
-  for (const suite of evaluations.suites) commands[`eval:${suite.id}`] = suite.command;
+  for (const suite of evaluations.suites) {
+    commands[`eval:${suite.id}`] = suite.command;
+    if (suite.negativeControl) commands[`eval-negative:${suite.id}`] = suite.negativeControl.command;
+  }
+  const unmanagedCandidates = Object.keys(commands)
+    .filter((id) => /(?:^|:)(?:eval|evals|test:eval|test:evals)(?:$|:)/iu.test(id) && !id.startsWith("eval:"))
+    .sort();
+  evaluations.unmanagedCandidates = unmanagedCandidates;
   const warnings = evaluations.errors.map((error) => `Evaluation contract blocked: ${error}`);
+  if (!evaluations.configured && unmanagedCandidates.length > 0) {
+    warnings.push(`Unmanaged eval-script candidate(s): ${unmanagedCandidates.join(", ")}; advisory only, EDD remains disabled until the owner selects it.`);
+  }
   if (profile === "custom") warnings.push("No preset stack profile matched exactly; owner-approved custom stacks are required.");
   const stacksWithoutAdapters = stacks.filter((stack) => !hasBuiltInStackAdapter(stack));
   if (stacksWithoutAdapters.length > 0) {

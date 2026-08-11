@@ -317,7 +317,7 @@ function qualityProfileRules(
     rule({
       id: "eval-contract-before-implementation",
       title: "Evaluation contract before implementation",
-      statement: "Define representative tasks, graders, an implementation-before baseline, and an explicit target in evals/evals.json before implementing an evaluated capability.",
+      statement: "Define Requirement/rule traceability, representative tasks, graders, an honest pre-implementation or adoption baseline, a known-bad control, and an explicit target in evals/evals.json before enforcing an evaluated capability.",
       rationale: "An approved evaluation contract turns ambiguous success criteria into stable cross-session development evidence.",
       scope: { include: ["evals/**/*", "docs/evals/**/*"], exclude: [], boundaries: ["evaluation"] },
       formalization: "procedural",
@@ -328,7 +328,7 @@ function qualityProfileRules(
     rule({
       id: "eval-regression-gate",
       title: "Evaluation regression gate",
-      statement: "Run every approved evaluation suite in CI and reject delivery when its project-owned runner does not meet the contract target.",
+      statement: "Run every approved evaluation suite and project-owned known-bad control in CI; passing and enforcement are independent and delivery is rejected unless both succeed.",
       rationale: "A repeatable project runner makes quality regressions visible across model, prompt, tool, and implementation changes.",
       scope: { include: ["evals/**/*", "**/*"], exclude: [".harness/eval-runs/**"], boundaries: ["evaluation"] },
       formalization: "deterministic",

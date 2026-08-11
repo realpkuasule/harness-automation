@@ -10,7 +10,7 @@
       "type": "string"
     },
     "schemaVersion": {
-      "const": "1.0"
+      "enum": ["1.0", "1.1"]
     },
     "suites": {
       "type": "array",
@@ -20,6 +20,25 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "schemaVersion": { "const": "1.1" } }, "required": ["schemaVersion"] },
+      "then": {
+        "properties": {
+          "suites": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "allOf": [
+                { "type": "object", "required": ["runnerSources", "traceability", "negativeControl"] },
+                { "type": "object", "properties": { "baseline": { "type": "object", "required": ["origin"] } } }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "repositoryPath": {
       "type": "string",
@@ -27,6 +46,7 @@
       "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+$"
     },
     "suite": {
+      "$comment": "Suite and grader identifier uniqueness is enforced by runtime semantic validation.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -50,11 +70,13 @@
         },
         "owner": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": ".*\\S.*"
         },
         "description": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": ".*\\S.*"
         },
         "command": {
           "type": "array",
@@ -84,6 +106,22 @@
           "items": {
             "$ref": "#/$defs/grader"
           }
+        },
+        "runnerSources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/repositoryPath"
+          }
+        },
+        "traceability": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/traceability" }
+        },
+        "negativeControl": {
+          "$ref": "#/$defs/negativeControl"
         }
       }
     },
@@ -103,6 +141,9 @@
         },
         "evidence": {
           "$ref": "#/$defs/repositoryPath"
+        },
+        "origin": {
+          "enum": ["pre-implementation", "adoption"]
         }
       }
     },
@@ -158,6 +199,34 @@
           }
         }
       ]
+    },
+    "traceability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirementId", "ruleIds"],
+      "properties": {
+        "requirementId": { "type": "string", "minLength": 1, "pattern": ".*\\S.*" },
+        "ruleIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
+        }
+      }
+    },
+    "negativeControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "fixture", "expectedExitCode"],
+      "properties": {
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "fixture": { "$ref": "#/$defs/repositoryPath" },
+        "expectedExitCode": { "type": "integer", "minimum": 1, "maximum": 255 }
+      }
     }
   }
 }

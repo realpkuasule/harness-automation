@@ -62,6 +62,10 @@ npm list -g @realpkuasule/harness-automation --depth=0
 harness-automation help
 ```
 
+`harness-automation doctor --project .` 还会只读比较当前 CLI 打包的两个
+Skill 与 `~/.claude`、`~/.codex`、`~/.agents` 安装副本；显示 `missing`、
+`stale` 或 `blocked` 时运行 `harness-automation install` 修复，doctor 本身不写入主机目录。
+
 `harness-automation install` 会部署：
 
 - `~/.claude/skills/harness-automation/`；
@@ -142,7 +146,7 @@ harness-automation drift --project .
 
 对 Agent、生成、检索或模型判断等非确定性产品行为，可以启用 EDD quality profile。普通确定性项目继续使用现有类型、单元、集成和契约门禁，不必强制启用。
 
-启用前先创建 `evals/evals.json`，记录代表性任务、实现前 baseline、目标、grader 和跨栈 argv runner；格式见 [Eval Contract v1](docs/api/eval-contract-v1.schema.json) 与 [EDD 工作流](skill/references/eval-driven-development.md)。然后重新 intake/discover 并规划：
+启用前先创建 `evals/evals.json`，记录稳定的 Requirement ID → suite → rule ID 映射、代表性任务、目标、grader、跨栈 argv runner、明确的 repo-relative `runnerSources`（runner/manifest 输入），以及 project-owned known-bad negative control。新行为使用真实 `pre-implementation` baseline；接管已有 eval 系统使用诚实的 `adoption` baseline，绝不回填历史。`1.0` 保持可读：缺失 origin 才报告为 `legacy-unknown`，即使带有新字段也不能声明 enforced；`1.1` 才要求并验证 traceability、baseline origin、runnerSources 和 negative control。格式见 [Eval Contract v1](docs/api/eval-contract-v1.schema.json) 与 [EDD 工作流](skill/references/eval-driven-development.md)。然后重新 intake/discover 并规划：
 
 ```bash
 harness-automation intake --project . --owner <负责人> --approve-sources
@@ -158,7 +162,7 @@ Eval runner 只在 CI mode 执行：
 harness-automation check --project . --mode ci
 ```
 
-Harness 验证批准契约、执行项目 runner，并生成只包含 argv、退出状态和输出 SHA-256 的 `.harness/eval-runs/` 回执。它不直接调用模型 Provider、不保存凭据/原始 transcript，也不允许未经人工校准的模型 grader 成为硬门禁。
+Harness 分别报告 `passing`（正向 suite 成功）与 `enforced`（known-bad control 按预期被拒绝），只有两者都成立才通过 CI；回执仅保存 argv、退出状态和输出 SHA-256。普通确定性测试即使脚本名为 `evals` 仍是普通 gate，Harness 只做 advisory，不会自动启用 EDD。它不直接调用模型 Provider、不保存凭据/原始 transcript，也不允许未经人工校准的模型 grader 成为硬门禁。
 
 ## Worktree 交付治理
 

@@ -8,7 +8,7 @@ Harness starts after this sequence:
 2. Reusable GitHub projects are researched under `docs/research/`.
 3. The PRD and design are revised using that evidence.
 4. The project owner declares the source set ready.
-5. If EDD is selected, representative tasks, graders, and an implementation-before baseline are recorded under `evals/` before intake.
+5. If EDD is selected, Requirement/suite/rule traceability, representative tasks, graders, an honest `pre-implementation` or `adoption` baseline, explicit repo-relative `runnerSources` (runner/manifest inputs), and a known-bad negative control are recorded before intake.
 6. Harness compiles and verifies policy before parallel implementation begins.
 
 When the current conversation finalizes a PRD or design, ask: “需求与设计已经达到可冻结状态，是否现在启动 Harness，在开发前建立跨会话约束？” This is a handoff prompt only. Do not edit the `grill-me` Skill.
@@ -44,7 +44,7 @@ doctor
   -> drift
 ```
 
-When `eval-driven-development` is selected, `evals/evals.json` and every referenced task/baseline/calibration file must already belong to the approved intake. Discovery exposes each suite as an `eval:<suite-id>` argv command. Only `check --mode ci` executes these commands; plan, apply, session, and commit paths remain free of paid/non-deterministic execution.
+When `eval-driven-development` is selected, `evals/evals.json` and every referenced task/baseline/calibration/fixture/runnerSources file must already belong to the approved intake. Discovery exposes suite and known-bad commands as argv evidence. Only `check --mode ci` executes them; plan, apply, session, and commit paths remain free of paid/non-deterministic execution. A positive runner supplies `passing`; only the exact expected rejection of the known-bad control in a hardened `1.1` contract supplies `enforced`.
 
 `plan` writes only a new immutable file under `.harness/plans/`. `apply` performs all precondition checks before any target is written and restores already-written targets if a later write fails.
 
