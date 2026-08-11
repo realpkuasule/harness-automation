@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, existsSync, lstatSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -693,11 +693,41 @@ function executableOnPath(command: string): boolean {
   );
 }
 
+export function hasExecutableFileHeader(header: Uint8Array): boolean {
+  if (header.length < 2) return false;
+  if (header[0] === 0x23 && header[1] === 0x21) return true;
+  if (header.length < 4) return false;
+  const magic = ((header[0] << 24) | (header[1] << 16) | (header[2] << 8) | header[3]) >>> 0;
+  return [
+    0x7f454c46, // ELF
+    0xfeedface, 0xcefaedfe, // Mach-O 32-bit, both endian orders
+    0xfeedfacf, 0xcffaedfe, // Mach-O 64-bit, both endian orders
+    0xcafebabe, 0xbebafeca, // Mach-O fat, both endian orders
+    0xcafebabf, 0xbfbafeca, // Mach-O fat 64-bit, both endian orders
+    0x4d5a0000, // PE/DOS MZ (only the first two bytes are significant)
+  ].includes(magic) || (header[0] === 0x4d && header[1] === 0x5a);
+}
+
+function hasRecognizedExecutableFileHeader(path: string): boolean {
+  let descriptor: number | null = null;
+  try {
+    descriptor = openSync(path, "r");
+    const header = Buffer.alloc(4);
+    const bytesRead = readSync(descriptor, header, 0, header.length, 0);
+    return hasExecutableFileHeader(header.subarray(0, bytesRead));
+  } catch {
+    return false;
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
+  }
+}
+
 function executableAvailable(command: string, root: string): boolean {
   if (!command.includes("/") && !command.includes("\\")) return executableOnPath(command);
   try {
-    accessSync(resolve(root, command), constants.X_OK);
-    return true;
+    const path = resolve(root, command);
+    accessSync(path, constants.X_OK);
+    return hasRecognizedExecutableFileHeader(path);
   } catch {
     return false;
   }

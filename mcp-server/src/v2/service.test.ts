@@ -13,6 +13,7 @@ import {
   planProject,
   researchGitHub,
   rollbackChange,
+  hasExecutableFileHeader,
   runTrustedChecks,
 } from "./service.js";
 import { planWorkspaceConfiguration } from "../worktree/service.js";
@@ -153,6 +154,23 @@ describe("v2 stack discovery", () => {
       "--no-restore",
     ]);
     expect(discovery.warnings.join("\n")).toMatch(/No built-in stack adapter for: csharp, godot/);
+  });
+});
+
+describe("path command headers", () => {
+  it.each([
+    ["shebang", [0x23, 0x21, 0x2f, 0x62]],
+    ["ELF", [0x7f, 0x45, 0x4c, 0x46]],
+    ["Mach-O 32", [0xfe, 0xed, 0xfa, 0xce]],
+    ["Mach-O 64", [0xcf, 0xfa, 0xed, 0xfe]],
+    ["Mach-O fat", [0xca, 0xfe, 0xba, 0xbe]],
+    ["PE", [0x4d, 0x5a, 0x90, 0x00]],
+  ])("accepts a recognized %s header", (_name, bytes) => {
+    expect(hasExecutableFileHeader(Uint8Array.from(bytes))).toBe(true);
+  });
+
+  it("rejects a non-executable text header", () => {
+    expect(hasExecutableFileHeader(Uint8Array.from([0x6e, 0x6f, 0x70, 0x65]))).toBe(false);
   });
 });
 
@@ -817,6 +835,31 @@ describe("v2 plan/apply/check/rollback", () => {
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
+      if (previousMarker === undefined) delete process.env.MARKER_PATH;
+      else process.env.MARKER_PATH = previousMarker;
+    }
+  });
+
+  it("runs a shebang path runner exactly once", () => {
+    const root = temporaryProject();
+    approvedSources(root);
+    hardenedEvaluationContract(root);
+    const contract = JSON.parse(readFileSync(join(root, "evals/evals.json"), "utf8"));
+    contract.suites[0].command = ["bin/path-eval-runner"];
+    contract.suites[0].runnerSources = ["bin/path-eval-runner"];
+    write(root, "bin/path-eval-runner", "#!/bin/sh\nprintf run >> \"$MARKER_PATH\"\n");
+    chmodSync(join(root, "bin/path-eval-runner"), 0o755);
+    write(root, "evals/evals.json", JSON.stringify(contract));
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    const planned = planProject({ projectRoot: root, profile: "custom", stacks: ["typescript"], qualityProfiles: ["eval-driven-development"] });
+    applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+    const previousMarker = process.env.MARKER_PATH;
+    process.env.MARKER_PATH = join(root, "path-runner-marker.txt");
+    try {
+      expect(runTrustedChecks({ projectRoot: root, mode: "ci" }).evaluations.status).toBe("verified");
+      expect(readFileSync(String(process.env.MARKER_PATH), "utf8")).toBe("run");
+    } finally {
       if (previousMarker === undefined) delete process.env.MARKER_PATH;
       else process.env.MARKER_PATH = previousMarker;
     }
