@@ -1064,7 +1064,8 @@ process.stdout.write(fs.readFileSync(process.argv[2]));
 `, "utf8");
     git(root, "add", ".gitattributes", "payload.bin", "textconv.cjs");
     git(root, "commit", "-m", "test: add textconv fixture");
-    git(root, "config", "diff.sideeffect.textconv", `${process.execPath} ${textconv}`);
+    git(root, "config", "diff.sideeffect.textconv",
+      `${JSON.stringify(process.execPath)} ${JSON.stringify(textconv)}`);
     configure(root, { managementBranch: "main", maxPersistentWorktrees: 2 });
     const worktreePath = `${root}-adopt-textconv`;
     repositories.push(worktreePath);
@@ -1101,7 +1102,8 @@ process.stdout.write(fs.readFileSync(process.argv[2]));
 `, "utf8");
     git(root, "add", ".gitattributes", "payload.bin", "legacy-textconv.cjs");
     git(root, "commit", "-m", "test: add legacy textconv fixture");
-    git(root, "config", "diff.legacy.textconv", `${process.execPath} ${textconv}`);
+    git(root, "config", "diff.legacy.textconv",
+      `${JSON.stringify(process.execPath)} ${JSON.stringify(textconv)}`);
     const worktreePath = `${root}-legacy-textconv`;
     repositories.push(worktreePath);
     git(root, "worktree", "add", "-b", "legacy-textconv", worktreePath, "HEAD");
