@@ -1,23 +1,28 @@
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmdirSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { hashObject, prettyJson, withoutHash } from "../v2/fs.js";
+import { hashObject, prettyJson, sha256, withoutHash } from "../v2/fs.js";
 import {
   applyWorkspacePlan,
   auditWorkspace,
+  parseWorkspaceAdoptionManifest,
   parseWorktreePorcelain,
+  planWorkspaceAdoption,
   planWorkspaceAllocation,
   planWorkspaceClose,
   planWorkspaceConfiguration,
@@ -28,6 +33,45 @@ import {
 } from "./service.js";
 
 const repositories: string[] = [];
+const originalPath = process.env.PATH;
+
+function installAdoptionGh(): void {
+  const bin = mkdtempSync(join(tmpdir(), "harness-adopt-gh-"));
+  repositories.push(bin);
+  const script = `const fs = require("node:fs");
+const command = process.argv[2];
+if (process.env.HARNESS_TEST_GH_COUNT_FILE) {
+  const file = process.env.HARNESS_TEST_GH_COUNT_FILE;
+  const count = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) + 1 : 1;
+  fs.writeFileSync(file, String(count));
+  if (count > Number(process.env.HARNESS_TEST_GH_FAIL_AFTER || "Infinity")) process.exit(3);
+}
+const status = process.env.HARNESS_TEST_GH_STATUS || "In Progress";
+if (command === "project") {
+  process.stdout.write(JSON.stringify({ items: process.env.HARNESS_TEST_GH_PROJECT_MISSING ? [] : [{
+    content: { number: 301 }, status
+  }] }));
+} else if (command === "issue") {
+  process.stdout.write(JSON.stringify({
+    number: 301,
+    state: process.env.HARNESS_TEST_GH_ISSUE_STATE || "OPEN",
+    title: "Adopt fixture",
+    url: "https://github.com/example/project/issues/301"
+  }));
+} else {
+  process.exit(2);
+}
+`;
+  if (process.platform === "win32") {
+    writeFileSync(join(bin, "gh.js"), script, "utf8");
+    writeFileSync(join(bin, "gh.cmd"), "@node \"%~dp0gh.js\" %*\r\n", "utf8");
+  } else {
+    const executable = join(bin, "gh");
+    writeFileSync(executable, `#!/usr/bin/env node\n${script}`, "utf8");
+    chmodSync(executable, 0o755);
+  }
+  process.env.PATH = `${bin}${delimiter}${originalPath ?? ""}`;
+}
 
 function git(root: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
@@ -83,10 +127,30 @@ function configure(
 }
 
 afterEach(() => {
+  process.env.PATH = originalPath;
+  delete process.env.HARNESS_TEST_GH_STATUS;
+  delete process.env.HARNESS_TEST_GH_PROJECT_MISSING;
+  delete process.env.HARNESS_TEST_GH_ISSUE_STATE;
+  delete process.env.HARNESS_TEST_GH_COUNT_FILE;
+  delete process.env.HARNESS_TEST_GH_FAIL_AFTER;
   for (const root of repositories.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe("portable worktree inventory", () => {
+  it("keeps the adoption manifest schema aligned with trimmed runtime fields", () => {
+    const schema = JSON.parse(readFileSync(
+      new URL("../../../docs/api/worktree-adopt-v1.schema.json", import.meta.url),
+      "utf8",
+    ));
+    for (const field of ["workItem", "owner", "thread", "branch"]) {
+      expect(schema.$defs.item.properties[field].pattern).toContain("\\S");
+    }
+    expect(() => parseWorkspaceAdoptionManifest({
+      schemaVersion: "worktree-adopt/1.0",
+      items: [{ workItem: "   ", owner: "owner", path: "/tmp/w", branch: "branch" }],
+    })).toThrow(/WORKTREE_ADOPT_INPUT_INVALID/);
+  });
+
   it("parses NUL-delimited porcelain including Windows-style paths", () => {
     expect(parseWorktreePorcelain(
       "worktree C:/code/project\0HEAD abc123\0branch refs/heads/main\0\0",
@@ -133,6 +197,19 @@ describe("portable worktree inventory", () => {
     expect(audit.passing).toBe(true);
     expect(worktreeCount(root)).toBe(before);
     expect(existsSync(join(root, ".harness"))).toBe(false);
+  });
+
+  it("preserves v2.1.3 aggregate untracked observation outside adoption", () => {
+    const root = repository();
+    const worktreePath = `${root}-legacy-observation`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "legacy-observation", worktreePath, "HEAD");
+    mkdirSync(join(worktreePath, "nested"));
+    writeFileSync(join(worktreePath, "nested", "valuable.txt"), "valuable\n", "utf8");
+
+    const legacy = workspaceStatus(root).worktrees.find((item) => item.path === worktreePath);
+    expect(legacy?.dirtyEvidence?.map((item) => item.path) ?? [])
+      .not.toContain("nested/valuable.txt");
   });
 
   it("keeps the configured management checkout out of detached Review orphan findings", () => {
@@ -824,6 +901,860 @@ describe("hash-approved worktree lifecycle", () => {
       changeId: allocationReceipt.id,
     })).toThrow(/WORKSPACE_ROLLBACK_REQUIRES_CLOSE_PLAN/);
     git(root, "worktree", "remove", worktreePath);
+  });
+});
+
+describe("hash-approved worktree adoption", () => {
+  it("plans and atomically adopts a clean batch without changing existing worktrees", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 3 });
+    const firstPath = `${root}-adopt-101`;
+    const secondPath = `${root}-adopt-102`;
+    repositories.push(firstPath, secondPath);
+    git(root, "worktree", "add", "-b", "issue-101", firstPath, "HEAD");
+    git(root, "worktree", "add", "-b", "issue-102", secondPath, "HEAD");
+    const porcelainBefore = git(root, "worktree", "list", "--porcelain");
+    const refsBefore = git(root, "for-each-ref", "--format=%(refname)%00%(objectname)");
+    const contentBefore = readFileSync(join(firstPath, "README.md"), "utf8");
+
+    const planned = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [
+        {
+          workItem: "github:example/project#102",
+          owner: "bob",
+          path: secondPath,
+          branch: "issue-102",
+        },
+        {
+          workItem: "github:example/project#101",
+          owner: "alice",
+          thread: "thread-101",
+          path: firstPath,
+          branch: "issue-101",
+        },
+      ],
+      now: new Date("2026-01-01T00:03:00.000Z"),
+    });
+
+    expect(planned.plan.operation.kind).toBe("adopt");
+    if (planned.plan.operation.kind !== "adopt") throw new Error("expected adopt plan");
+    expect(planned.plan.operation.items.map((item) => item.lease.workItem)).toEqual([
+      "github:example/project#101",
+      "github:example/project#102",
+    ]);
+    expect(planned.plan.operation.capacity).toEqual({
+      limit: 3,
+      before: 0,
+      adopting: 2,
+      after: 2,
+    });
+    expect(planned.plan.operation).toMatchObject({
+      configHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      hostBindingHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      refsHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      worktreeRegistrationHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      providerHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(planned.plan.operation.items[0]).toMatchObject({
+      beforeLeaseHash: null,
+      afterLeaseHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      snapshot: {
+        dirty: false,
+        dirtyEvidence: [],
+        dirtyPatch: { size: 0, sha256: expect.stringMatching(/^[a-f0-9]{64}$/u) },
+      },
+    });
+    expect(workspaceStatus(root).leases).toHaveLength(0);
+    expect(git(root, "worktree", "list", "--porcelain")).toBe(porcelainBefore);
+    expect(git(root, "for-each-ref", "--format=%(refname)%00%(objectname)")).toBe(refsBefore);
+
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: "0".repeat(64),
+    })).toThrow(/APPROVAL_MISMATCH/);
+    expect(workspaceStatus(root).leases).toHaveLength(0);
+
+    const receipt = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    expect(receipt).toMatchObject({
+      operation: "adopt",
+      status: "applied",
+      beforeObservedHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      afterObservedHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      compensationStatus: "not-required",
+      leaseChanges: [
+        expect.objectContaining({ action: "create", workItem: "github:example/project#101" }),
+        expect.objectContaining({ action: "create", workItem: "github:example/project#102" }),
+      ],
+    });
+    expect(workspaceStatus(root).leases).toHaveLength(2);
+    expect(git(root, "worktree", "list", "--porcelain")).toBe(porcelainBefore);
+    expect(git(root, "for-each-ref", "--format=%(refname)%00%(objectname)")).toBe(refsBefore);
+    expect(readFileSync(join(firstPath, "README.md"), "utf8")).toBe(contentBefore);
+
+    const rolledBack = rollbackWorkspaceChange({
+      projectRoot: root,
+      changeId: receipt.id,
+    });
+    expect(rolledBack).toMatchObject({
+      status: "rolled-back",
+      rollbackObservedHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(workspaceStatus(root).leases).toHaveLength(0);
+    expect(git(root, "worktree", "list", "--porcelain")).toBe(porcelainBefore);
+    expect(git(root, "for-each-ref", "--format=%(refname)%00%(objectname)")).toBe(refsBefore);
+  });
+
+  it("hash-binds dirty tracked and nested untracked content and rejects drift with zero leases", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 2 });
+    const worktreePath = `${root}-adopt-dirty`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "issue-dirty", worktreePath, "HEAD");
+    writeFileSync(join(worktreePath, "README.md"), "# dirty fixture\n", "utf8");
+    mkdirSync(join(worktreePath, "nested"));
+    writeFileSync(join(worktreePath, "nested", "valuable.txt"), "valuable v1\n", "utf8");
+
+    const planned = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#103",
+        owner: "alice",
+        path: worktreePath,
+        branch: "issue-dirty",
+      }],
+      now: new Date("2026-01-01T00:04:00.000Z"),
+    });
+    if (planned.plan.operation.kind !== "adopt") throw new Error("expected adopt plan");
+    expect(planned.plan.operation.items[0].snapshot).toMatchObject({
+      dirty: true,
+      indexHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      dirtyPatch: { sha256: expect.stringMatching(/^[a-f0-9]{64}$/u) },
+      dirtyEvidence: expect.arrayContaining([
+        expect.objectContaining({ path: "README.md" }),
+        expect.objectContaining({ path: "nested/valuable.txt" }),
+      ]),
+    });
+
+    writeFileSync(join(worktreePath, "nested", "valuable.txt"), "valuable v2\n", "utf8");
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toThrow(/WORKSPACE_DRIFT/);
+    expect(workspaceStatus(root).leases).toHaveLength(0);
+    expect(readFileSync(join(worktreePath, "nested", "valuable.txt"), "utf8"))
+      .toBe("valuable v2\n");
+  });
+
+  it("never executes a configured textconv command while observing adoption", () => {
+    const root = repository();
+    const marker = join(root, "textconv-marker");
+    const textconv = join(root, "textconv.cjs");
+    writeFileSync(join(root, ".gitattributes"), "*.bin diff=sideeffect\n", "utf8");
+    writeFileSync(join(root, "payload.bin"), "version one\n", "utf8");
+    writeFileSync(textconv, `const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(marker)}, "executed");
+process.stdout.write(fs.readFileSync(process.argv[2]));
+`, "utf8");
+    git(root, "add", ".gitattributes", "payload.bin", "textconv.cjs");
+    git(root, "commit", "-m", "test: add textconv fixture");
+    git(root, "config", "diff.sideeffect.textconv",
+      `${JSON.stringify(process.execPath)} ${JSON.stringify(textconv)}`);
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 2 });
+    const worktreePath = `${root}-adopt-textconv`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "issue-textconv", worktreePath, "HEAD");
+    writeFileSync(join(worktreePath, "payload.bin"), "version two\n", "utf8");
+
+    const planned = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#textconv",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-textconv",
+      }],
+    });
+    expect(existsSync(marker)).toBe(false);
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("retains legacy textconv observation while adoption uses no-textconv", () => {
+    const root = repository();
+    const marker = join(root, "legacy-textconv-marker");
+    const textconv = join(root, "legacy-textconv.cjs");
+    writeFileSync(join(root, ".gitattributes"), "*.bin diff=legacy\n", "utf8");
+    writeFileSync(join(root, "payload.bin"), "version one\n", "utf8");
+    writeFileSync(textconv, `const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(marker)}, "executed");
+process.stdout.write(fs.readFileSync(process.argv[2]));
+`, "utf8");
+    git(root, "add", ".gitattributes", "payload.bin", "legacy-textconv.cjs");
+    git(root, "commit", "-m", "test: add legacy textconv fixture");
+    git(root, "config", "diff.legacy.textconv",
+      `${JSON.stringify(process.execPath)} ${JSON.stringify(textconv)}`);
+    const worktreePath = `${root}-legacy-textconv`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "legacy-textconv", worktreePath, "HEAD");
+    writeFileSync(join(worktreePath, "payload.bin"), "version two\n", "utf8");
+
+    const legacy = workspaceStatus(root).worktrees.find((item) =>
+      item.branch === "legacy-textconv");
+    expect(legacy?.dirty).toBe(true);
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+    const adoption = workspaceStatus(root, { adoptionSafe: true }).worktrees.find((item) =>
+      item.branch === "legacy-textconv");
+    expect(adoption?.dirty).toBe(true);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("retains the v2.1.3 rename-token canonicalization outside adoption", () => {
+    const root = repository();
+    const worktreePath = `${root}-legacy-rename-token`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "legacy-rename-token", worktreePath, "HEAD");
+    git(worktreePath, "mv", "README.md", "renamed.md");
+    git(worktreePath, "reset", "HEAD", "--", "README.md", "renamed.md");
+
+    const legacy = workspaceStatus(root).worktrees.find((item) =>
+      item.branch === "legacy-rename-token");
+    const adoption = workspaceStatus(root, { adoptionSafe: true }).worktrees.find((item) =>
+      item.branch === "legacy-rename-token");
+    expect(legacy?.dirty).toBe(true);
+    expect(adoption?.dirty).toBe(true);
+  });
+
+  it("rejects index-only drift before writing an adoption lease", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 2 });
+    const worktreePath = `${root}-adopt-index-drift`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "issue-index-drift", worktreePath, "HEAD");
+    const planned = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#index-drift",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-index-drift",
+      }],
+    });
+    git(worktreePath, "update-index", "--assume-unchanged", "README.md");
+
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toThrow(/WORKSPACE_DRIFT/);
+    expect(workspaceStatus(root).leases).toHaveLength(0);
+  });
+
+  it("fails closed on symlinked lease state and index files", () => {
+    if (process.platform === "win32") return;
+    const root = repository();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 2 });
+    const commonDir = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir");
+    const external = join(root, "external-lease.json");
+    writeFileSync(external, "{}\n", "utf8");
+    const leaseDirectory = join(commonDir, "harness", "worktree-delivery", "leases");
+    mkdirSync(leaseDirectory, { recursive: true });
+    symlinkSync(external, join(leaseDirectory, `${sha256("external")}.json`));
+    expect(workspaceStatus(root).errors).toEqual([
+      expect.stringContaining("SYMLINK_TARGET_REJECTED"),
+    ]);
+    rmSync(leaseDirectory, { recursive: true, force: true });
+
+    const worktreePath = `${root}-adopt-index-link`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "issue-index-link", worktreePath, "HEAD");
+    const indexPath = join(git(root, "-C", worktreePath, "rev-parse", "--absolute-git-dir"), "index");
+    const realIndex = `${indexPath}.real`;
+    renameSync(indexPath, realIndex);
+    symlinkSync(realIndex, indexPath);
+    expect(() => planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#index-link",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-index-link",
+      }],
+    })).toThrow(/SYMLINK_TARGET_REJECTED/);
+  });
+
+  it("rejects unsupported dirty filesystem object types", () => {
+    if (process.platform === "win32") return;
+    const root = repository();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 2 });
+    const worktreePath = `${root}-adopt-special-file`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "issue-special-file", worktreePath, "HEAD");
+    rmSync(join(worktreePath, "README.md"));
+    execFileSync("mkfifo", [join(worktreePath, "README.md")]);
+
+    expect(() => planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#special-file",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-special-file",
+      }],
+    })).toThrow(/DIRTY_FILE_TYPE_UNSUPPORTED/);
+  });
+
+  it("rejects unsafe or ambiguous legacy targets before writing a lease", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 6 });
+    const attachedPath = `${root}-adopt-guarded`;
+    const detachedPath = `${root}-adopt-detached`;
+    const lockedPath = `${root}-adopt-locked`;
+    const prunablePath = `${root}-adopt-prunable`;
+    repositories.push(attachedPath, detachedPath, lockedPath, prunablePath);
+    git(root, "worktree", "add", "-b", "issue-guarded", attachedPath, "HEAD");
+    git(root, "worktree", "add", "--detach", detachedPath, "HEAD");
+    git(root, "worktree", "add", "-b", "issue-locked", lockedPath, "HEAD");
+    git(root, "worktree", "lock", lockedPath);
+    git(root, "worktree", "add", "-b", "issue-prunable", prunablePath, "HEAD");
+    rmSync(prunablePath, { recursive: true, force: true });
+    const base = {
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#guarded",
+        owner: "owner",
+        path: attachedPath,
+        branch: "issue-guarded",
+      }],
+    };
+
+    expect(() => planWorkspaceAdoption({ ...base, items: [] }))
+      .toThrow(/WORKTREE_ADOPT_BATCH_EMPTY/);
+    expect(() => planWorkspaceAdoption({
+      ...base,
+      items: [{ ...base.items[0], path: "relative" }],
+    })).toThrow(/WORKTREE_PATH_MUST_BE_ABSOLUTE/);
+    expect(() => planWorkspaceAdoption({
+      ...base,
+      items: [base.items[0], { ...base.items[0], owner: "other" }],
+    })).toThrow(/DUPLICATE_ADOPT_WORK_ITEM/);
+    expect(() => planWorkspaceAdoption({
+      ...base,
+      items: [base.items[0], {
+        ...base.items[0],
+        workItem: "github:example/project#other",
+      }],
+    })).toThrow(/DUPLICATE_ADOPT_PATH/);
+    expect(() => planWorkspaceAdoption({
+      ...base,
+      items: [base.items[0], {
+        workItem: "github:example/project#branch-duplicate",
+        owner: "owner",
+        path: lockedPath,
+        branch: "issue-guarded",
+      }],
+    })).toThrow(/DUPLICATE_ADOPT_BRANCH/);
+    expect(() => planWorkspaceAdoption({
+      ...base,
+      items: [{ ...base.items[0], branch: "other" }],
+    })).toThrow(/WORKTREE_BRANCH_MISMATCH/);
+    expect(() => planWorkspaceAdoption({
+      ...base,
+      items: [{ ...base.items[0], path: detachedPath, branch: "detached" }],
+    })).toThrow(/WORKTREE_DETACHED/);
+    expect(() => planWorkspaceAdoption({
+      ...base,
+      items: [{ ...base.items[0], path: lockedPath, branch: "issue-locked" }],
+    })).toThrow(/WORKTREE_LOCKED/);
+    expect(() => planWorkspaceAdoption({
+      ...base,
+      items: [{ ...base.items[0], path: prunablePath, branch: "issue-prunable" }],
+    })).toThrow(/WORKTREE_PRUNABLE/);
+    expect(() => planWorkspaceAdoption({
+      ...base,
+      items: [{ ...base.items[0], path: root, branch: "main" }],
+    })).toThrow(/WORKTREE_MANAGEMENT_CHECKOUT/);
+    expect(() => planWorkspaceAdoption({
+      ...base,
+      items: [{ ...base.items[0], path: resolve(root, "../../outside"), branch: "outside" }],
+    })).toThrow(/WORKTREE_PATH_NOT_ALLOWED/);
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 1 });
+    expect(() => planWorkspaceAdoption({
+      ...base,
+      items: [base.items[0], {
+        workItem: "github:example/project#detached",
+        owner: "owner",
+        path: detachedPath,
+        branch: "detached",
+      }],
+    })).toThrow(/WORKTREE_CAPACITY_EXCEEDED/);
+    expect(workspaceStatus(root).leases).toHaveLength(0);
+  });
+
+  it("rejects a branch checked out by more than one legacy worktree", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 3 });
+    const firstPath = `${root}-adopt-duplicate-branch-1`;
+    const secondPath = `${root}-adopt-duplicate-branch-2`;
+    repositories.push(firstPath, secondPath);
+    git(root, "worktree", "add", "-b", "issue-duplicate-branch", firstPath, "HEAD");
+    git(root, "worktree", "add", "--detach", secondPath, "HEAD");
+    git(secondPath, "checkout", "--ignore-other-worktrees", "issue-duplicate-branch");
+
+    expect(() => planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#duplicate-branch",
+        owner: "owner",
+        path: firstPath,
+        branch: "issue-duplicate-branch",
+      }],
+    })).toThrow(/DUPLICATE_WORKTREE_BRANCH/);
+    expect(workspaceStatus(root).leases).toHaveLength(0);
+  });
+
+  it("compensates only leases written by a failed batch apply", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 3 });
+    const firstPath = `${root}-adopt-fail-1`;
+    const secondPath = `${root}-adopt-fail-2`;
+    repositories.push(firstPath, secondPath);
+    git(root, "worktree", "add", "-b", "issue-fail-1", firstPath, "HEAD");
+    git(root, "worktree", "add", "-b", "issue-fail-2", secondPath, "HEAD");
+    const planned = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [
+        { workItem: "github:example/project#201", owner: "owner", path: firstPath, branch: "issue-fail-1" },
+        { workItem: "github:example/project#202", owner: "owner", path: secondPath, branch: "issue-fail-2" },
+      ],
+    });
+    const applying = {
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+      testFailAfterLeaseWrites: 1,
+    };
+
+    expect(() => applyWorkspacePlan(applying)).toThrow(/TEST_ADOPT_WRITE_FAILURE/);
+    expect(workspaceStatus(root).leases).toHaveLength(0);
+    expect(worktreeCount(root)).toBe(3);
+    const failedReceipt = JSON.parse(readFileSync(join(
+      git(root, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+      "harness", "worktree-delivery", "receipts", `${planned.plan.id}.json`,
+    ), "utf8"));
+    expect(failedReceipt).toMatchObject({
+      status: "failed",
+      compensationStatus: "completed",
+      leaseChanges: [expect.objectContaining({ action: "create" })],
+      steps: expect.arrayContaining([
+        expect.objectContaining({ id: "remove-adopted-lease", status: "compensated" }),
+      ]),
+    });
+  });
+
+  it("hash-binds and preserves the complete pre-existing lease set", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 3 });
+    const allocatedPath = `${root}-allocated-before-adopt`;
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#already-leased",
+      owner: "owner",
+      path: allocatedPath,
+      branch: "issue-already-leased",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    repositories.push(allocatedPath);
+    const commonDir = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir");
+    const existingLeasePath = join(
+      commonDir,
+      "harness", "worktree-delivery", "leases",
+      `${sha256("github:example/project#already-leased")}.json`,
+    );
+    const existingBytes = readFileSync(existingLeasePath, "utf8");
+    const adoptPath = `${root}-adopt-after-lease`;
+    repositories.push(adoptPath);
+    git(root, "worktree", "add", "-b", "issue-adopt-after-lease", adoptPath, "HEAD");
+    const planned = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#adopt-after-lease",
+        owner: "owner",
+        path: adoptPath,
+        branch: "issue-adopt-after-lease",
+      }],
+    });
+    if (planned.plan.operation.kind !== "adopt") throw new Error("expected adopt plan");
+    expect(planned.plan.operation.existingLeases).toEqual([{
+      leasePath: expect.stringMatching(/leases\/[a-f0-9]{64}\.json$/u),
+      sha256: sha256(existingBytes),
+    }]);
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    expect(readFileSync(existingLeasePath, "utf8")).toBe(existingBytes);
+  });
+
+  it("produces deterministic plans whose hash changes with approved metadata or dirty bytes", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 3 });
+    const firstPath = `${root}-adopt-hash-1`;
+    const secondPath = `${root}-adopt-hash-2`;
+    repositories.push(firstPath, secondPath);
+    git(root, "worktree", "add", "-b", "issue-hash-1", firstPath, "HEAD");
+    git(root, "worktree", "add", "-b", "issue-hash-2", secondPath, "HEAD");
+    const first = {
+      workItem: "github:example/project#211",
+      owner: "owner",
+      thread: "thread",
+      path: firstPath,
+      branch: "issue-hash-1",
+    };
+    const second = {
+      workItem: "github:example/project#212",
+      owner: "owner",
+      path: secondPath,
+      branch: "issue-hash-2",
+    };
+    const now = new Date("2026-01-01T00:05:00.000Z");
+    const forward = planWorkspaceAdoption({ projectRoot: root, items: [first, second], now });
+    const reversed = planWorkspaceAdoption({ projectRoot: root, items: [second, first], now });
+    expect(reversed.plan.planHash).toBe(forward.plan.planHash);
+
+    const ownerChanged = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{ ...first, owner: "other" }, second],
+      now,
+    });
+    expect(ownerChanged.plan.planHash).not.toBe(forward.plan.planHash);
+    writeFileSync(join(firstPath, "valuable.txt"), "dirty\n", "utf8");
+    const dirtyChanged = planWorkspaceAdoption({ projectRoot: root, items: [first, second], now });
+    expect(dirtyChanged.plan.planHash).not.toBe(forward.plan.planHash);
+  });
+
+  it("creates no receipt or planned lease when config or lease absence drifts", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 2 });
+    const worktreePath = `${root}-adopt-preflight`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "issue-preflight", worktreePath, "HEAD");
+    const planned = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#213",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-preflight",
+      }],
+    });
+    if (planned.plan.operation.kind !== "adopt") throw new Error("expected adopt plan");
+    const commonDir = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir");
+    const receiptPath = join(
+      commonDir,
+      "harness", "worktree-delivery", "receipts", `${planned.plan.id}.json`,
+    );
+    const configPath = join(root, ".harness", "worktree-delivery.json");
+    const config = readFileSync(configPath, "utf8");
+    writeFileSync(configPath, `${config.trim()}\n\n`, "utf8");
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toThrow(/WORKSPACE_DRIFT/);
+    expect(existsSync(receiptPath)).toBe(false);
+    writeFileSync(configPath, config, "utf8");
+
+    const item = planned.plan.operation.items[0];
+    const leasePath = join(commonDir, item.leasePath);
+    mkdirSync(resolve(leasePath, ".."), { recursive: true });
+    writeFileSync(leasePath, prettyJson(item.lease), "utf8");
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toThrow(/WORKSPACE_DRIFT/);
+    expect(existsSync(receiptPath)).toBe(false);
+    expect(workspaceStatus(root).leases).toHaveLength(1);
+  });
+
+  it("refuses adoption rollback after a later close lifecycle used its lease", () => {
+    const root = repositoryWithRemote();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 2 });
+    const worktreePath = `${root}-adopt-used`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "issue-used", worktreePath, "HEAD");
+    git(worktreePath, "push", "-u", "origin", "issue-used");
+    const planned = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#203",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-used",
+      }],
+    });
+    const adopted = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    const closed = planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#203",
+      acceptedCommit: git(worktreePath, "rev-parse", "HEAD"),
+    });
+    const closeReceipt = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: closed.path,
+      approval: closed.plan.planHash,
+    });
+    rollbackWorkspaceChange({ projectRoot: root, changeId: closeReceipt.id });
+
+    expect(() => rollbackWorkspaceChange({
+      projectRoot: root,
+      changeId: adopted.id,
+    })).toThrow(/WORKSPACE_ROLLBACK_LATER_LIFECYCLE_USE/);
+    expect(workspaceStatus(root).leases).toHaveLength(1);
+  });
+
+  it("retains failed close lease-use evidence and blocks adoption rollback", () => {
+    const root = repositoryWithRemote();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 2 });
+    const worktreePath = `${root}-adopt-failed-close`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "issue-failed-close", worktreePath, "HEAD");
+    git(worktreePath, "push", "-u", "origin", "issue-failed-close");
+    const planned = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#failed-close",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-failed-close",
+      }],
+    });
+    const adopted = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    const closed = planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#failed-close",
+      acceptedCommit: git(worktreePath, "rev-parse", "HEAD"),
+    });
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: closed.path,
+      approval: closed.plan.planHash,
+      testFailCloseAfterWorktreeRemove: true,
+    })).toThrow(/TEST_CLOSE_AFTER_WORKTREE_REMOVE_FAILURE/);
+    expect(workspaceStatus(root).leases).toHaveLength(1);
+    expect(workspaceStatus(root).worktrees.some((item) =>
+      item.branch === "issue-failed-close")).toBe(true);
+
+    expect(() => rollbackWorkspaceChange({
+      projectRoot: root,
+      changeId: adopted.id,
+    })).toThrow(/WORKSPACE_ROLLBACK_LATER_LIFECYCLE_USE/);
+    expect(workspaceStatus(root).leases).toHaveLength(1);
+  });
+
+  it("rejects tampered and symlinked receipts without removing an adopted lease", () => {
+    if (process.platform === "win32") return;
+    const root = repository();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 2 });
+    const worktreePath = `${root}-adopt-receipt-guard`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "issue-receipt-guard", worktreePath, "HEAD");
+    const planned = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#receipt-guard",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-receipt-guard",
+      }],
+    });
+    const receipt = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    const commonDir = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir");
+    const receiptDirectory = join(commonDir, "harness", "worktree-delivery", "receipts");
+    const receiptPath = join(receiptDirectory, `${receipt.id}.json`);
+    const original = readFileSync(receiptPath, "utf8");
+    const tampered = JSON.parse(original);
+    tampered.leaseChanges[0].afterHash = "0".repeat(64);
+    writeFileSync(receiptPath, prettyJson(tampered), "utf8");
+    expect(() => rollbackWorkspaceChange({
+      projectRoot: root,
+      changeId: receipt.id,
+    })).toThrow(/WORKSPACE_RECEIPT_INVALID/);
+    expect(workspaceStatus(root).leases).toHaveLength(1);
+
+    writeFileSync(receiptPath, original, "utf8");
+    const external = join(root, "external-receipt.json");
+    writeFileSync(external, "{}\n", "utf8");
+    symlinkSync(external, join(receiptDirectory, "external.json"));
+    expect(() => rollbackWorkspaceChange({
+      projectRoot: root,
+      changeId: receipt.id,
+    })).toThrow(/SYMLINK_TARGET_REJECTED/);
+    expect(workspaceStatus(root).leases).toHaveLength(1);
+  });
+
+  it("restores every removed lease when rollback final observation fails", () => {
+    if (process.platform === "win32") return;
+    const root = repository();
+    installAdoptionGh();
+    configure(root, {
+      managementBranch: "main",
+      maxPersistentWorktrees: 2,
+      provider: {
+        kind: "github",
+        repository: "example/project",
+        project: {
+          owner: "example",
+          number: 2,
+          statusField: "Status",
+          doneValues: ["Done"],
+        },
+      },
+    });
+    const worktreePath = `${root}-adopt-rollback-compensation`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "issue-rollback-compensation", worktreePath, "HEAD");
+    const planned = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#301",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-rollback-compensation",
+      }],
+    });
+    const receipt = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    const providerCount = join(root, "provider-count");
+    process.env.HARNESS_TEST_GH_COUNT_FILE = providerCount;
+    process.env.HARNESS_TEST_GH_FAIL_AFTER = "2";
+
+    expect(() => rollbackWorkspaceChange({
+      projectRoot: root,
+      changeId: receipt.id,
+    })).toThrow(/WORKSPACE_ROLLBACK_POSTCONDITION_FAILED/);
+    delete process.env.HARNESS_TEST_GH_COUNT_FILE;
+    delete process.env.HARNESS_TEST_GH_FAIL_AFTER;
+    expect(workspaceStatus(root).leases).toHaveLength(1);
+    const saved = JSON.parse(readFileSync(join(
+      git(root, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+      "harness", "worktree-delivery", "receipts", `${receipt.id}.json`,
+    ), "utf8"));
+    expect(saved).toMatchObject({ status: "applied", compensationStatus: "completed" });
+    expect(rollbackWorkspaceChange({ projectRoot: root, changeId: receipt.id }).status)
+      .toBe("rolled-back");
+  });
+
+  it("binds configured GitHub Issue and Project state and fails closed on provider drift", () => {
+    if (process.platform === "win32") return;
+    const root = repository();
+    installAdoptionGh();
+    configure(root, {
+      managementBranch: "main",
+      maxPersistentWorktrees: 2,
+      provider: {
+        kind: "github",
+        repository: "example/project",
+        project: {
+          owner: "example",
+          number: 2,
+          statusField: "Status",
+          doneValues: ["Done"],
+        },
+      },
+    });
+    const worktreePath = `${root}-adopt-provider`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "issue-provider", worktreePath, "HEAD");
+    const planned = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#301",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-provider",
+      }],
+    });
+    if (planned.plan.operation.kind !== "adopt") throw new Error("expected adopt plan");
+    expect(planned.plan.operation.items[0].providerItem).toMatchObject({
+      state: "OPEN",
+      projectItemPresent: true,
+      projectStatus: "In Progress",
+    });
+
+    process.env.HARNESS_TEST_GH_STATUS = "Done";
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toThrow(/WORKSPACE_DRIFT/);
+    expect(workspaceStatus(root).leases).toHaveLength(0);
+
+    const completed = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#301",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-provider",
+      }],
+    });
+    expect(completed.plan.warnings).toEqual([
+      expect.stringContaining("adopt it first, then close it"),
+    ]);
+
+    delete process.env.HARNESS_TEST_GH_STATUS;
+    expect(() => planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:other/project#301",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-provider",
+      }],
+    })).toThrow(/PROVIDER_WORK_ITEM_INVALID/);
+    process.env.HARNESS_TEST_GH_PROJECT_MISSING = "1";
+    expect(() => planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#301",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-provider",
+      }],
+    })).toThrow(/PROVIDER_PROJECT_ITEM_REQUIRED/);
   });
 });
 

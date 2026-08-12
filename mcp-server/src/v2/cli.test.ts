@@ -184,7 +184,73 @@ describe("v2 CLI forward flow", () => {
       configured: true,
       config: { managementBranch: "main" },
     });
-  });
+  }, 15_000);
+
+  it("plans, applies, and rolls back a batch adoption from one strict manifest", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-cli-adopt-"));
+    projects.push(root);
+    execFileSync("git", ["init", "-b", "main"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "harness@example.test"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Harness Test"], { cwd: root });
+    write(root, "README.md", "# fixture\n");
+    execFileSync("git", ["add", "README.md"], { cwd: root });
+    execFileSync("git", ["commit", "-m", "test: initialize fixture"], { cwd: root });
+    const worktreePath = `${root}-legacy`;
+    projects.push(worktreePath);
+    execFileSync("git", ["worktree", "add", "-b", "issue-legacy", worktreePath, "HEAD"], {
+      cwd: root,
+    });
+    const configured = run(root, [
+      "worktree", "configure",
+      "--mode", "enforced",
+      "--management-branch", "main",
+      "--max-persistent", "2",
+      "--allow-root", join(root, ".."),
+    ]);
+    run(root, [
+      "apply",
+      "--plan", String(configured.planPath),
+      "--approve", String(configured.planHash),
+    ]);
+    write(root, "adopt.json", JSON.stringify({
+      schemaVersion: "worktree-adopt/1.0",
+      items: [{
+        workItem: "github:example/project#101",
+        owner: "owner",
+        thread: "thread-101",
+        path: worktreePath,
+        branch: "issue-legacy",
+      }],
+    }));
+
+    const planned = run(root, ["worktree", "adopt", "--manifest", "adopt.json"]);
+    expect(planned.operation).toBe("adopt");
+    const applied = run(root, [
+      "apply",
+      "--plan", String(planned.planPath),
+      "--approve", String(planned.planHash),
+    ]);
+    expect(applied).toMatchObject({ operation: "adopt", status: "applied" });
+    expect((run(root, ["worktree", "status"]).leases as unknown[])).toHaveLength(1);
+    expect(run(root, ["rollback", "--change", String(applied.id)])).toMatchObject({
+      operation: "adopt",
+      status: "rolled-back",
+    });
+
+    write(root, "invalid-adopt.json", JSON.stringify({
+      schemaVersion: "worktree-adopt/1.0",
+      items: [{
+        workItem: "github:example/project#101",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-legacy",
+        unexpected: true,
+      }],
+    }));
+    expect(() => run(root, [
+      "worktree", "adopt", "--manifest", "invalid-adopt.json",
+    ])).toThrow(/WORKTREE_ADOPT_INPUT_INVALID/);
+  }, 15_000);
 
   it("accepts the EDD quality profile and runs its eval only in CI mode", () => {
     const root = mkdtempSync(join(tmpdir(), "harness-cli-eval-"));

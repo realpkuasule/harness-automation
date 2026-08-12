@@ -32,12 +32,17 @@ import {
   type WorktreeDeliveryConfig,
   type WorktreePolicyId,
   type WorktreeRecord,
+  type WorkspaceAdoptionInput,
+  type WorkspaceAdoptionManifest,
+  type WorkspaceAdoptionPlanItem,
+  type WorkspaceAdoptionSnapshot,
   type RetentionAudit,
   type ReviewReceipt,
   type WorkspaceAudit,
   type WorktreeHostBinding,
   type WorktreeHostBindingObservation,
   type WorkspaceLease,
+  type WorkspaceLeaseChange,
   type WorkspacePlan,
   type WorkspacePolicyResult,
   type WorkspaceReceipt,
@@ -147,6 +152,31 @@ const hostBindingSchema = z.object({
   allowedRoots: uniqueAbsolutePaths,
   protectedRoots: uniqueAbsolutePaths,
 }).strict();
+
+const adoptionInputSchema = z.object({
+  workItem: z.string().trim().min(1),
+  owner: z.string().trim().min(1),
+  thread: z.string().trim().min(1).optional(),
+  path: z.string().trim().min(1),
+  branch: z.string().trim().min(1),
+}).strict();
+
+const adoptionManifestSchema = z.object({
+  schemaVersion: z.literal("worktree-adopt/1.0"),
+  items: z.array(adoptionInputSchema).min(1),
+}).strict();
+
+export function parseWorkspaceAdoptionManifest(input: unknown): WorkspaceAdoptionManifest {
+  const parsed = adoptionManifestSchema.safeParse(input);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const code = issue.path.length === 1 && issue.path[0] === "items" && issue.code === "too_small"
+      ? "WORKTREE_ADOPT_BATCH_EMPTY"
+      : "WORKTREE_ADOPT_INPUT_INVALID";
+    throw new Error(`${code}: ${issue.path.join(".") || "manifest"} ${issue.message}`);
+  }
+  return parsed.data;
+}
 
 function validConfig(input: unknown): WorktreeDeliveryConfig {
   const parsed = worktreeConfigSchema.safeParse(input);
@@ -287,23 +317,44 @@ function commitCount(root: string, args: string[]): number {
   return /^\d+$/u.test(output) ? Number(output) : 0;
 }
 
-function collectDirtyEvidence(root: string, worktreePath: string): Pick<
+function worktreeStatusTokens(
+  root: string,
+  worktreePath: string,
+  adoptionSafe = false,
+): string[] {
+  return git(root, adoptionSafe
+    ? [
+        "--no-optional-locks",
+        "-C",
+        worktreePath,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+      ]
+    : ["-C", worktreePath, "status", "--porcelain=v1", "-z"], !adoptionSafe)
+    .split("\0").filter(Boolean);
+}
+
+function collectDirtyEvidence(
+  root: string,
+  worktreePath: string,
+  tokens = worktreeStatusTokens(root, worktreePath),
+  adoptionSafe = false,
+): Pick<
   WorktreeRecord,
   "dirtyEvidence" | "dirtyPatch"
 > {
-  const tokens = git(root, [
-    "-C",
-    worktreePath,
-    "status",
-    "--porcelain=v1",
-    "-z",
-  ], true).split("\0").filter(Boolean);
   const entries: NonNullable<WorktreeRecord["dirtyEvidence"]> = [];
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
     const status = token.slice(0, 2);
     let path = token.slice(3);
-    if (/^[RC]/u.test(status) && tokens[index + 1]) path = tokens[index += 1];
+    const renamed = adoptionSafe ? /[RC]/u.test(status) : /^[RC]/u.test(status);
+    if (renamed && tokens[index + 1]) {
+      if (!adoptionSafe) path = tokens[index + 1];
+      index += 1;
+    }
     const target = join(worktreePath, path);
     const back = relative(worktreePath, target);
     if (back.startsWith("..") || isAbsolute(back)) {
@@ -314,6 +365,9 @@ function collectDirtyEvidence(root: string, worktreePath: string): Pick<
       continue;
     }
     const metadata = lstatSync(target);
+    if (adoptionSafe && !metadata.isSymbolicLink() && !metadata.isFile()) {
+      throw new Error(`DIRTY_FILE_TYPE_UNSUPPORTED: ${path}`);
+    }
     const content = metadata.isSymbolicLink()
       ? Buffer.from(readlinkSync(target), "utf8")
       : metadata.isFile()
@@ -321,31 +375,45 @@ function collectDirtyEvidence(root: string, worktreePath: string): Pick<
         : Buffer.alloc(0);
     entries.push({ path, status, size: content.byteLength, sha256: sha256(content) });
   }
-  const patch = git(root, [
-    "-C",
-    worktreePath,
-    "diff",
-    "--binary",
-    "--no-ext-diff",
-    "HEAD",
-    "--",
-  ], true);
+  const patch = git(root, adoptionSafe
+    ? [
+        "--no-optional-locks",
+        "-C",
+        worktreePath,
+        "diff",
+        "--binary",
+        "--no-ext-diff",
+        "--no-textconv",
+        "HEAD",
+        "--",
+      ]
+    : ["-C", worktreePath, "diff", "--binary", "--no-ext-diff", "HEAD", "--"],
+  !adoptionSafe);
   return {
-    dirtyEvidence: entries,
+    dirtyEvidence: adoptionSafe
+      ? entries.sort((left, right) =>
+          left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
+      : entries,
     dirtyPatch: { size: Buffer.byteLength(patch), sha256: sha256(patch) },
   };
 }
 
-function enrichWorktree(root: string, record: WorktreeRecord, refs: string[]): WorktreeRecord {
+function enrichWorktree(
+  root: string,
+  record: WorktreeRecord,
+  refs: string[],
+  adoptionSafe = false,
+): WorktreeRecord {
   if (record.bare || record.prunable || !existsSync(record.path)) return record;
-  const dirty = git(root, ["-C", record.path, "status", "--porcelain=v1", "-z"], true).length > 0;
+  const tokens = worktreeStatusTokens(root, record.path, adoptionSafe);
+  const dirty = tokens.length > 0;
   const otherRefs = record.branch
     ? refs.filter((ref) => ref !== `refs/heads/${record.branch}`)
     : refs;
   return {
     ...record,
     dirty,
-    ...(dirty ? collectDirtyEvidence(root, record.path) : {}),
+    ...(dirty ? collectDirtyEvidence(root, record.path, tokens, adoptionSafe) : {}),
     uniqueCommits: record.head
       ? commitCount(root, [record.head, "--not", ...otherRefs])
       : 0,
@@ -355,12 +423,41 @@ function enrichWorktree(root: string, record: WorktreeRecord, refs: string[]): W
   };
 }
 
-function worktrees(root: string): WorktreeRecord[] {
+function worktrees(root: string, adoptionSafe = false): WorktreeRecord[] {
   const refs = git(root, ["for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes"])
     .split(/\r?\n/u)
     .filter(Boolean);
   return parseWorktreePorcelain(git(root, ["worktree", "list", "--porcelain", "-z"]))
-    .map((record) => enrichWorktree(root, record, refs));
+    .map((record) => enrichWorktree(root, record, refs, adoptionSafe));
+}
+
+function refsObservation(root: string): string[] {
+  return git(root, [
+    "for-each-ref",
+    "--format=%(refname)%00%(objectname)%00",
+    "refs/heads",
+    "refs/remotes",
+  ]).split("\0").filter(Boolean);
+}
+
+function worktreeRegistrationObservation(worktreeRecords: WorktreeRecord[]): Array<{
+  path: string;
+  head: string;
+  branch: string | null;
+  bare: boolean;
+  detached: boolean;
+  locked: boolean;
+  prunable: boolean;
+}> {
+  return worktreeRecords.map((worktree) => ({
+    path: worktree.path,
+    head: worktree.head,
+    branch: worktree.branch,
+    bare: worktree.bare,
+    detached: worktree.detached,
+    locked: worktree.locked,
+    prunable: worktree.prunable,
+  })).sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
 }
 
 function validLease(input: unknown, path: string): WorkspaceLease {
@@ -387,13 +484,39 @@ function validLease(input: unknown, path: string): WorkspaceLease {
   return lease as WorkspaceLease;
 }
 
+function stateJsonFiles(
+  commonDir: string,
+  kind: "leases" | "receipts",
+): Array<{ path: string; relativePath: string }> {
+  const relativeDirectory = `harness/worktree-delivery/${kind}`;
+  const directory = safePath(commonDir, relativeDirectory);
+  if (!existsSync(directory)) return [];
+  if (!lstatSync(directory).isDirectory()) {
+    throw new Error(`WORKTREE_STATE_INVALID: ${directory} is not a directory`);
+  }
+  return readdirSync(directory)
+    .filter((entry) => entry.endsWith(".json"))
+    .sort()
+    .map((name) => {
+      const relativePath = `${relativeDirectory}/${name}`;
+      const path = safePath(commonDir, relativePath);
+      if (!lstatSync(path).isFile()) {
+        throw new Error(`WORKTREE_STATE_INVALID: ${path} is not a regular file`);
+      }
+      return { path, relativePath };
+    });
+}
+
 function leases(commonDir: string): { values: WorkspaceLease[]; errors: string[] } {
-  const directory = join(commonDir, "harness", "worktree-delivery", "leases");
-  if (!existsSync(directory)) return { values: [], errors: [] };
   const values: WorkspaceLease[] = [];
   const errors: string[] = [];
-  for (const name of readdirSync(directory).filter((entry) => entry.endsWith(".json")).sort()) {
-    const path = join(directory, name);
+  let files: Array<{ path: string; relativePath: string }> = [];
+  try {
+    files = stateJsonFiles(commonDir, "leases");
+  } catch (error) {
+    return { values, errors: [error instanceof Error ? error.message : String(error)] };
+  }
+  for (const { path } of files) {
     try {
       values.push(validLease(JSON.parse(readFileSync(path, "utf8")), path));
     } catch (error) {
@@ -403,13 +526,25 @@ function leases(commonDir: string): { values: WorkspaceLease[]; errors: string[]
   return { values, errors };
 }
 
-export function workspaceStatus(projectRoot: string): WorkspaceStatus {
+function leaseStateObservation(
+  commonDir: string,
+): Array<{ leasePath: string; sha256: string }> {
+  return stateJsonFiles(commonDir, "leases").map(({ path, relativePath }) => ({
+    leasePath: relativePath,
+    sha256: fileHash(path) ?? "",
+  }));
+}
+
+export function workspaceStatus(
+  projectRoot: string,
+  options: { adoptionSafe?: boolean } = {},
+): WorkspaceStatus {
   const root = repositoryRoot(projectRoot);
   const commonDir = gitCommonDir(root);
   const loadedConfig = loadConfig(root);
   const hostBinding = loadHostBinding(root, commonDir, loadedConfig.legacyBinding);
   const loadedLeases = leases(commonDir);
-  const observedWorktrees = worktrees(root);
+  const observedWorktrees = worktrees(root, options.adoptionSafe);
   const provider = observeProvider(root, loadedConfig.config, loadedLeases.values);
   const bindingError = loadedConfig.configured &&
     loadedConfig.config.mode === "enforced" &&
@@ -423,12 +558,7 @@ export function workspaceStatus(projectRoot: string): WorkspaceStatus {
     ...(bindingError ? [bindingError] : []),
     ...(provider.configured && !provider.available ? [`PROVIDER_UNAVAILABLE: ${provider.error}`] : []),
   ];
-  const refs = git(root, [
-    "for-each-ref",
-    "--format=%(refname)%00%(objectname)%00",
-    "refs/heads",
-    "refs/remotes",
-  ]).split("\0").filter(Boolean);
+  const refs = refsObservation(root);
   const observed = {
     configHash: fileHash(join(root, ".harness", "worktree-delivery.json")),
     hostBindingHash: hostBinding.hash,
@@ -675,12 +805,16 @@ function stateRoot(commonDir: string): string {
   return join(commonDir, "harness", "worktree-delivery");
 }
 
+function leaseRelativePath(workItem: string): string {
+  return `harness/worktree-delivery/leases/${sha256(workItem)}.json`;
+}
+
 function leaseFile(commonDir: string, workItem: string): string {
-  return join(stateRoot(commonDir), "leases", `${sha256(workItem)}.json`);
+  return safePath(commonDir, leaseRelativePath(workItem));
 }
 
 function receiptFile(commonDir: string, id: string): string {
-  return join(stateRoot(commonDir), "receipts", `${id}.json`);
+  return safePath(commonDir, `harness/worktree-delivery/receipts/${id}.json`);
 }
 
 function planPath(root: string, id: string): string {
@@ -870,6 +1004,263 @@ export function planWorkspaceAllocation(args: {
   }));
 }
 
+function normalizedAdoptionInputs(input: unknown): WorkspaceAdoptionInput[] {
+  const parsed = z.array(adoptionInputSchema).min(1).safeParse(input);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const code = issue.code === "too_small"
+      ? "WORKTREE_ADOPT_BATCH_EMPTY"
+      : "WORKTREE_ADOPT_INPUT_INVALID";
+    throw new Error(`${code}: ${issue.path.join(".") || "items"} ${issue.message}`);
+  }
+  return parsed.data.map((item) => {
+    if (!isAbsolute(item.path)) throw new Error("WORKTREE_PATH_MUST_BE_ABSOLUTE");
+    return { ...item, path: canonicalPath(item.path) };
+  }).sort((left, right) => {
+    if (left.workItem !== right.workItem) return left.workItem < right.workItem ? -1 : 1;
+    return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
+  });
+}
+
+function assertUniqueAdoptionInputs(items: WorkspaceAdoptionInput[]): void {
+  for (const [field, code] of [
+    ["workItem", "DUPLICATE_ADOPT_WORK_ITEM"],
+    ["path", "DUPLICATE_ADOPT_PATH"],
+    ["branch", "DUPLICATE_ADOPT_BRANCH"],
+  ] as const) {
+    const values = items.map((item) => item[field]);
+    const duplicate = values.find((value, index) => values.indexOf(value) !== index);
+    if (duplicate) throw new Error(`${code}: ${duplicate}`);
+  }
+}
+
+function adoptionSnapshot(
+  root: string,
+  commonDir: string,
+  record: WorktreeRecord,
+  requestedBranch: string,
+): WorkspaceAdoptionSnapshot {
+  if (record.bare) throw new Error(`WORKTREE_BARE: ${record.path}`);
+  if (record.detached || !record.branch) throw new Error(`WORKTREE_DETACHED: ${record.path}`);
+  if (record.locked) throw new Error(`WORKTREE_LOCKED: ${record.path}`);
+  if (record.prunable) throw new Error(`WORKTREE_PRUNABLE: ${record.path}`);
+  if (record.branch !== requestedBranch) {
+    throw new Error(
+      `WORKTREE_BRANCH_MISMATCH: requested ${requestedBranch}, observed ${record.branch}`,
+    );
+  }
+  const branchHead = git(root, [
+    "rev-parse",
+    "--verify",
+    `refs/heads/${requestedBranch}^{commit}`,
+  ]).trim();
+  if (branchHead !== record.head) {
+    throw new Error(
+      `WORKTREE_BRANCH_MISMATCH: ${requestedBranch}=${branchHead}, worktree HEAD=${record.head}`,
+    );
+  }
+  const worktreeGitDir = git(root, [
+    "-C",
+    record.path,
+    "rev-parse",
+    "--absolute-git-dir",
+  ]).trim();
+  const observedIndexPath = join(worktreeGitDir, "index");
+  if (lstatSync(observedIndexPath).isSymbolicLink()) {
+    throw new Error(`SYMLINK_TARGET_REJECTED: worktree index ${observedIndexPath}`);
+  }
+  if (!lstatSync(observedIndexPath).isFile()) {
+    throw new Error(`WORKTREE_INDEX_UNAVAILABLE: ${record.path}`);
+  }
+  const indexPath = safePath(commonDir, relative(commonDir, observedIndexPath));
+  if (!lstatSync(indexPath).isFile()) {
+    throw new Error(`WORKTREE_INDEX_UNAVAILABLE: ${record.path}`);
+  }
+  const indexHash = fileHash(indexPath);
+  if (!indexHash) throw new Error(`WORKTREE_INDEX_UNAVAILABLE: ${record.path}`);
+  const tokens = worktreeStatusTokens(root, record.path, true);
+  const evidence = collectDirtyEvidence(root, record.path, tokens, true);
+  const draft = {
+    path: canonicalPath(record.path),
+    branch: requestedBranch,
+    head: record.head,
+    branchHead,
+    indexHash,
+    bare: false as const,
+    detached: false as const,
+    locked: false as const,
+    prunable: false as const,
+    dirty: tokens.length > 0,
+    dirtyEvidence: evidence.dirtyEvidence ?? [],
+    dirtyPatch: evidence.dirtyPatch ?? { size: 0, sha256: sha256("") },
+  };
+  return { ...draft, snapshotHash: hashObject(draft) };
+}
+
+function adoptionOperation(
+  status: WorkspaceStatus,
+  input: unknown,
+  timestamp: string,
+): Extract<WorkspacePlan["operation"], { kind: "adopt" }> {
+  if (!status.configured) throw new Error("WORKTREE_CONFIGURATION_REQUIRED");
+  if (status.config.mode !== "enforced") throw new Error("WORKTREE_ENFORCEMENT_NOT_ENABLED");
+  requireHostBinding(status);
+  if (status.errors.length > 0) {
+    throw new Error(`WORKSPACE_DRIFT: ${status.errors.join("; ")}`);
+  }
+  const items = normalizedAdoptionInputs(input);
+  assertUniqueAdoptionInputs(items);
+  const afterCapacity = status.leases.length + items.length;
+  if (afterCapacity > status.config.maxPersistentWorktrees) {
+    throw new Error(`WORKTREE_CAPACITY_EXCEEDED: ${status.config.maxPersistentWorktrees}`);
+  }
+  const snapshots: Array<{
+    input: WorkspaceAdoptionInput;
+    snapshot: WorkspaceAdoptionSnapshot;
+    provisionalLease: WorkspaceLease;
+  }> = [];
+  for (const item of items) {
+    validateBranch(status.projectDir, item.branch);
+    const management = status.worktrees.find((worktree) =>
+      samePath(worktree.path, item.path) && (
+        samePath(worktree.path, status.projectDir) ||
+        (status.config.managementBranch && worktree.branch === status.config.managementBranch)
+      ));
+    if (management) throw new Error(`WORKTREE_MANAGEMENT_CHECKOUT: ${item.path}`);
+    const target = validateTarget(status.hostBinding, item.path);
+    if (status.leases.some((lease) => lease.workItem === item.workItem)) {
+      throw new Error(`DUPLICATE_WORK_ITEM_LEASE: ${item.workItem}`);
+    }
+    if (status.leases.some((lease) => samePath(lease.path, target))) {
+      throw new Error(`DUPLICATE_WORKTREE_PATH: ${target}`);
+    }
+    if (status.leases.some((lease) => lease.branch === item.branch)) {
+      throw new Error(`DUPLICATE_WORKTREE_BRANCH: ${item.branch}`);
+    }
+    if (fileHash(leaseFile(status.commonDir, item.workItem)) !== null) {
+      throw new Error(`DUPLICATE_WORK_ITEM_LEASE: ${item.workItem}`);
+    }
+    const matches = status.worktrees.filter((worktree) => samePath(worktree.path, target));
+    if (matches.length !== 1) throw new Error(`WORKTREE_NOT_FOUND: ${target}`);
+    const record = matches[0];
+    const snapshot = adoptionSnapshot(status.projectDir, status.commonDir, record, item.branch);
+    const branchCheckouts = status.worktrees.filter((worktree) => worktree.branch === item.branch);
+    if (
+      branchCheckouts.length !== 1 ||
+      !samePath(branchCheckouts[0].path, target)
+    ) {
+      throw new Error(`DUPLICATE_WORKTREE_BRANCH: ${item.branch}`);
+    }
+    snapshots.push({
+      input: { ...item, path: target },
+      snapshot,
+      provisionalLease: {
+        schemaVersion: WORKTREE_SCHEMA_VERSION,
+        workItem: item.workItem,
+        branch: item.branch,
+        path: target,
+        owner: item.owner,
+        thread: item.thread,
+        acceptedCommit: snapshot.head,
+        createdAt: timestamp,
+        heartbeatAt: timestamp,
+        status: "active",
+      },
+    });
+  }
+  if (status.config.provider.kind === "github") {
+    const repository = status.config.provider.repository ?? "";
+    const prefix = `github:${repository}#`;
+    for (const item of items) {
+      if (!item.workItem.startsWith(prefix) || !/^\d+$/u.test(item.workItem.slice(prefix.length))) {
+        throw new Error(`PROVIDER_WORK_ITEM_INVALID: ${item.workItem}`);
+      }
+    }
+  }
+  const provider = observeProvider(status.projectDir, status.config, [
+    ...status.leases,
+    ...snapshots.map((item) => item.provisionalLease),
+  ]);
+  provider.items.sort((left, right) =>
+    left.workItem < right.workItem ? -1 : left.workItem > right.workItem ? 1 : 0);
+  if (provider.configured && !provider.available) {
+    throw new Error(`PROVIDER_UNAVAILABLE: ${provider.error}`);
+  }
+  const planItems: WorkspaceAdoptionPlanItem[] = snapshots.map((item) => {
+    const providerItem = provider.items.find(
+      (candidate) => candidate.workItem === item.input.workItem,
+    );
+    if (status.config.provider.kind !== "none" && !providerItem) {
+      throw new Error(`PROVIDER_WORK_ITEM_INVALID: ${item.input.workItem}`);
+    }
+    if (status.config.provider.project && providerItem?.projectItemPresent !== true) {
+      throw new Error(`PROVIDER_PROJECT_ITEM_REQUIRED: ${item.input.workItem}`);
+    }
+    const lease: WorkspaceLease = {
+      ...item.provisionalLease,
+      workItemState: providerItem?.state,
+    };
+    const content = prettyJson(lease);
+    return {
+      lease,
+      snapshot: item.snapshot,
+      providerItem,
+      leasePath: leaseRelativePath(lease.workItem),
+      beforeLeaseHash: null,
+      afterLeaseHash: sha256(content),
+    };
+  });
+  const configHash = fileHash(join(status.projectDir, ".harness", "worktree-delivery.json"));
+  if (!configHash || !status.hostBinding.hash) {
+    throw new Error("WORKSPACE_DRIFT: configuration or host binding is unavailable");
+  }
+  return {
+    kind: "adopt",
+    configHash,
+    hostBindingHash: status.hostBinding.hash,
+    refsHash: hashObject(refsObservation(status.projectDir)),
+    worktreeRegistrationHash: hashObject(worktreeRegistrationObservation(status.worktrees)),
+    existingLeases: leaseStateObservation(status.commonDir),
+    capacity: {
+      limit: status.config.maxPersistentWorktrees,
+      before: status.leases.length,
+      adopting: planItems.length,
+      after: afterCapacity,
+    },
+    providerHash: hashObject(provider),
+    provider,
+    items: planItems,
+  };
+}
+
+export function planWorkspaceAdoption(args: {
+  projectRoot: string;
+  items: WorkspaceAdoptionInput[];
+  now?: Date;
+}): { plan: WorkspacePlan; path: string } {
+  const status = workspaceStatus(args.projectRoot, { adoptionSafe: true });
+  const timestamp = (args.now ?? new Date()).toISOString();
+  const operation = adoptionOperation(status, args.items, timestamp);
+  const doneValues = new Set(
+    status.config.provider.project?.doneValues.map((value) => value.toLowerCase()) ?? [],
+  );
+  const warnings = operation.items.flatMap((item) => {
+    const completed = item.providerItem?.state.toLowerCase() === "closed" ||
+      (item.providerItem?.projectStatus
+        ? doneValues.has(item.providerItem.projectStatus.toLowerCase())
+        : false);
+    return completed
+      ? [`${item.lease.workItem} is already complete in the Provider; adopt it first, then close it with a separate exact-hash plan.`]
+      : [];
+  });
+  return savePlan(status.projectDir, planDraft({
+    status,
+    operation,
+    now: args.now,
+    warnings,
+  }));
+}
+
 function remoteRefsContaining(root: string, commit: string): string[] {
   return git(root, [
     "for-each-ref",
@@ -930,7 +1321,7 @@ function loadWorkspacePlan(root: string, path: string): WorkspacePlan {
   if (
     plan.schemaVersion !== "worktree-delivery/1.0" ||
     plan.kind !== "workspace-plan" ||
-    !["configure", "allocate", "close"].includes(plan.operation?.kind) ||
+    !["configure", "allocate", "adopt", "close"].includes(plan.operation?.kind) ||
     (plan.operation.kind === "configure" && (
       plan.operation.hostBindingPath !== HOST_BINDING_PATH ||
       typeof plan.operation.beforeHostBindingHash !== "string" &&
@@ -940,6 +1331,59 @@ function loadWorkspacePlan(root: string, path: string): WorkspacePlan {
     ))
   ) {
     throw new Error("WORKSPACE_PLAN_INVALID");
+  }
+  if (plan.operation.kind === "adopt") {
+    try {
+      const operation = plan.operation;
+      const validHash = (value: unknown): value is string =>
+        typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+      const validItems = Array.isArray(operation.items) && operation.items.length > 0 &&
+        operation.items.every((item) => {
+          validLease(item.lease, item.leasePath);
+          return item.leasePath === leaseRelativePath(item.lease.workItem) &&
+            item.beforeLeaseHash === null &&
+            validHash(item.afterLeaseHash) &&
+            item.afterLeaseHash === sha256(prettyJson(item.lease)) &&
+            item.snapshot.path === item.lease.path &&
+            item.snapshot.branch === item.lease.branch &&
+            item.snapshot.head === item.lease.acceptedCommit &&
+            validHash(item.snapshot.indexHash) &&
+            validHash(item.snapshot.snapshotHash) &&
+            item.snapshot.snapshotHash === hashObject({
+              ...item.snapshot,
+              snapshotHash: undefined,
+            });
+        });
+      const validExistingLeases = Array.isArray(operation.existingLeases) &&
+        operation.existingLeases.every((item) =>
+          typeof item.leasePath === "string" &&
+          /^harness\/worktree-delivery\/leases\/[a-f0-9]{64}\.json$/u.test(item.leasePath) &&
+          validHash(item.sha256)) &&
+        new Set(operation.existingLeases.map((item) => item.leasePath)).size ===
+          operation.existingLeases.length &&
+        operation.existingLeases.every((item, index, entries) =>
+          index === 0 || entries[index - 1].leasePath < item.leasePath) &&
+        operation.items.every((item) =>
+          !operation.existingLeases.some((existing) => existing.leasePath === item.leasePath));
+      if (
+        !validItems ||
+        !validExistingLeases ||
+        !validHash(operation.configHash) ||
+        !validHash(operation.hostBindingHash) ||
+        !validHash(operation.refsHash) ||
+        !validHash(operation.worktreeRegistrationHash) ||
+        !validHash(operation.providerHash) ||
+        operation.providerHash !== hashObject(operation.provider) ||
+        operation.capacity.before !== operation.existingLeases.length ||
+        operation.capacity.before + operation.capacity.adopting !== operation.capacity.after ||
+        operation.capacity.adopting !== operation.items.length ||
+        operation.capacity.after > operation.capacity.limit
+      ) {
+        throw new Error("WORKSPACE_PLAN_INVALID");
+      }
+    } catch {
+      throw new Error("WORKSPACE_PLAN_INVALID");
+    }
   }
   return plan;
 }
@@ -963,6 +1407,23 @@ function validateWorkspacePlan(
   }
 }
 
+function validateWorkspacePlanEnvelope(
+  root: string,
+  commonDir: string,
+  plan: WorkspacePlan,
+  approval: string,
+): void {
+  if (hashObject(withoutHash(plan)) !== plan.planHash) {
+    throw new Error("PLAN_TAMPERED: workspace plan content does not match its embedded hash");
+  }
+  if (approval !== plan.planHash) {
+    throw new Error(`APPROVAL_MISMATCH: expected exact plan hash ${plan.planHash}`);
+  }
+  if (plan.projectDir !== root || plan.commonDir !== commonDir) {
+    throw new Error("PROJECT_MISMATCH: workspace plan belongs to another repository");
+  }
+}
+
 function acquireLock(commonDir: string): string {
   return acquireNamedLock(commonDir, "apply.lock");
 }
@@ -978,8 +1439,18 @@ function appliedReceipt(plan: WorkspacePlan): WorkspaceReceipt | null {
   if (receipt.planHash !== plan.planHash) {
     throw new Error(`CHANGE_ID_CONFLICT: ${plan.id}`);
   }
+  if (plan.operation.kind === "adopt") {
+    validateAdoptionReceipt(receipt, plan as WorkspacePlan & {
+      operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>;
+    });
+    if (receipt.status === "started") {
+      throw new Error(`WORKTREE_ADOPT_RECOVERY_REQUIRED: ${plan.id}`);
+    }
+  }
   if (receipt.status === "applied" && receipt.after) {
-    const current = workspaceStatus(plan.projectDir);
+    const current = workspaceStatus(plan.projectDir, {
+      adoptionSafe: plan.operation.kind === "adopt",
+    });
     if (current.observedHash !== receipt.after.observedHash) {
       throw new Error(`CHANGE_ID_CONFLICT: ${plan.id} was applied but workspace state drifted`);
     }
@@ -996,14 +1467,270 @@ function writeReceipt(path: string, receipt: WorkspaceReceipt): void {
   atomicWrite(path, prettyJson(receipt));
 }
 
+function adoptionLeaseChanges(
+  operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>,
+  includeRemovals = false,
+): WorkspaceLeaseChange[] {
+  const created = operation.items.map((item) => ({
+    action: "create" as const,
+    workItem: item.lease.workItem,
+    path: item.lease.path,
+    branch: item.lease.branch,
+    leasePath: item.leasePath,
+    beforeHash: null,
+    afterHash: item.afterLeaseHash,
+  }));
+  return includeRemovals
+    ? [
+        ...created,
+        ...operation.items.map((item) => ({
+          action: "remove" as const,
+          workItem: item.lease.workItem,
+          path: item.lease.path,
+          branch: item.lease.branch,
+          leasePath: item.leasePath,
+          beforeHash: item.afterLeaseHash,
+          afterHash: null,
+        })),
+      ]
+    : created;
+}
+
+function validateAdoptionReceipt(
+  receipt: WorkspaceReceipt,
+  plan: WorkspacePlan & {
+    operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>;
+  },
+): void {
+  if (
+    receipt.schemaVersion !== "worktree-delivery/1.0" ||
+    receipt.kind !== "workspace-receipt" ||
+    receipt.id !== plan.id ||
+    receipt.planHash !== plan.planHash ||
+    receipt.operation !== "adopt" ||
+    receipt.before?.projectDir !== plan.projectDir ||
+    receipt.before?.commonDir !== plan.commonDir ||
+    receipt.before?.observedHash !== plan.observedHash ||
+    receipt.beforeObservedHash !== plan.observedHash
+  ) {
+    throw new Error("WORKSPACE_RECEIPT_INVALID: adopt receipt identity does not match plan");
+  }
+  const expectedCreates = adoptionLeaseChanges(plan.operation);
+  const changes = receipt.leaseChanges ?? [];
+  if (receipt.status === "started" || receipt.status === "failed") {
+    if (
+      changes.length > expectedCreates.length ||
+      changes.some((change, index) => hashObject(change) !== hashObject(expectedCreates[index]))
+    ) {
+      throw new Error("WORKSPACE_RECEIPT_INVALID: adopt receipt lease changes are invalid");
+    }
+    return;
+  }
+  if (
+    !receipt.after ||
+    receipt.after.projectDir !== plan.projectDir ||
+    receipt.after.commonDir !== plan.commonDir ||
+    receipt.afterObservedHash !== receipt.after.observedHash ||
+    hashObject(changes) !== hashObject(adoptionLeaseChanges(
+      plan.operation,
+      receipt.status === "rolled-back",
+    )) ||
+    (receipt.status === "rolled-back" && (
+      !receipt.rollbackAfter ||
+      receipt.rollbackAfter.projectDir !== plan.projectDir ||
+      receipt.rollbackAfter.commonDir !== plan.commonDir ||
+      receipt.rollbackObservedHash !== receipt.rollbackAfter.observedHash
+    ))
+  ) {
+    throw new Error("WORKSPACE_RECEIPT_INVALID: adopt receipt state does not match plan");
+  }
+}
+
+function assertAdoptionPostconditions(
+  status: WorkspaceStatus,
+  operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>,
+): void {
+  if (
+    fileHash(join(status.projectDir, ".harness", "worktree-delivery.json")) !==
+      operation.configHash ||
+    status.hostBinding.hash !== operation.hostBindingHash ||
+    hashObject(refsObservation(status.projectDir)) !== operation.refsHash ||
+    hashObject(worktreeRegistrationObservation(status.worktrees)) !==
+      operation.worktreeRegistrationHash ||
+    hashObject({
+      ...status.provider,
+      items: [...status.provider.items].sort((left, right) =>
+        left.workItem < right.workItem ? -1 : left.workItem > right.workItem ? 1 : 0),
+    }) !== operation.providerHash ||
+    hashObject(leaseStateObservation(status.commonDir)) !== hashObject([
+      ...operation.existingLeases,
+      ...operation.items.map((item) => ({
+        leasePath: item.leasePath,
+        sha256: item.afterLeaseHash,
+      })),
+    ].sort((left, right) =>
+      left.leasePath < right.leasePath ? -1 : left.leasePath > right.leasePath ? 1 : 0))
+  ) {
+    throw new Error("WORKTREE_ADOPT_POSTCONDITION_FAILED: workspace metadata changed");
+  }
+  for (const item of operation.items) {
+    const target = safePath(status.commonDir, item.leasePath);
+    assertCurrentHash(target, item.afterLeaseHash);
+    const record = status.worktrees.find((worktree) => samePath(worktree.path, item.lease.path));
+    if (!record) throw new Error(`WORKTREE_ADOPT_POSTCONDITION_FAILED: ${item.lease.path}`);
+    const snapshot = adoptionSnapshot(
+      status.projectDir,
+      status.commonDir,
+      record,
+      item.lease.branch,
+    );
+    if (snapshot.snapshotHash !== item.snapshot.snapshotHash) {
+      throw new Error(`WORKTREE_ADOPT_POSTCONDITION_FAILED: ${item.lease.path}`);
+    }
+  }
+}
+
+function applyWorkspaceAdoptionPlan(
+  root: string,
+  plan: WorkspacePlan & {
+    operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>;
+  },
+  args: { approval: string; now?: Date; testFailAfterLeaseWrites?: number },
+): WorkspaceReceipt {
+  validateWorkspacePlanEnvelope(root, gitCommonDir(root), plan, args.approval);
+  const lock = acquireLock(plan.commonDir);
+  try {
+    const previous = appliedReceipt(plan);
+    if (previous) return previous;
+    const before = workspaceStatus(root, { adoptionSafe: true });
+    validateWorkspacePlan(before, plan, args.approval);
+    let reobserved: Extract<WorkspacePlan["operation"], { kind: "adopt" }>;
+    try {
+      reobserved = adoptionOperation(
+        before,
+        plan.operation.items.map((item) => ({
+          workItem: item.lease.workItem,
+          owner: item.lease.owner,
+          thread: item.lease.thread,
+          path: item.lease.path,
+          branch: item.lease.branch,
+        })),
+        plan.operation.items[0].lease.createdAt,
+      );
+    } catch (error) {
+      throw new Error(
+        `WORKSPACE_DRIFT: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (hashObject(reobserved) !== hashObject(plan.operation)) {
+      throw new Error("WORKSPACE_DRIFT: adoption preconditions changed");
+    }
+    const path = receiptFile(plan.commonDir, plan.id);
+    const receipt: WorkspaceReceipt = {
+      schemaVersion: "worktree-delivery/1.0",
+      kind: "workspace-receipt",
+      id: plan.id,
+      planHash: plan.planHash,
+      operation: "adopt",
+      status: "started",
+      startedAt: (args.now ?? new Date()).toISOString(),
+      steps: [],
+      before,
+      beforeObservedHash: before.observedHash,
+      leaseChanges: [],
+      compensationStatus: "not-required",
+    };
+    const written: WorkspaceAdoptionPlanItem[] = [];
+    writeReceipt(path, receipt);
+    try {
+      for (const item of plan.operation.items) {
+        const target = safePath(plan.commonDir, item.leasePath);
+        assertCurrentHash(target, item.beforeLeaseHash);
+      }
+      for (const item of plan.operation.items) {
+        const target = safePath(plan.commonDir, item.leasePath);
+        atomicWrite(target, prettyJson(item.lease));
+        written.push(item);
+        assertCurrentHash(target, item.afterLeaseHash);
+        receipt.steps.push({ id: "write-adopted-lease", status: "applied", detail: item.lease.workItem });
+        receipt.leaseChanges!.push({
+          action: "create",
+          workItem: item.lease.workItem,
+          path: item.lease.path,
+          branch: item.lease.branch,
+          leasePath: item.leasePath,
+          beforeHash: null,
+          afterHash: item.afterLeaseHash,
+        });
+        if (args.testFailAfterLeaseWrites === written.length) {
+          throw new Error("TEST_ADOPT_WRITE_FAILURE");
+        }
+      }
+      const after = workspaceStatus(root, { adoptionSafe: true });
+      assertAdoptionPostconditions(after, plan.operation);
+      receipt.status = "applied";
+      receipt.completedAt = (args.now ?? new Date()).toISOString();
+      receipt.after = after;
+      receipt.afterObservedHash = after.observedHash;
+      writeReceipt(path, receipt);
+      return receipt;
+    } catch (error) {
+      let compensationFailed = false;
+      for (const item of [...written].reverse()) {
+        const target = safePath(plan.commonDir, item.leasePath);
+        try {
+          if (fileHash(target) !== item.afterLeaseHash) {
+            throw new Error("lease changed after this transaction created it");
+          }
+          unlinkSync(target);
+          receipt.steps.push({
+            id: "remove-adopted-lease",
+            status: "compensated",
+            detail: item.lease.workItem,
+          });
+        } catch (compensationError) {
+          compensationFailed = true;
+          receipt.steps.push({
+            id: "remove-adopted-lease",
+            status: "failed",
+            detail: `${item.lease.workItem}: ${compensationError instanceof Error
+              ? compensationError.message
+              : String(compensationError)}`,
+          });
+        }
+      }
+      const original = error instanceof Error ? error.message : String(error);
+      receipt.status = "failed";
+      receipt.compensationStatus = compensationFailed ? "failed" : "completed";
+      receipt.error = compensationFailed
+        ? `WORKTREE_ADOPT_COMPENSATION_FAILED: ${original}`
+        : original;
+      receipt.steps.push({ id: "apply", status: "failed", detail: receipt.error });
+      receipt.completedAt = (args.now ?? new Date()).toISOString();
+      writeReceipt(path, receipt);
+      if (compensationFailed) throw new Error(receipt.error);
+      throw error;
+    }
+  } finally {
+    releaseLock(lock);
+  }
+}
+
 export function applyWorkspacePlan(args: {
   projectRoot: string;
   planPath: string;
   approval: string;
   now?: Date;
+  testFailAfterLeaseWrites?: number;
+  testFailCloseAfterWorktreeRemove?: boolean;
 }): WorkspaceReceipt {
   const root = repositoryRoot(args.projectRoot);
   const plan = loadWorkspacePlan(root, args.planPath);
+  if (plan.operation.kind === "adopt") {
+    return applyWorkspaceAdoptionPlan(root, plan as WorkspacePlan & {
+      operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>;
+    }, args);
+  }
   const previous = appliedReceipt(plan);
   if (previous) return previous;
   const before = workspaceStatus(root);
@@ -1065,7 +1792,16 @@ export function applyWorkspacePlan(args: {
       }
       atomicWrite(leaseFile(plan.commonDir, operation.lease.workItem), prettyJson(operation.lease));
       receipt.steps.push({ id: "write-lease", status: "applied", detail: operation.lease.workItem });
-    } else {
+      receipt.leaseChanges = [{
+        action: "create",
+        workItem: operation.lease.workItem,
+        path: operation.lease.path,
+        branch: operation.lease.branch,
+        leasePath: leaseRelativePath(operation.lease.workItem),
+        beforeHash: null,
+        afterHash: fileHash(leaseFile(plan.commonDir, operation.lease.workItem)),
+      }];
+    } else if (plan.operation.kind === "close") {
       const operation = plan.operation;
       requireHostBinding(before);
       validateTarget(before.hostBinding, operation.lease.path);
@@ -1076,9 +1812,21 @@ export function applyWorkspacePlan(args: {
       if (!observed || observed.head !== operation.expectedHead || observed.dirty) {
         throw new Error("WORKSPACE_DRIFT: close preconditions changed");
       }
+      receipt.leaseChanges = [{
+        action: "remove",
+        workItem: operation.lease.workItem,
+        path: operation.lease.path,
+        branch: operation.lease.branch,
+        leasePath: leaseRelativePath(operation.lease.workItem),
+        beforeHash: operation.expectedLeaseHash,
+        afterHash: null,
+      }];
       git(root, ["worktree", "remove", operation.lease.path]);
       worktreeRemoved = true;
       receipt.steps.push({ id: "remove-worktree", status: "applied", detail: operation.lease.path });
+      if (args.testFailCloseAfterWorktreeRemove) {
+        throw new Error("TEST_CLOSE_AFTER_WORKTREE_REMOVE_FAILURE");
+      }
       unlinkSync(leaseFile(plan.commonDir, operation.lease.workItem));
       receipt.steps.push({ id: "remove-lease", status: "applied", detail: operation.lease.workItem });
     }
@@ -1143,24 +1891,163 @@ export function applyWorkspacePlan(args: {
   }
 }
 
+function laterLifecycleUsesAdoptedLease(
+  commonDir: string,
+  receipt: WorkspaceReceipt,
+  operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>,
+): string | null {
+  const hashes = new Set(operation.items.map((item) => item.afterLeaseHash));
+  for (const { path } of stateJsonFiles(commonDir, "receipts")) {
+    const candidate = readJson<WorkspaceReceipt>(path);
+    if (candidate.id === receipt.id) continue;
+    const use = candidate.leaseChanges?.find(
+      (change) => change.beforeHash !== null && hashes.has(change.beforeHash),
+    );
+    if (use) return `${candidate.id}: ${use.workItem}`;
+  }
+  return null;
+}
+
+function rollbackWorkspaceAdoption(args: {
+  root: string;
+  commonDir: string;
+  receiptPath: string;
+  plan: WorkspacePlan & {
+    operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>;
+  };
+  now?: Date;
+}): WorkspaceReceipt {
+  const lock = acquireLock(args.commonDir);
+  try {
+    const receipt = readJson<WorkspaceReceipt>(args.receiptPath);
+    validateAdoptionReceipt(receipt, args.plan);
+    if (receipt.status === "rolled-back") return receipt;
+    if (receipt.status !== "applied" || !receipt.after) {
+      throw new Error(`WORKSPACE_ROLLBACK_UNAVAILABLE: ${receipt.status}`);
+    }
+    if (
+      receipt.planHash !== args.plan.planHash ||
+      hashObject(withoutHash(args.plan)) !== args.plan.planHash
+    ) {
+      throw new Error("WORKSPACE_ROLLBACK_UNSAFE: plan or receipt hash mismatch");
+    }
+    const status = workspaceStatus(args.root, { adoptionSafe: true });
+    if (
+      status.observedHash !== receipt.after.observedHash ||
+      receipt.afterObservedHash !== receipt.after.observedHash
+    ) {
+      throw new Error("WORKSPACE_DRIFT: workspace changed after apply");
+    }
+    const laterUse = laterLifecycleUsesAdoptedLease(
+      args.commonDir,
+      receipt,
+      args.plan.operation,
+    );
+    if (laterUse) {
+      throw new Error(`WORKSPACE_ROLLBACK_LATER_LIFECYCLE_USE: ${laterUse}`);
+    }
+    assertAdoptionPostconditions(status, args.plan.operation);
+    for (const item of args.plan.operation.items) {
+      assertCurrentHash(safePath(args.commonDir, item.leasePath), item.afterLeaseHash);
+    }
+    const removed: WorkspaceAdoptionPlanItem[] = [];
+    const rollbackSteps: WorkspaceReceipt["steps"] = [];
+    try {
+      for (const item of [...args.plan.operation.items].reverse()) {
+        unlinkSync(safePath(args.commonDir, item.leasePath));
+        removed.push(item);
+        rollbackSteps.push({
+          id: "rollback-adopted-lease",
+          status: "compensated",
+          detail: item.lease.workItem,
+        });
+      }
+      const rollbackAfter = workspaceStatus(args.root, { adoptionSafe: true });
+      if (rollbackAfter.observedHash !== receipt.before.observedHash) {
+        throw new Error("WORKSPACE_ROLLBACK_POSTCONDITION_FAILED: pre-adoption state was not restored");
+      }
+      const rolledBack: WorkspaceReceipt = {
+        ...receipt,
+        status: "rolled-back",
+        completedAt: (args.now ?? new Date()).toISOString(),
+        steps: [...receipt.steps, ...rollbackSteps],
+        error: undefined,
+        rollbackAfter,
+        rollbackObservedHash: rollbackAfter.observedHash,
+        leaseChanges: adoptionLeaseChanges(args.plan.operation, true),
+      };
+      writeReceipt(args.receiptPath, rolledBack);
+      return rolledBack;
+    } catch (error) {
+      let compensationFailed = false;
+      for (const item of [...removed].reverse()) {
+        const target = safePath(args.commonDir, item.leasePath);
+        try {
+          if (fileHash(target) !== null) {
+            throw new Error("lease path is no longer absent");
+          }
+          atomicWrite(target, prettyJson(item.lease));
+          assertCurrentHash(target, item.afterLeaseHash);
+        } catch {
+          compensationFailed = true;
+        }
+      }
+      const original = error instanceof Error ? error.message : String(error);
+      const failure = compensationFailed
+        ? `WORKSPACE_ROLLBACK_UNSAFE: rollback compensation failed: ${original}`
+        : original;
+      writeReceipt(args.receiptPath, {
+        ...receipt,
+        status: "applied",
+        error: failure,
+        compensationStatus: compensationFailed ? "failed" : "completed",
+        steps: [
+          ...receipt.steps,
+          ...rollbackSteps,
+          { id: "rollback-adopt", status: "failed", detail: failure },
+        ],
+      });
+      throw new Error(failure);
+    }
+  } finally {
+    releaseLock(lock);
+  }
+}
+
 export function rollbackWorkspaceChange(args: {
   projectRoot: string;
   changeId: string;
   now?: Date;
 }): WorkspaceReceipt {
-  const status = workspaceStatus(args.projectRoot);
-  const path = receiptFile(status.commonDir, args.changeId);
+  const root = repositoryRoot(args.projectRoot);
+  const commonDir = gitCommonDir(root);
+  const path = receiptFile(commonDir, args.changeId);
   if (!existsSync(path)) throw new Error(`WORKSPACE_RECEIPT_NOT_FOUND: ${args.changeId}`);
   const receipt = readJson<WorkspaceReceipt>(path);
+  if (receipt.id !== args.changeId) {
+    throw new Error("WORKSPACE_RECEIPT_INVALID: receipt id does not match requested change");
+  }
+  const planPathValue = planPath(root, receipt.id);
+  const plan = loadWorkspacePlan(root, planPathValue);
+  if (plan.operation.kind === "adopt") {
+    return rollbackWorkspaceAdoption({
+      root,
+      commonDir,
+      receiptPath: path,
+      plan: plan as WorkspacePlan & {
+        operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>;
+      },
+      now: args.now,
+    });
+  }
   if (receipt.status === "rolled-back") return receipt;
+  const status = workspaceStatus(root);
   if (receipt.status !== "applied" || !receipt.after) {
     throw new Error(`WORKSPACE_ROLLBACK_UNAVAILABLE: ${receipt.status}`);
   }
   if (status.observedHash !== receipt.after.observedHash) {
     throw new Error("WORKSPACE_DRIFT: workspace changed after apply");
   }
-  const planPathValue = planPath(status.projectDir, receipt.id);
-  const plan = loadWorkspacePlan(status.projectDir, planPathValue);
   const lock = acquireLock(status.commonDir);
   try {
     if (plan.operation.kind === "configure") {
@@ -1184,7 +2071,7 @@ export function rollbackWorkspaceChange(args: {
       throw new Error(
         "WORKSPACE_ROLLBACK_REQUIRES_CLOSE_PLAN: an allocated worktree must pass a new exact-hash close plan",
       );
-    } else {
+    } else if (plan.operation.kind === "close") {
       requireHostBinding(status);
       validateTarget(status.hostBinding, plan.operation.lease.path);
       if (existsSync(plan.operation.lease.path)) {
@@ -1204,6 +2091,18 @@ export function rollbackWorkspaceChange(args: {
         prettyJson(plan.operation.lease),
       );
       receipt.steps.push({ id: "rollback-close", status: "compensated", detail: plan.operation.lease.path });
+      receipt.leaseChanges = [
+        ...(receipt.leaseChanges ?? []),
+        {
+          action: "restore",
+          workItem: plan.operation.lease.workItem,
+          path: plan.operation.lease.path,
+          branch: plan.operation.lease.branch,
+          leasePath: leaseRelativePath(plan.operation.lease.workItem),
+          beforeHash: null,
+          afterHash: fileHash(leaseFile(status.commonDir, plan.operation.lease.workItem)),
+        },
+      ];
     }
     receipt.status = "rolled-back";
     receipt.completedAt = (args.now ?? new Date()).toISOString();

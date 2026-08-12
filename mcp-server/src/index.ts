@@ -68,6 +68,7 @@ import {
 } from "./v2/types.js";
 import {
   auditWorkspace,
+  planWorkspaceAdoption,
   planWorkspaceAllocation,
   planWorkspaceClose,
   planWorkspaceConfiguration,
@@ -75,7 +76,7 @@ import {
   reviewWorkspace,
   workspaceStatus,
 } from "./worktree/service.js";
-import type { WorktreeDeliveryConfig } from "./worktree/types.js";
+import type { WorkspaceAdoptionInput, WorktreeDeliveryConfig } from "./worktree/types.js";
 import {
   EvaluateRulesInputSchema,
   GenerateConfigInputSchema,
@@ -292,6 +293,38 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
             owner: { type: "string" },
             thread: { type: "string" },
             startPoint: { type: "string" },
+          },
+        },
+      },
+      {
+        name: "harness_worktree_adopt",
+        description: "Create one exact-hash metadata-only plan to lease existing persistent worktrees as an atomic batch",
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["projectDir", "items"],
+          properties: {
+            projectDir: { type: "string" },
+            items: {
+              type: "array",
+              minItems: 1,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["workItem", "owner", "path", "branch"],
+                properties: {
+                  workItem: { type: "string", minLength: 1, pattern: ".*\\S.*" },
+                  owner: { type: "string", minLength: 1, pattern: ".*\\S.*" },
+                  thread: { type: "string", minLength: 1, pattern: ".*\\S.*" },
+                  path: {
+                    type: "string",
+                    minLength: 1,
+                    pattern: "^(?:/|[A-Za-z]:[\\\\/]|\\\\\\\\)",
+                  },
+                  branch: { type: "string", minLength: 1, pattern: ".*\\S.*" },
+                },
+              },
+            },
           },
         },
       },
@@ -589,6 +622,19 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         owner: v2String("owner"),
         thread: typeof v2Args.thread === "string" ? v2Args.thread : undefined,
         startPoint: typeof v2Args.startPoint === "string" ? v2Args.startPoint : undefined,
+      });
+      return v2Result({
+        planPath: result.path,
+        planHash: result.plan.planHash,
+        operation: result.plan.operation.kind,
+        warnings: result.plan.warnings,
+      });
+    }
+
+    case "harness_worktree_adopt": {
+      const result = planWorkspaceAdoption({
+        projectRoot: v2String("projectDir"),
+        items: v2Args.items as WorkspaceAdoptionInput[],
       });
       return v2Result({
         planPath: result.path,

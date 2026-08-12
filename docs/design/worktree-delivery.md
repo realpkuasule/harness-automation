@@ -13,7 +13,7 @@ It is exposed through two Skill entry points:
 - `manage-worktree-delivery` operates worktree lifecycle through the shared CLI.
 
 The default is audit-only. Installing or upgrading the package creates no
-worktrees and deletes no state. Persistent configure, allocate, and close
+worktrees and deletes no state. Persistent configure, allocate, adopt, and close
 operations require dry-run planning and exact-hash apply.
 
 ## Layers
@@ -112,6 +112,25 @@ created by that same approved transaction.
 An applied allocation cannot be deleted with `rollback`; it must pass a new
 exact-hash close plan because it may now contain valuable work.
 
+### Adopt
+
+`worktree adopt --manifest <json>` migrates one or more already registered
+persistent worktrees into lease governance. The manifest supplies only the
+intended work item, owner/thread, absolute path, and current branch. Planning
+observes and hash-binds current HEAD/branch ref, Git index, dirty files and
+binary patch, lease absence, host binding, capacity, and configured Provider
+Issue/Project state.
+
+Apply acquires the existing repository transaction lock and repeats the full
+batch observation before writing a receipt or lease. It writes leases only
+after every item passes. A handled mid-write failure removes only unchanged
+leases created by that transaction; no adopt path invokes worktree, checkout,
+branch, ref, index, or working-tree mutation commands.
+
+Adopt rollback is metadata-only. It removes the complete batch of unchanged
+leases only while no later lifecycle receipt has consumed one of their hashes.
+It never removes or recreates an adopted worktree.
+
 ### Close
 
 Close planning requires:
@@ -186,7 +205,7 @@ real local audit and fail when it does not pass.
 - no operation uses `rm -rf`, `reset --hard`, worktree force removal,
   `branch -D`, or `git clean -f/-x`;
 - apply is locked, drift-checked, and idempotent;
-- every lifecycle attempt leaves a durable receipt.
+- every lifecycle attempt that begins mutation leaves a durable receipt; preflight drift writes none.
 
 ## Compatibility and migration
 
@@ -196,7 +215,8 @@ and legacy task-board compatibility remain unchanged.
 
 Existing worktrees are not automatically adopted or cleaned. Start with
 `worktree status` and `worktree audit`, then configure allowed roots and
-Provider mapping through an approved plan. A legacy config with embedded roots
+Provider mapping through an approved plan and explicitly submit a
+`worktree-adopt/1.0` manifest. A legacy config with embedded roots
 remains readable for audit but enforced allocation is blocked until configure
 migrates those roots to the host-local binding. A new clone of an enforced
 repository must likewise approve its own binding. Resolve

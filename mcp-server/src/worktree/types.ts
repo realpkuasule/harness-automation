@@ -68,6 +68,19 @@ export interface WorkspaceLease {
   status: "active" | "review" | "done";
 }
 
+export interface WorkspaceAdoptionInput {
+  workItem: string;
+  owner: string;
+  thread?: string;
+  path: string;
+  branch: string;
+}
+
+export interface WorkspaceAdoptionManifest {
+  schemaVersion: "worktree-adopt/1.0";
+  items: WorkspaceAdoptionInput[];
+}
+
 export interface WorktreeRecord {
   path: string;
   head: string;
@@ -89,6 +102,41 @@ export interface WorktreeRecord {
   };
   uniqueCommits?: number;
   unpushedCommits?: number;
+}
+
+export interface WorkspaceAdoptionSnapshot {
+  path: string;
+  branch: string;
+  head: string;
+  branchHead: string;
+  indexHash: string;
+  bare: false;
+  detached: false;
+  locked: false;
+  prunable: false;
+  dirty: boolean;
+  dirtyEvidence: NonNullable<WorktreeRecord["dirtyEvidence"]>;
+  dirtyPatch: NonNullable<WorktreeRecord["dirtyPatch"]>;
+  snapshotHash: string;
+}
+
+export interface WorkspaceAdoptionPlanItem {
+  lease: WorkspaceLease;
+  snapshot: WorkspaceAdoptionSnapshot;
+  providerItem?: ProviderItemObservation;
+  leasePath: string;
+  beforeLeaseHash: null;
+  afterLeaseHash: string;
+}
+
+export interface WorkspaceLeaseChange {
+  action: "create" | "remove" | "restore";
+  workItem: string;
+  path: string;
+  branch: string;
+  leasePath: string;
+  beforeHash: string | null;
+  afterHash: string | null;
 }
 
 export interface WorkspaceStatus {
@@ -165,6 +213,23 @@ export type WorkspaceOperation =
       createBranch: boolean;
     }
   | {
+      kind: "adopt";
+      configHash: string;
+      hostBindingHash: string;
+      refsHash: string;
+      worktreeRegistrationHash: string;
+      existingLeases: Array<{ leasePath: string; sha256: string }>;
+      capacity: {
+        limit: number;
+        before: number;
+        adopting: number;
+        after: number;
+      };
+      providerHash: string;
+      provider: ProviderObservation;
+      items: WorkspaceAdoptionPlanItem[];
+    }
+  | {
       kind: "close";
       lease: WorkspaceLease;
       expectedHead: string;
@@ -199,6 +264,12 @@ export interface WorkspaceReceipt {
   backupHostBindingContent?: string | null;
   before: WorkspaceStatus;
   after?: WorkspaceStatus;
+  beforeObservedHash?: string;
+  afterObservedHash?: string;
+  rollbackObservedHash?: string;
+  rollbackAfter?: WorkspaceStatus;
+  leaseChanges?: WorkspaceLeaseChange[];
+  compensationStatus?: "not-required" | "completed" | "failed";
 }
 
 export interface ReviewReceipt {

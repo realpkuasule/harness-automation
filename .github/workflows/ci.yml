@@ -44,7 +44,9 @@ jobs:
 
       - name: Test portable worktree governance on Windows
         if: runner.os == 'Windows'
-        run: npx vitest run src/worktree/service.test.ts --testTimeout=20000
+        run: |
+          npx vitest run src/worktree/service.test.ts --testTimeout=20000 -t "portable worktree inventory|hash-approved worktree lifecycle"
+          npx vitest run src/worktree/service.test.ts --testTimeout=20000 -t "hash-approved worktree adoption|temporary review and retention"
 
       - name: Build
         if: runner.os != 'Windows'
