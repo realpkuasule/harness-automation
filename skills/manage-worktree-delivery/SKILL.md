@@ -1,7 +1,7 @@
 ---
 name: manage-worktree-delivery
 description: >
-  审计和治理 AI coding 项目的 Git worktree 交付生命周期。用户要求分配 Issue worktree、创建临时 Review
+  审计和治理 AI coding 项目的 Git worktree 交付生命周期。用户要求分配或接管 Issue worktree、创建临时 Review
   环境、检查重复或残留 worktree、关闭已完成 worktree、检查租约/容量/漂移、审计远端分支保留期，或处理
   跨 Agent/跨会话 worktree 失控时使用。普通 Git 仓库无需 PRD 即可运行只读 status、audit 和临时 review。
 ---
@@ -71,6 +71,20 @@ node <skill目录>/scripts/run.mjs worktree allocate \
 
 容量超限、重复工作项、branch 已被检出、路径不在 allowlist、路径命中保护根、Provider 不可用或观测漂移时停止。
 
+## 接管既有 worktree
+
+配置前已经存在的持久 worktree 必须通过 manifest 批量接管，不能手写 lease：
+
+```bash
+node <skill目录>/scripts/run.mjs worktree adopt \
+  --project <项目绝对路径> \
+  --manifest <manifest绝对或项目相对路径>
+```
+
+manifest 使用 `worktree-adopt/1.0`，每项明确给出 `workItem`、`owner`、可选 `thread`、绝对 `path` 和当前 `branch`。`adopt` 只生成计划；负责人审阅计划中的 HEAD、dirty evidence/patch digest、Provider 状态、容量和租约哈希后，仍使用统一 `apply` 精确批准。
+
+接管只写本次新增的本机 lease 与耐久回执。它允许 dirty worktree，因为接管是保护动作，但不改变 worktree 注册、branch、HEAD、index 或工作区文件。detached、locked、prunable、管理 checkout、保护/越界路径、重复映射和容量超限必须拒绝。批量中任一项漂移时零 lease 写入；写入中失败只补偿本次未被改变的新 lease。
+
 ## 临时 Review
 
 Review 不创建本地 branch，使用 detached HEAD 和 OS 临时目录：
@@ -120,6 +134,7 @@ node <skill目录>/scripts/run.mjs rollback \
 ```
 
 rollback 必须验证当前状态仍等于回执记录。已分配并可能承载新工作的 worktree 不通过 rollback 删除，应走新的 `close` 计划。
+接管 rollback 只删除该接管新建且此后未被 close/heartbeat/transfer 等生命周期使用的 lease；它永不删除或重建既有 worktree。
 
 ## 禁止事项
 

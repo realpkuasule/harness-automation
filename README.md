@@ -174,7 +174,7 @@ harness-automation worktree audit --project .
 harness-automation worktree retention-audit --project .
 ```
 
-正式启用、分配和关闭默认只生成计划：
+正式启用、分配、接管既有 worktree 和关闭默认只生成计划：
 
 ```bash
 harness-automation worktree configure \
@@ -190,13 +190,17 @@ harness-automation worktree allocate \
   --path /absolute/worktree-parent/issue-24 \
   --owner <负责人>
 
+harness-automation worktree adopt \
+  --project . \
+  --manifest /absolute/path/worktree-adopt.json
+
 harness-automation worktree close \
   --project . \
   --work-item github:owner/repository#24 \
   --accepted-commit <sha>
 ```
 
-三者输出的计划都通过统一 `apply --plan ... --approve <sha256>` 执行。`status`、`audit`、保留期审计和 cleanup planning 创建零个 worktree。
+这些命令输出的计划都通过统一 `apply --plan ... --approve <sha256>` 执行。`adopt` 只为 manifest 中已经注册的 worktree 批量创建租约；它接受并哈希锁定 dirty 内容，但不 add/remove worktree、不切换 branch、不改 HEAD/index/工作区文件。任一项漂移或失败都会在写入前停止，或只补偿本次新建租约。`status`、`audit`、保留期审计和 planning 创建零个 worktree。
 仓库中的 `.harness/worktree-delivery.json` 只保存可移植策略，包括唯一 management checkout 的分支选择器；允许根和保护根写入 Git common dir 的本机绑定。配置计划哈希同时覆盖两者，新机器必须批准自己的本机绑定。
 
 临时 Review 使用 detached HEAD、OS 临时目录且不创建本地 branch：
@@ -264,7 +268,7 @@ harness-automation context --project . --agent codex
 
 ## CLI 与 MCP
 
-v2 CLI 命令：`doctor`、`research github`、`intake`、`discover`、`plan`、`apply`、`context`、`check`、`drift`、`explain`、`rollback`，以及 `worktree configure|allocate|review|status|audit|close|retention-audit`。`plan` 支持正交的 `deliveryProfile`、`domainProfile` 和 `qualityProfile`。`check --mode commit|ci` 会执行计划中可见的可信项目 gate；EDD runner 只在 CI mode 执行，缺失运行时明确返回 `blocked`。CI 无法观察宿主机 worktree 时会如实报告 workspace enforcement 不可用。
+v2 CLI 命令：`doctor`、`research github`、`intake`、`discover`、`plan`、`apply`、`context`、`check`、`drift`、`explain`、`rollback`，以及 `worktree configure|allocate|adopt|review|status|audit|close|retention-audit`。`plan` 支持正交的 `deliveryProfile`、`domainProfile` 和 `qualityProfile`。`check --mode commit|ci` 会执行计划中可见的可信项目 gate；EDD runner 只在 CI mode 执行，缺失运行时明确返回 `blocked`。CI 无法观察宿主机 worktree 时会如实报告 workspace enforcement 不可用。
 
 MCP 暴露同一 service layer，包括核心 `harness_*` 工具和对应的 `harness_worktree_*` 工具。CLI 仍是 Claude Code、Codex、DeepSeek/GLM 等 Agent 的 portable 基线。
 
@@ -288,6 +292,7 @@ npm run lint
 - [Eval Contract v1 JSON Schema](docs/api/eval-contract-v1.schema.json)
 - [Worktree Delivery v1 JSON Schema](docs/api/worktree-delivery-v1.schema.json)
 - [Worktree Host Binding v1 JSON Schema](docs/api/worktree-host-binding-v1.schema.json)
+- [Worktree Adopt v1 JSON Schema](docs/api/worktree-adopt-v1.schema.json)
 - [Skill](skill/SKILL.md)
 - [Worktree Skill](skills/manage-worktree-delivery/SKILL.md)
 

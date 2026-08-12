@@ -80,6 +80,48 @@ harness-automation apply \
   --approve <exact-sha256>
 ```
 
+## Adopt existing worktrees
+
+Prepare one strict manifest for worktrees that already existed before delivery
+governance was enabled:
+
+```json
+{
+  "schemaVersion": "worktree-adopt/1.0",
+  "items": [
+    {
+      "workItem": "github:owner/repository#24",
+      "owner": "owner",
+      "thread": "optional-thread-id",
+      "path": "/absolute/parent/existing-issue-24",
+      "branch": "issue-24"
+    }
+  ]
+}
+```
+
+Generate the immutable plan, then apply its exact hash through the same command
+shown above:
+
+```bash
+harness-automation worktree adopt \
+  --project . \
+  --manifest /absolute/path/worktree-adopt.json
+```
+
+Planning and drift failure create no lease. Successful apply writes only the
+new leases and receipt under the Git common dir. The plan binds configuration,
+host binding, capacity, Provider Issue/Project state, path, branch, HEAD, index,
+dirty evidence and binary patch digest. Dirty worktrees are accepted and left
+unchanged; detached, locked, prunable, management/protected/out-of-root,
+duplicate, and over-capacity targets are rejected. Completed Provider items
+may be adopted so their existing worktrees can immediately pass through a
+separate normal `close` plan; adoption never closes them implicitly.
+
+Adoption rollback removes only unchanged leases created by that receipt. It is
+refused after a later lifecycle operation used a lease and never removes a
+worktree, branch, ref, index, or working-tree file.
+
 ## Temporary Review
 
 ```bash

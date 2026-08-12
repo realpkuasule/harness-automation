@@ -38,6 +38,8 @@ import {
 } from "./v2/types.js";
 import {
   auditWorkspace,
+  parseWorkspaceAdoptionManifest,
+  planWorkspaceAdoption,
   planWorkspaceAllocation,
   planWorkspaceClose,
   planWorkspaceConfiguration,
@@ -273,6 +275,21 @@ function printWorkspacePlan(result: ReturnType<typeof planWorkspaceConfiguration
   });
 }
 
+function adoptionManifest(root: string, args: ParsedArguments) {
+  const selected = args.values.get("manifest") ?? [];
+  if (selected.length !== 1) {
+    throw new Error("WORKTREE_ADOPT_INPUT_INVALID: pass exactly one --manifest");
+  }
+  try {
+    const path = resolve(root, selected[0]);
+    return parseWorkspaceAdoptionManifest(JSON.parse(readFileSync(path, "utf8")));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.startsWith("WORKTREE_ADOPT_")) throw error;
+    throw new Error(`WORKTREE_ADOPT_INPUT_INVALID: ${message}`);
+  }
+}
+
 function runWorktreeCommand(
   root: string,
   args: ParsedArguments,
@@ -319,6 +336,14 @@ function runWorktreeCommand(
         startPoint: value(args, "start-point"),
       }));
       return;
+    case "adopt": {
+      const manifest = adoptionManifest(root, args);
+      printWorkspacePlan(planWorkspaceAdoption({
+        projectRoot: root,
+        items: manifest.items,
+      }));
+      return;
+    }
     case "close":
       printWorkspacePlan(planWorkspaceClose({
         projectRoot: root,
@@ -346,7 +371,7 @@ function runWorktreeCommand(
     }
     default:
       throw new Error(
-        "WORKTREE_COMMAND_REQUIRED: choose configure, allocate, review, status, audit, close, or retention-audit",
+        "WORKTREE_COMMAND_REQUIRED: choose configure, allocate, adopt, review, status, audit, close, or retention-audit",
       );
   }
 }
@@ -373,6 +398,7 @@ Usage:
   harness-automation worktree status|audit|retention-audit [--project .]
   harness-automation worktree configure [--mode audit-only|enforced] [--management-branch <branch>] [--allow-root <absolute-path>] [--project .]
   harness-automation worktree allocate --work-item <provider:id> --branch <name> --path <absolute-path> --owner <name> [--project .]
+  harness-automation worktree adopt --manifest <json-path> [--project .]
   harness-automation worktree review [--commit <sha>] [--project .] -- <command> [args...]
   harness-automation worktree close --work-item <provider:id> --accepted-commit <sha> [--project .]
 
