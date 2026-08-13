@@ -31,6 +31,7 @@ import {
   WORKTREE_SCHEMA_VERSION,
   type WorktreeDeliveryConfig,
   type WorktreePolicyId,
+  type ProviderObservation,
   type WorktreeRecord,
   type WorkspaceAdoptionInput,
   type WorkspaceAdoptionManifest,
@@ -537,7 +538,11 @@ function leaseStateObservation(
 
 export function workspaceStatus(
   projectRoot: string,
-  options: { adoptionSafe?: boolean } = {},
+  options: {
+    adoptionSafe?: boolean;
+    providerWorkItems?: string[];
+    providerObservation?: ProviderObservation;
+  } = {},
 ): WorkspaceStatus {
   const root = repositoryRoot(projectRoot);
   const commonDir = gitCommonDir(root);
@@ -545,7 +550,12 @@ export function workspaceStatus(
   const hostBinding = loadHostBinding(root, commonDir, loadedConfig.legacyBinding);
   const loadedLeases = leases(commonDir);
   const observedWorktrees = worktrees(root, options.adoptionSafe);
-  const provider = observeProvider(root, loadedConfig.config, loadedLeases.values);
+  const provider = options.providerObservation ?? observeProvider(
+      root,
+      loadedConfig.config,
+      loadedLeases.values,
+      options.providerWorkItems,
+    );
   const bindingError = loadedConfig.configured &&
     loadedConfig.config.mode === "enforced" &&
     !hostBinding.configured
@@ -766,15 +776,28 @@ export function auditWorkspace(projectRoot: string): WorkspaceAudit {
   add(result(status, "workspace.lease-ttl", staleLeases.length === 0,
     staleLeases.length === 0 ? "Every active lease is within its heartbeat TTL." : "One or more leases exceeded their heartbeat TTL.",
     staleLeases.map((lease) => `${lease.workItem}: heartbeat=${lease.heartbeatAt}`)));
-  add(result(status, "workspace.clean-before-close", dirtyDone.length === 0,
-    dirtyDone.length === 0 ? "No completed worktree is dirty." : "Completed worktrees contain uncommitted content.",
-    dirtyDone));
-  add(result(status, "workspace.unique-commits-protected", uniqueDone.length === 0,
-    uniqueDone.length === 0 ? "No completed worktree contains unique or unpushed commits." : "Completed worktrees contain protected commits.",
-    uniqueDone));
-  add(result(status, "workspace.done-no-persistent-worktree", doneLeases.length === 0,
-    doneLeases.length === 0 ? "No completed work item retains a persistent worktree." : "Completed work items retain persistent worktrees.",
-    doneLeases.map((lease) => `${lease.workItem}: ${lease.path}`)));
+  if (status.provider.configured && !status.provider.available) {
+    const evidence = [status.provider.error ?? "provider unavailable"];
+    add(blockedResult(status, "workspace.clean-before-close",
+      "Provider state is unavailable; completed dirty worktrees cannot be fully identified.",
+      evidence));
+    add(blockedResult(status, "workspace.unique-commits-protected",
+      "Provider state is unavailable; completed worktrees with protected commits cannot be fully identified.",
+      evidence));
+    add(blockedResult(status, "workspace.done-no-persistent-worktree",
+      "Provider state is unavailable; completed worktrees cannot be fully identified.",
+      evidence));
+  } else {
+    add(result(status, "workspace.clean-before-close", dirtyDone.length === 0,
+      dirtyDone.length === 0 ? "No completed worktree is dirty." : "Completed worktrees contain uncommitted content.",
+      dirtyDone));
+    add(result(status, "workspace.unique-commits-protected", uniqueDone.length === 0,
+      uniqueDone.length === 0 ? "No completed worktree contains unique or unpushed commits." : "Completed worktrees contain protected commits.",
+      uniqueDone));
+    add(result(status, "workspace.done-no-persistent-worktree", doneLeases.length === 0,
+      doneLeases.length === 0 ? "No completed work item retains a persistent worktree." : "Completed work items retain persistent worktrees.",
+      doneLeases.map((lease) => `${lease.workItem}: ${lease.path}`)));
+  }
   add(result(status, "workspace.review-temporary-detached", true,
     "Temporary review worktrees are evaluated by the review wrapper."));
   add(result(status, "workspace.review-ttl", true,
@@ -949,20 +972,36 @@ export function planWorkspaceAllocation(args: {
   startPoint?: string;
   now?: Date;
 }): { plan: WorkspacePlan; path: string } {
-  const status = workspaceStatus(args.projectRoot);
+  const workItem = args.workItem.trim();
+  if (!workItem) throw new Error("WORK_ITEM_REQUIRED");
+  const root = repositoryRoot(args.projectRoot);
+  const configuredProvider = loadConfig(root).config.provider;
+  if (
+    configuredProvider.kind === "github" &&
+    !workItem.startsWith(`github:${configuredProvider.repository ?? ""}#`)
+  ) {
+    throw new Error(`PROVIDER_WORK_ITEM_INVALID: ${workItem}`);
+  }
+  const status = workspaceStatus(root, { providerWorkItems: [workItem] });
   if (!status.configured) throw new Error("WORKTREE_CONFIGURATION_REQUIRED");
   if (status.config.mode !== "enforced") throw new Error("WORKTREE_ENFORCEMENT_NOT_ENABLED");
   requireHostBinding(status);
   if (status.provider.configured && !status.provider.available) {
     throw new Error(`PROVIDER_UNAVAILABLE: ${status.provider.error}`);
   }
-  if (!args.workItem.trim()) throw new Error("WORK_ITEM_REQUIRED");
   if (!args.owner.trim()) throw new Error("OWNER_REQUIRED");
+  const providerItem = status.provider.items.find((item) => item.workItem === workItem);
+  if (status.provider.configured && !providerItem) {
+    throw new Error(`PROVIDER_WORK_ITEM_INVALID: ${workItem}`);
+  }
+  if (status.config.provider.project && providerItem?.projectItemPresent !== true) {
+    throw new Error(`PROVIDER_PROJECT_ITEM_REQUIRED: ${workItem}`);
+  }
   validateBranch(status.projectDir, args.branch);
   const target = validateTarget(status.hostBinding, args.path);
   if (existsSync(target)) throw new Error(`WORKTREE_PATH_EXISTS: ${target}`);
-  if (status.leases.some((lease) => lease.workItem === args.workItem)) {
-    throw new Error(`DUPLICATE_WORK_ITEM_LEASE: ${args.workItem}`);
+  if (status.leases.some((lease) => lease.workItem === workItem)) {
+    throw new Error(`DUPLICATE_WORK_ITEM_LEASE: ${workItem}`);
   }
   if (status.leases.some((lease) => samePath(lease.path, target))) {
     throw new Error(`DUPLICATE_WORKTREE_PATH: ${target}`);
@@ -987,7 +1026,7 @@ export function planWorkspaceAllocation(args: {
   const timestamp = (args.now ?? new Date()).toISOString();
   const lease: WorkspaceLease = {
     schemaVersion: WORKTREE_SCHEMA_VERSION,
-    workItem: args.workItem.trim(),
+    workItem,
     branch: args.branch,
     path: target,
     owner: args.owner.trim(),
@@ -999,7 +1038,13 @@ export function planWorkspaceAllocation(args: {
   };
   return savePlan(status.projectDir, planDraft({
     status,
-    operation: { kind: "allocate", lease, startPoint: acceptedCommit, createBranch },
+    operation: {
+      kind: "allocate",
+      lease,
+      startPoint: acceptedCommit,
+      createBranch,
+      providerObservationBound: true,
+    },
     now: args.now,
   }));
 }
@@ -1101,6 +1146,7 @@ function adoptionOperation(
   status: WorkspaceStatus,
   input: unknown,
   timestamp: string,
+  providerObservationBound = true,
 ): Extract<WorkspacePlan["operation"], { kind: "adopt" }> {
   if (!status.configured) throw new Error("WORKTREE_CONFIGURATION_REQUIRED");
   if (status.config.mode !== "enforced") throw new Error("WORKTREE_ENFORCEMENT_NOT_ENABLED");
@@ -1177,10 +1223,12 @@ function adoptionOperation(
       }
     }
   }
-  const provider = observeProvider(status.projectDir, status.config, [
-    ...status.leases,
-    ...snapshots.map((item) => item.provisionalLease),
-  ]);
+  const provider = providerObservationBound
+    ? { ...status.provider, items: [...status.provider.items] }
+    : observeProvider(status.projectDir, status.config, [
+      ...status.leases,
+      ...snapshots.map((item) => item.provisionalLease),
+    ]);
   provider.items.sort((left, right) =>
     left.workItem < right.workItem ? -1 : left.workItem > right.workItem ? 1 : 0);
   if (provider.configured && !provider.available) {
@@ -1229,6 +1277,7 @@ function adoptionOperation(
     },
     providerHash: hashObject(provider),
     provider,
+    ...(providerObservationBound ? { providerObservationBound: true as const } : {}),
     items: planItems,
   };
 }
@@ -1238,9 +1287,22 @@ export function planWorkspaceAdoption(args: {
   items: WorkspaceAdoptionInput[];
   now?: Date;
 }): { plan: WorkspacePlan; path: string } {
-  const status = workspaceStatus(args.projectRoot, { adoptionSafe: true });
+  const items = normalizedAdoptionInputs(args.items);
+  const root = repositoryRoot(args.projectRoot);
+  const configuredProvider = loadConfig(root).config.provider;
+  if (configuredProvider.kind === "github") {
+    const prefix = `github:${configuredProvider.repository ?? ""}#`;
+    const invalid = items.find((item) =>
+      !item.workItem.startsWith(prefix) ||
+      !/^\d+$/u.test(item.workItem.slice(prefix.length)));
+    if (invalid) throw new Error(`PROVIDER_WORK_ITEM_INVALID: ${invalid.workItem}`);
+  }
+  const status = workspaceStatus(root, {
+    adoptionSafe: true,
+    providerWorkItems: items.map((item) => item.workItem),
+  });
   const timestamp = (args.now ?? new Date()).toISOString();
-  const operation = adoptionOperation(status, args.items, timestamp);
+  const operation = adoptionOperation(status, items, timestamp);
   const doneValues = new Set(
     status.config.provider.project?.doneValues.map((value) => value.toLowerCase()) ?? [],
   );
@@ -1450,6 +1512,11 @@ function appliedReceipt(plan: WorkspacePlan): WorkspaceReceipt | null {
   if (receipt.status === "applied" && receipt.after) {
     const current = workspaceStatus(plan.projectDir, {
       adoptionSafe: plan.operation.kind === "adopt",
+      providerObservation:
+        (plan.operation.kind === "allocate" || plan.operation.kind === "adopt") &&
+        plan.operation.providerObservationBound
+          ? receipt.after.provider
+          : undefined,
     });
     if (current.observedHash !== receipt.after.observedHash) {
       throw new Error(`CHANGE_ID_CONFLICT: ${plan.id} was applied but workspace state drifted`);
@@ -1602,7 +1669,10 @@ function applyWorkspaceAdoptionPlan(
   try {
     const previous = appliedReceipt(plan);
     if (previous) return previous;
-    const before = workspaceStatus(root, { adoptionSafe: true });
+    const providerWorkItems = plan.operation.providerObservationBound
+      ? plan.operation.items.map((item) => item.lease.workItem)
+      : undefined;
+    const before = workspaceStatus(root, { adoptionSafe: true, providerWorkItems });
     validateWorkspacePlan(before, plan, args.approval);
     let reobserved: Extract<WorkspacePlan["operation"], { kind: "adopt" }>;
     try {
@@ -1616,6 +1686,7 @@ function applyWorkspaceAdoptionPlan(
           branch: item.lease.branch,
         })),
         plan.operation.items[0].lease.createdAt,
+        plan.operation.providerObservationBound === true,
       );
     } catch (error) {
       throw new Error(
@@ -1666,7 +1737,10 @@ function applyWorkspaceAdoptionPlan(
           throw new Error("TEST_ADOPT_WRITE_FAILURE");
         }
       }
-      const after = workspaceStatus(root, { adoptionSafe: true });
+      const after = workspaceStatus(root, {
+        adoptionSafe: true,
+        providerObservation: reobserved.provider,
+      });
       assertAdoptionPostconditions(after, plan.operation);
       receipt.status = "applied";
       receipt.completedAt = (args.now ?? new Date()).toISOString();
@@ -1733,7 +1807,23 @@ export function applyWorkspacePlan(args: {
   }
   const previous = appliedReceipt(plan);
   if (previous) return previous;
-  const before = workspaceStatus(root);
+  const config = loadConfig(root).config;
+  if (
+    plan.operation.kind === "allocate" &&
+    !plan.operation.providerObservationBound &&
+    config.provider.kind === "github" &&
+    config.provider.project
+  ) {
+    throw new Error(
+      "WORKSPACE_PLAN_REPLAN_REQUIRED: legacy allocation plan does not bind GitHub Project state",
+    );
+  }
+  const before = workspaceStatus(root, {
+    providerWorkItems: plan.operation.kind === "allocate" &&
+        plan.operation.providerObservationBound
+      ? [plan.operation.lease.workItem]
+      : undefined,
+  });
   validateWorkspacePlan(before, plan, args.approval);
   const lock = acquireLock(plan.commonDir);
   const receiptPath = receiptFile(plan.commonDir, plan.id);
@@ -1832,7 +1922,12 @@ export function applyWorkspacePlan(args: {
     }
     receipt.status = "applied";
     receipt.completedAt = (args.now ?? new Date()).toISOString();
-    receipt.after = workspaceStatus(root);
+    receipt.after = workspaceStatus(root, {
+      providerObservation: plan.operation.kind === "allocate" &&
+          plan.operation.providerObservationBound
+        ? before.provider
+        : undefined,
+    });
     writeReceipt(receiptPath, receipt);
     return receipt;
   } catch (error) {
@@ -1962,7 +2057,10 @@ function rollbackWorkspaceAdoption(args: {
           detail: item.lease.workItem,
         });
       }
-      const rollbackAfter = workspaceStatus(args.root, { adoptionSafe: true });
+      const rollbackAfter = workspaceStatus(args.root, {
+        adoptionSafe: true,
+        providerObservation: receipt.before.provider,
+      });
       if (rollbackAfter.observedHash !== receipt.before.observedHash) {
         throw new Error("WORKSPACE_ROLLBACK_POSTCONDITION_FAILED: pre-adoption state was not restored");
       }
@@ -2149,7 +2247,9 @@ export function reviewWorkspace(args: {
   now?: Date;
 }): ReviewReceipt {
   if (args.command.length === 0) throw new Error("REVIEW_COMMAND_REQUIRED");
-  const status = workspaceStatus(args.projectRoot);
+  const status = workspaceStatus(args.projectRoot, {
+    providerObservation: { kind: "none", configured: false, available: true, items: [] },
+  });
   const commit = git(status.projectDir, [
     "rev-parse",
     "--verify",
@@ -2277,7 +2377,9 @@ export function retentionAuditWorkspace(args: {
   hostStateRoot?: string;
   now?: Date;
 }): RetentionAudit {
-  const status = workspaceStatus(args.projectRoot);
+  const status = workspaceStatus(args.projectRoot, {
+    providerObservation: { kind: "none", configured: false, available: true, items: [] },
+  });
   const now = args.now ?? new Date();
   const hostStateRoot = resolve(args.hostStateRoot ?? defaultHostStateRoot());
   const reviewDirectory = join(hostStateRoot, "reviews");

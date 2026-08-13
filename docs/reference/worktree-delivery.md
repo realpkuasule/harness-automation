@@ -44,6 +44,12 @@ harness-automation worktree configure \
 ```
 
 `--done-value` may repeat. GitLab and Jira currently report `blocked`.
+GitHub Issue metadata uses REST. A configured Project adds one batched GraphQL
+request per provider observation, independent of the number of leases; without
+a Project mapping, worktree commands use no GraphQL. Allocation and adoption
+bind the pending work items into that observation so an Issue missing from the
+configured Project is rejected before a plan is written. GraphQL exhaustion is
+reported as `GITHUB_GRAPHQL_RATE_LIMITED` and never bypasses a mutation gate.
 `--management-branch` identifies the one persistent management checkout without
 putting a host-specific path in repository policy. Enforced audit fails closed
 when that branch has zero or multiple observed checkouts. A detached Review

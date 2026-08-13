@@ -147,6 +147,61 @@ class GitHubTrackerTests(unittest.TestCase):
             ]
         )
 
+    def test_create_reuses_one_project_metadata_snapshot(self) -> None:
+        config = {
+            "repo": "owner/repo",
+            "project": {
+                "number": 7,
+                "statusField": "Status",
+                "priorityField": "Priority",
+            },
+        }
+        metadata = (
+            "PROJECT_7",
+            [
+                {"id": "STATUS", "name": "Status", "options": [{"id": "TODO", "name": "Todo"}]},
+                {"id": "PRIORITY", "name": "Priority", "options": [{"id": "MEDIUM", "name": "medium"}]},
+            ],
+        )
+        args = mock.Mock(
+            title="Title",
+            body=None,
+            body_file=None,
+            label=None,
+            assignee=None,
+            milestone=None,
+            status="Todo",
+            priority="medium",
+        )
+        with (
+            mock.patch.object(github_tracker, "load_config", return_value=config),
+            mock.patch.object(
+                github_tracker,
+                "run",
+                return_value=mock.Mock(stdout="https://github.com/owner/repo/issues/42\n"),
+            ),
+            mock.patch.object(github_tracker, "ensure_project_item", return_value="ITEM_42"),
+            mock.patch.object(github_tracker, "load_project_metadata", return_value=metadata) as load,
+            mock.patch.object(github_tracker, "set_project_single_select") as set_field,
+        ):
+            github_tracker.cmd_create(args)
+
+        load.assert_called_once_with(config)
+        self.assertEqual(set_field.call_count, 2)
+        self.assertTrue(all(call.args[-1] is metadata for call in set_field.call_args_list))
+
+    def test_show_uses_rest_issue_endpoint(self) -> None:
+        with (
+            mock.patch.object(github_tracker, "load_config", return_value={"repo": "owner/repo"}),
+            mock.patch.object(github_tracker, "gh_json", return_value={"number": 42}) as gh_json,
+            mock.patch("builtins.print"),
+        ):
+            github_tracker.cmd_show(mock.Mock(issue=42))
+
+        gh_json.assert_called_once_with([
+            "api", "--method", "GET", "repos/owner/repo/issues/42",
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()
