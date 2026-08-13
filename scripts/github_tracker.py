@@ -296,7 +296,7 @@ def project_items(config: dict[str, Any], *, limit: int = 100) -> list[dict[str,
     return coerce_items(payload)
 
 
-def project_metadata(config: dict[str, Any], field_name: str) -> tuple[str, dict[str, Any]]:
+def load_project_metadata(config: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     number = project_number(config)
     if number is None:
         fail("GitHub Project number is not configured in .github/project-workflow.json.")
@@ -308,6 +308,11 @@ def project_metadata(config: dict[str, Any], field_name: str) -> tuple[str, dict
         fail("Unable to resolve GitHub Project ID from `gh project view`.")
     field_payload = gh_json(["project", "field-list", str(number), "--owner", owner, "--format", "json"])
     fields = coerce_items(field_payload)
+    return project_id, fields
+
+
+def project_metadata(config: dict[str, Any], field_name: str) -> tuple[str, dict[str, Any]]:
+    project_id, fields = load_project_metadata(config)
     return project_id, resolve_project_field(fields, field_name)
 
 
@@ -363,8 +368,13 @@ def set_project_single_select(
     item_id: str,
     field_name: str,
     option_name: str,
+    metadata: tuple[str, list[dict[str, Any]]] | None = None,
 ) -> None:
-    project_id, field = project_metadata(config, field_name)
+    if metadata is None:
+        project_id, field = project_metadata(config, field_name)
+    else:
+        project_id, fields = metadata
+        field = resolve_project_field(fields, field_name)
     option_id = resolve_single_select_option_id(field, option_name, field_name)
     run([
         "gh",
@@ -503,8 +513,8 @@ def cmd_list(args: argparse.Namespace) -> None:
 def cmd_show(args: argparse.Namespace) -> None:
     config = load_config()
     repo = repo_slug(config)
-    result = run(["gh", "issue", "view", str(args.issue), "--repo", repo])
-    sys.stdout.write(result.stdout)
+    issue = gh_json(["api", "--method", "GET", f"repos/{repo}/issues/{args.issue}"])
+    print(json.dumps(issue, indent=2, ensure_ascii=False))
 
 
 def cmd_create(args: argparse.Namespace) -> None:
@@ -534,10 +544,11 @@ def cmd_create(args: argparse.Namespace) -> None:
         return
     issue_no = int(url.rstrip("/").split("/")[-1])
     item_id = ensure_project_item(config, issue_no)
-    set_project_single_select(config, item_id, status_field_name(config), status)
+    metadata = load_project_metadata(config)
+    set_project_single_select(config, item_id, status_field_name(config), status, metadata)
     print(f"Project status: {status}")
     priority = args.priority or default_priority(config)
-    set_project_single_select(config, item_id, priority_field_name(config), priority)
+    set_project_single_select(config, item_id, priority_field_name(config), priority, metadata)
     print(f"Project priority: {priority}")
 
 

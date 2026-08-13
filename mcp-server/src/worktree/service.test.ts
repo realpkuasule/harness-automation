@@ -39,7 +39,7 @@ function installAdoptionGh(): void {
   const bin = mkdtempSync(join(tmpdir(), "harness-adopt-gh-"));
   repositories.push(bin);
   const script = `const fs = require("node:fs");
-const command = process.argv[2];
+const graphql = process.argv.includes("graphql");
 if (process.env.HARNESS_TEST_GH_COUNT_FILE) {
   const file = process.env.HARNESS_TEST_GH_COUNT_FILE;
   const count = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) + 1 : 1;
@@ -47,16 +47,21 @@ if (process.env.HARNESS_TEST_GH_COUNT_FILE) {
   if (count > Number(process.env.HARNESS_TEST_GH_FAIL_AFTER || "Infinity")) process.exit(3);
 }
 const status = process.env.HARNESS_TEST_GH_STATUS || "In Progress";
-if (command === "project") {
-  process.stdout.write(JSON.stringify({ items: process.env.HARNESS_TEST_GH_PROJECT_MISSING ? [] : [{
-    content: { number: 301 }, status
-  }] }));
-} else if (command === "issue") {
+if (graphql) {
+  process.stdout.write(JSON.stringify({ data: { repository: {
+    issue0: { projectItems: {
+      pageInfo: { hasNextPage: false },
+      nodes: process.env.HARNESS_TEST_GH_PROJECT_MISSING ? [] : [{
+      project: { number: 2, owner: { __typename: "User", login: "example" } },
+      configuredField: { __typename: "ProjectV2ItemFieldSingleSelectValue", name: status }
+    }] } }
+  } } }));
+} else if (process.argv.some((value) => value.includes("repos/example/project/issues/301"))) {
   process.stdout.write(JSON.stringify({
     number: 301,
-    state: process.env.HARNESS_TEST_GH_ISSUE_STATE || "OPEN",
+    state: (process.env.HARNESS_TEST_GH_ISSUE_STATE || "OPEN").toLowerCase(),
     title: "Adopt fixture",
-    url: "https://github.com/example/project/issues/301"
+    html_url: "https://github.com/example/project/issues/301"
   }));
 } else {
   process.exit(2);
@@ -824,6 +829,101 @@ describe("hash-approved worktree lifecycle", () => {
       maxPersistentWorktrees: 4,
     });
     expect(() => planWorkspaceAllocation(allocation)).toThrow(/PROVIDER_UNAVAILABLE/);
+  });
+
+  it("queries the pending allocation once and requires its Project mapping", () => {
+    if (process.platform === "win32") return;
+    const root = repository();
+    installAdoptionGh();
+    configure(root, {
+      provider: {
+        kind: "github",
+        repository: "example/project",
+        project: {
+          owner: "example",
+          number: 2,
+          statusField: "Status",
+          doneValues: ["Done"],
+        },
+      },
+    });
+    const calls = join(root, "provider-count");
+    process.env.HARNESS_TEST_GH_COUNT_FILE = calls;
+    const allocationPath = `${root}-issue-301`;
+    repositories.push(allocationPath);
+    const planned = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#301",
+      branch: "issue-301",
+      path: allocationPath,
+      owner: "owner",
+    });
+    expect(planned.plan.operation).toMatchObject({
+      kind: "allocate",
+      providerObservationBound: true,
+    });
+    expect(readFileSync(calls, "utf8")).toBe("2");
+
+    process.env.HARNESS_TEST_GH_PROJECT_MISSING = "1";
+    expect(() => planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#301",
+      branch: "issue-301",
+      path: `${root}-issue-301`,
+      owner: "owner",
+    })).toThrow(/PROVIDER_PROJECT_ITEM_REQUIRED/);
+
+    delete process.env.HARNESS_TEST_GH_PROJECT_MISSING;
+    writeFileSync(calls, "0");
+    const receipt = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    expect(readFileSync(calls, "utf8")).toBe("2");
+    process.env.HARNESS_TEST_GH_FAIL_AFTER = "2";
+    expect(applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toEqual(receipt);
+    expect(readFileSync(calls, "utf8")).toBe("2");
+  });
+
+  it("requires configured-Project legacy allocation plans to be regenerated", () => {
+    if (process.platform === "win32") return;
+    const root = repository();
+    installAdoptionGh();
+    configure(root, {
+      provider: {
+        kind: "github",
+        repository: "example/project",
+        project: {
+          owner: "example",
+          number: 2,
+          statusField: "Status",
+          doneValues: ["Done"],
+        },
+      },
+    });
+    const planned = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#301",
+      branch: "issue-301",
+      path: `${root}-issue-301`,
+      owner: "owner",
+    });
+    if (planned.plan.operation.kind !== "allocate") throw new Error("expected allocate plan");
+    delete planned.plan.operation.providerObservationBound;
+    planned.plan.planHash = hashObject(withoutHash(planned.plan));
+    writeFileSync(join(root, planned.path), prettyJson(planned.plan));
+
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toThrow(/WORKSPACE_PLAN_REPLAN_REQUIRED/);
+    expect(worktreeCount(root)).toBe(1);
   });
 
   it("rejects malformed, tampered, mismatched, and unsafe rollback requests", () => {
@@ -1622,7 +1722,7 @@ process.stdout.write(fs.readFileSync(process.argv[2]));
     expect(workspaceStatus(root).leases).toHaveLength(1);
   });
 
-  it("restores every removed lease when rollback final observation fails", () => {
+  it("reuses the rollback preflight provider snapshot after removing leases", () => {
     if (process.platform === "win32") return;
     const root = repository();
     installAdoptionGh();
@@ -1661,20 +1761,11 @@ process.stdout.write(fs.readFileSync(process.argv[2]));
     process.env.HARNESS_TEST_GH_COUNT_FILE = providerCount;
     process.env.HARNESS_TEST_GH_FAIL_AFTER = "2";
 
-    expect(() => rollbackWorkspaceChange({
+    expect(rollbackWorkspaceChange({
       projectRoot: root,
       changeId: receipt.id,
-    })).toThrow(/WORKSPACE_ROLLBACK_POSTCONDITION_FAILED/);
-    delete process.env.HARNESS_TEST_GH_COUNT_FILE;
-    delete process.env.HARNESS_TEST_GH_FAIL_AFTER;
-    expect(workspaceStatus(root).leases).toHaveLength(1);
-    const saved = JSON.parse(readFileSync(join(
-      git(root, "rev-parse", "--path-format=absolute", "--git-common-dir"),
-      "harness", "worktree-delivery", "receipts", `${receipt.id}.json`,
-    ), "utf8"));
-    expect(saved).toMatchObject({ status: "applied", compensationStatus: "completed" });
-    expect(rollbackWorkspaceChange({ projectRoot: root, changeId: receipt.id }).status)
-      .toBe("rolled-back");
+    })).toMatchObject({ status: "rolled-back" });
+    expect(readFileSync(providerCount, "utf8")).toBe("2");
   });
 
   it("binds configured GitHub Issue and Project state and fails closed on provider drift", () => {
@@ -1756,9 +1847,140 @@ process.stdout.write(fs.readFileSync(process.argv[2]));
       }],
     })).toThrow(/PROVIDER_PROJECT_ITEM_REQUIRED/);
   });
+
+  it("observes the provider once before adopt mutation and reuses that snapshot", () => {
+    if (process.platform === "win32") return;
+    const root = repository();
+    installAdoptionGh();
+    configure(root, {
+      maxPersistentWorktrees: 2,
+      provider: {
+        kind: "github",
+        repository: "example/project",
+        project: {
+          owner: "example",
+          number: 2,
+          statusField: "Status",
+          doneValues: ["Done"],
+        },
+      },
+    });
+    const worktreePath = `${root}-adopt-provider-once`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "issue-provider-once", worktreePath, "HEAD");
+    const calls = join(root, "provider-count");
+    process.env.HARNESS_TEST_GH_COUNT_FILE = calls;
+    const planned = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#301",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-provider-once",
+      }],
+    });
+    expect(readFileSync(calls, "utf8")).toBe("2");
+    const receipt = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    expect(readFileSync(calls, "utf8")).toBe("4");
+
+    process.env.HARNESS_TEST_GH_FAIL_AFTER = "4";
+    expect(applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toEqual(receipt);
+    expect(readFileSync(calls, "utf8")).toBe("4");
+  });
+
+  it("applies and rolls back a legacy adopt plan with one pre-mutation observation", () => {
+    if (process.platform === "win32") return;
+    const root = repository();
+    installAdoptionGh();
+    configure(root, {
+      maxPersistentWorktrees: 2,
+      provider: {
+        kind: "github",
+        repository: "example/project",
+        project: {
+          owner: "example",
+          number: 2,
+          statusField: "Status",
+          doneValues: ["Done"],
+        },
+      },
+    });
+    const worktreePath = `${root}-adopt-provider-legacy`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "issue-provider-legacy", worktreePath, "HEAD");
+    const planned = planWorkspaceAdoption({
+      projectRoot: root,
+      items: [{
+        workItem: "github:example/project#301",
+        owner: "owner",
+        path: worktreePath,
+        branch: "issue-provider-legacy",
+      }],
+    });
+    const legacyStatus = workspaceStatus(root, { adoptionSafe: true });
+    if (planned.plan.operation.kind !== "adopt") throw new Error("expected adopt plan");
+    delete planned.plan.operation.providerObservationBound;
+    planned.plan.observedHash = legacyStatus.observedHash;
+    planned.plan.planHash = hashObject(withoutHash(planned.plan));
+    writeFileSync(join(root, planned.path), prettyJson(planned.plan));
+
+    const receipt = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    expect(receipt.status).toBe("applied");
+    const calls = join(root, "provider-count");
+    process.env.HARNESS_TEST_GH_COUNT_FILE = calls;
+    process.env.HARNESS_TEST_GH_FAIL_AFTER = "2";
+    expect(rollbackWorkspaceChange({
+      projectRoot: root,
+      changeId: receipt.id,
+    })).toMatchObject({ status: "rolled-back" });
+    expect(readFileSync(calls, "utf8")).toBe("2");
+  });
 });
 
 describe("temporary review and retention", () => {
+  it("does not query the configured provider", () => {
+    if (process.platform === "win32") return;
+    const root = repository();
+    installAdoptionGh();
+    configure(root, {
+      provider: {
+        kind: "github",
+        repository: "example/project",
+        project: {
+          owner: "example",
+          number: 2,
+          statusField: "Status",
+          doneValues: ["Done"],
+        },
+      },
+    });
+    const calls = join(root, "provider-count");
+    process.env.HARNESS_TEST_GH_COUNT_FILE = calls;
+    const hostStateRoot = mkdtempSync(join(tmpdir(), "harness-host-state-"));
+    repositories.push(hostStateRoot);
+
+    reviewWorkspace({
+      projectRoot: root,
+      commit: "HEAD",
+      command: ["git", "status", "--short"],
+      hostStateRoot,
+    });
+    retentionAuditWorkspace({ projectRoot: root, hostStateRoot });
+    expect(existsSync(calls)).toBe(false);
+  });
+
   it("uses a detached temporary worktree and leaves zero worktrees after a clean review", () => {
     const root = repository();
     const hostStateRoot = mkdtempSync(join(tmpdir(), "harness-host-state-"));
@@ -1928,5 +2150,15 @@ describe("temporary review and retention", () => {
       passing: false,
       status: "blocked",
     });
+    for (const id of [
+      "workspace.clean-before-close",
+      "workspace.unique-commits-protected",
+      "workspace.done-no-persistent-worktree",
+    ]) {
+      expect(audit.policies.find((policy) => policy.id === id)).toMatchObject({
+        status: "blocked",
+        passing: false,
+      });
+    }
   });
 });

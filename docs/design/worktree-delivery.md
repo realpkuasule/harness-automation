@@ -179,9 +179,16 @@ and long-running debugging value are guidance, not deterministic policy.
 The portable baseline has no Provider dependency.
 
 The GitHub adapter uses `gh` with argv and configuration-provided repository,
-Project owner/number, status field, and Done values. Project fields are not
-hard-coded. GitLab and Jira configuration is accepted but reports `blocked`
-until a real adapter is installed.
+Project owner/number, status field, and Done values. Issue state comes from the
+REST API. When Project mapping is configured, one batched GraphQL request reads
+only the relevant Issues' ProjectV2 items; the same observation is reused
+through planning and drift checks instead of listing the whole Project or
+querying it once per lease. Project fields are not hard-coded. A GraphQL quota
+failure reports `GITHUB_GRAPHQL_RATE_LIMITED` with the REST rate-limit reset
+time when available. Local policies remain observable, but lifecycle mutations
+still fail closed while required Project state is unavailable. GitLab and Jira
+configuration is accepted but reports `blocked` until a real adapter is
+installed.
 
 Agent behavior is CLI-first. Claude Code, Codex, DeepSeek/GLM, and unknown
 agents use the same command contract. An optional Codex Thread adapter may add

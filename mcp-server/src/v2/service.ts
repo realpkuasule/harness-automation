@@ -585,7 +585,7 @@ export function driftProject(projectRoot: string): {
   };
 }
 
-export function checkProject(projectRoot: string): {
+export function checkProject(projectRoot: string, observedDrift?: ReturnType<typeof driftProject>): {
   ok: boolean;
   policyDigest: string;
   agents: Array<{ id: string; configured: boolean; loaded: boolean; enforced: boolean; passing: boolean; status: "verified" | "failing" | "blocked" }>;
@@ -597,7 +597,7 @@ export function checkProject(projectRoot: string): {
   const root = resolve(projectRoot);
   const policy = readJson<PolicyDocument>(harnessPath(root, "policy.yaml"));
   const digest = hashObject(policy);
-  const drift = driftProject(root);
+  const drift = observedDrift ?? driftProject(root);
   const agentsLoaded = ["AGENTS.md", "CLAUDE.md"].some((path) => {
     const target = join(root, path);
     return existsSync(target) && readFileSync(target, "utf8").includes(digest);
@@ -851,7 +851,8 @@ export function runTrustedChecks(args: {
   };
 } {
   const root = resolve(args.projectRoot);
-  const policy = checkProject(root);
+  const drift = driftProject(root);
+  const policy = checkProject(root, drift);
   const policyDocument = readJson<PolicyDocument>(harnessPath(root, "policy.yaml"));
   const discovery = readJson<Discovery>(harnessPath(root, "discovery.json"));
   const evaluationEnabled = (policyDocument.project.qualityProfiles ?? [])
@@ -867,7 +868,7 @@ export function runTrustedChecks(args: {
       currentEvalPaths.every((path) => approvedEvalPaths.has(path));
     if (!sameEvalSourceSet) {
       evalPreflightError = "approved eval source set changed";
-    } else if (driftProject(root).sourceDrift.some((path) => approvedEvalPaths.has(path))) {
+    } else if (drift.sourceDrift.some((path) => approvedEvalPaths.has(path))) {
       evalPreflightError = "approved eval sources drifted";
     } else {
       try {
@@ -912,7 +913,7 @@ export function runTrustedChecks(args: {
           audit: null,
         }
       : (() => {
-          const audit = auditWorkspace(root);
+          const audit = drift.workspace!;
           return {
             configured: true,
             available: true,

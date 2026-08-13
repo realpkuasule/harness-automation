@@ -211,6 +211,7 @@ export type WorkspaceOperation =
       lease: WorkspaceLease;
       startPoint: string;
       createBranch: boolean;
+      providerObservationBound?: true;
     }
   | {
       kind: "adopt";
@@ -227,6 +228,7 @@ export type WorkspaceOperation =
       };
       providerHash: string;
       provider: ProviderObservation;
+      providerObservationBound?: true;
       items: WorkspaceAdoptionPlanItem[];
     }
   | {

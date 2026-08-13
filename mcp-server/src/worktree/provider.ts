@@ -31,85 +31,201 @@ function commandJson(cwd: string, command: string, args: string[]): {
   }
 }
 
-function findIssueNumber(node: unknown): number | null {
-  if (Array.isArray(node)) {
-    for (const value of node) {
-      const found = findIssueNumber(value);
-      if (found !== null) return found;
-    }
-    return null;
-  }
-  if (!node || typeof node !== "object") return null;
-  const object = node as Record<string, unknown>;
-  if (typeof object.number === "number") return object.number;
-  for (const value of Object.values(object)) {
-    const found = findIssueNumber(value);
-    if (found !== null) return found;
-  }
-  return null;
+function workItems(
+  leases: WorkspaceLease[],
+  additionalWorkItems: string[],
+): string[] {
+  return [...new Set([
+    ...leases.map((lease) => lease.workItem),
+    ...additionalWorkItems,
+  ])];
 }
 
-function findConfiguredField(node: unknown, fieldName: string): string | undefined {
-  if (Array.isArray(node)) {
-    for (const value of node) {
-      const found = findConfiguredField(value, fieldName);
-      if (found !== undefined) return found;
-    }
-    return undefined;
-  }
+function issueNumber(workItem: string, repository: string): number | null {
+  const prefix = `github:${repository}#`;
+  if (!workItem.startsWith(prefix)) return null;
+  const value = workItem.slice(prefix.length);
+  return /^\d+$/u.test(value) ? Number(value) : null;
+}
+
+function projectFieldValue(node: unknown): string | undefined {
   if (!node || typeof node !== "object") return undefined;
-  const object = node as Record<string, unknown>;
-  const direct = Object.entries(object)
-    .find(([key]) => key.toLowerCase() === fieldName.toLowerCase())?.[1];
-  if (typeof direct === "string") return direct;
-  const field = object.field;
-  if (field && typeof field === "object") {
-    const fieldObject = field as Record<string, unknown>;
-    if (fieldObject.name === fieldName || fieldObject.title === fieldName) {
-      for (const key of ["name", "optionName", "text", "value"]) {
-        if (typeof object[key] === "string" && object[key] !== fieldName) {
-          return object[key] as string;
-        }
-      }
-    }
-  }
-  for (const value of Object.values(object)) {
-    const found = findConfiguredField(value, fieldName);
-    if (found !== undefined) return found;
+  const value = node as Record<string, unknown>;
+  for (const key of ["name", "text", "title", "date"]) {
+    if (typeof value[key] === "string") return value[key];
   }
   return undefined;
 }
 
+function ownerLogin(node: unknown): string | undefined {
+  if (!node || typeof node !== "object") return undefined;
+  const login = (node as Record<string, unknown>).login;
+  return typeof login === "string" ? login : undefined;
+}
+
+function graphQlRateLimitError(root: string, error: string): string {
+  if (!/rate limit|rate_limit|API rate limit exceeded/iu.test(error)) {
+    return `GITHUB_PROJECT_QUERY_FAILED: ${error}`;
+  }
+  const rateLimit = commandJson(root, "gh", ["api", "rate_limit"]);
+  const resources = rateLimit.value && typeof rateLimit.value === "object"
+    ? (rateLimit.value as Record<string, unknown>).resources
+    : undefined;
+  const graphQl = resources && typeof resources === "object"
+    ? (resources as Record<string, unknown>).graphql
+    : undefined;
+  const reset = graphQl && typeof graphQl === "object"
+    ? (graphQl as Record<string, unknown>).reset
+    : undefined;
+  const resetAt = typeof reset === "number" && Number.isFinite(reset)
+    ? `; resetAt=${new Date(reset * 1000).toISOString()}`
+    : "";
+  return `GITHUB_GRAPHQL_RATE_LIMITED${resetAt}: ${error}`;
+}
+
 function projectItems(
   root: string,
-  config: WorktreeDeliveryConfig,
-): { items: unknown[]; error?: string } {
-  const project = config.provider.project;
-  if (!project) return { items: [] };
+  repository: string,
+  project: NonNullable<WorktreeDeliveryConfig["provider"]["project"]>,
+  numbers: number[],
+): { values: Map<number, { present: boolean; status?: string }>; error?: string } {
+  const values = new Map<number, { present: boolean; status?: string }>();
+  if (numbers.length === 0) return { values };
+  const [owner, name] = repository.split("/", 2);
+  const selections = numbers.map((number, index) => `
+    issue${index}: issue(number: ${number}) {
+      projectItems(first: 100, includeArchived: true) {
+        pageInfo { hasNextPage }
+        nodes {
+          project {
+            number
+            owner {
+              __typename
+              ... on User { login }
+              ... on Organization { login }
+            }
+          }
+          configuredField: fieldValueByName(name: $statusField) {
+            __typename
+            ... on ProjectV2ItemFieldSingleSelectValue { name }
+            ... on ProjectV2ItemFieldTextValue { text }
+            ... on ProjectV2ItemFieldIterationValue { title }
+            ... on ProjectV2ItemFieldDateValue { date }
+          }
+        }
+      }
+    }`).join("\n");
+  const query = `query($owner: String!, $name: String!, $statusField: String!) {
+    repository(owner: $owner, name: $name) {${selections}
+    }
+  }`;
   const result = commandJson(root, "gh", [
-    "project",
-    "item-list",
-    String(project.number),
-    "--owner",
-    project.owner,
-    "--limit",
-    "1000",
-    "--format",
-    "json",
+    "api",
+    "graphql",
+    "-f",
+    `query=${query}`,
+    "-f",
+    `owner=${owner}`,
+    "-f",
+    `name=${name}`,
+    "-f",
+    `statusField=${project.statusField}`,
   ]);
-  if (!result.ok) return { items: [], error: result.error };
-  if (Array.isArray(result.value)) return { items: result.value };
-  if (result.value && typeof result.value === "object") {
-    const items = (result.value as Record<string, unknown>).items;
-    if (Array.isArray(items)) return { items };
+  if (!result.ok) {
+    return { values, error: graphQlRateLimitError(root, result.error ?? "unknown error") };
   }
-  return { items: [] };
+  const errors = result.value && typeof result.value === "object"
+    ? (result.value as Record<string, unknown>).errors
+    : undefined;
+  if (Array.isArray(errors) && errors.length > 0) {
+    const detail = errors.map((error) =>
+      error && typeof error === "object" && typeof (error as Record<string, unknown>).message === "string"
+        ? (error as Record<string, unknown>).message
+        : "unknown GraphQL error").join("; ");
+    return { values, error: graphQlRateLimitError(root, detail) };
+  }
+  const data = result.value && typeof result.value === "object"
+    ? (result.value as Record<string, unknown>).data
+    : undefined;
+  const repositoryValue = data && typeof data === "object"
+    ? (data as Record<string, unknown>).repository
+    : undefined;
+  if (!repositoryValue || typeof repositoryValue !== "object") {
+    return { values, error: "GITHUB_PROJECT_QUERY_FAILED: GraphQL response omitted repository" };
+  }
+  numbers.forEach((number, index) => {
+    const issue = (repositoryValue as Record<string, unknown>)[`issue${index}`];
+    if (!issue || typeof issue !== "object") return;
+    const connection = issue && typeof issue === "object"
+      ? (issue as Record<string, unknown>).projectItems
+      : undefined;
+    const nodes = connection && typeof connection === "object"
+      ? (connection as Record<string, unknown>).nodes
+      : undefined;
+    const pageInfo = connection && typeof connection === "object"
+      ? (connection as Record<string, unknown>).pageInfo
+      : undefined;
+    if (
+      !Array.isArray(nodes) ||
+      !pageInfo ||
+      typeof pageInfo !== "object" ||
+      typeof (pageInfo as Record<string, unknown>).hasNextPage !== "boolean"
+    ) return;
+    const match = Array.isArray(nodes) ? nodes.find((candidate) => {
+      if (!candidate || typeof candidate !== "object") return false;
+      const candidateProject = (candidate as Record<string, unknown>).project;
+      if (!candidateProject || typeof candidateProject !== "object") return false;
+      const record = candidateProject as Record<string, unknown>;
+      return record.number === project.number &&
+        ownerLogin(record.owner)?.toLowerCase() === project.owner.toLowerCase();
+    }) : undefined;
+    if (
+      match === undefined &&
+      (pageInfo as Record<string, unknown>).hasNextPage === true
+    ) {
+      return;
+    }
+    values.set(number, {
+      present: match !== undefined,
+      status: match && typeof match === "object"
+        ? projectFieldValue((match as Record<string, unknown>).configuredField)
+        : undefined,
+    });
+  });
+  const missing = numbers.find((number) => !values.has(number));
+  if (missing !== undefined) {
+    const issue = (repositoryValue as Record<string, unknown>)[
+      `issue${numbers.indexOf(missing)}`
+    ];
+    const connection = issue && typeof issue === "object"
+      ? (issue as Record<string, unknown>).projectItems
+      : undefined;
+    const pageInfo = connection && typeof connection === "object"
+      ? (connection as Record<string, unknown>).pageInfo
+      : undefined;
+    if (
+      pageInfo &&
+      typeof pageInfo === "object" &&
+      (pageInfo as Record<string, unknown>).hasNextPage === true
+    ) {
+      return {
+        values,
+        error: `GITHUB_PROJECT_MAPPING_TRUNCATED: Issue #${missing} has more than 100 Project items`,
+      };
+    }
+    return {
+      values,
+      error: `GITHUB_PROJECT_QUERY_FAILED: GraphQL response omitted Issue #${missing} Project items`,
+    };
+  }
+  return { values };
 }
 
 export function observeProvider(
   root: string,
   config: WorktreeDeliveryConfig,
   observedLeases: WorkspaceLease[],
+  additionalWorkItems: string[] = [],
 ): ProviderObservation {
   if (config.provider.kind === "none") {
     return { kind: "none", configured: false, available: true, items: [] };
@@ -124,7 +240,7 @@ export function observeProvider(
     };
   }
   const repository = config.provider.repository?.trim();
-  if (!repository) {
+  if (!repository || !/^[^/]+\/[^/]+$/u.test(repository)) {
     return {
       kind: "github",
       configured: true,
@@ -133,37 +249,29 @@ export function observeProvider(
       error: "GitHub provider requires repository",
     };
   }
-  const project = projectItems(root, config);
-  if (project.error) {
+  const requested = workItems(observedLeases, additionalWorkItems);
+  const numbered = requested.map((workItem) => ({
+    workItem,
+    number: issueNumber(workItem, repository),
+  }));
+  const invalid = numbered.find((item) => item.number === null);
+  if (invalid) {
     return {
       kind: "github",
       configured: true,
       available: false,
       items: [],
-      error: project.error,
+      error: `GitHub work item must match github:${repository}#<number>: ${invalid.workItem}`,
     };
   }
+
   const items: ProviderItemObservation[] = [];
-  for (const lease of observedLeases) {
-    const match = lease.workItem.match(/#(\d+)$/u);
-    if (!match) {
-      return {
-        kind: "github",
-        configured: true,
-        available: false,
-        items,
-        error: `GitHub work item must end with #<number>: ${lease.workItem}`,
-      };
-    }
-    const number = Number(match[1]);
+  for (const item of numbered) {
     const issue = commandJson(root, "gh", [
-      "issue",
-      "view",
-      String(number),
-      "--repo",
-      repository,
-      "--json",
-      "number,state,title,url",
+      "api",
+      "--method",
+      "GET",
+      `repos/${repository}/issues/${item.number}`,
     ]);
     if (!issue.ok) {
       return {
@@ -171,20 +279,53 @@ export function observeProvider(
         configured: true,
         available: false,
         items,
-        error: issue.error,
+        error: `GITHUB_ISSUE_QUERY_FAILED: ${issue.error}`,
       };
     }
-    const issueValue = issue.value as Record<string, unknown>;
-    const projectItem = project.items.find((item) => findIssueNumber(item) === number);
+    const value = issue.value as Record<string, unknown>;
+    if (value.pull_request !== undefined) {
+      return {
+        kind: "github",
+        configured: true,
+        available: false,
+        items,
+        error: `GITHUB_WORK_ITEM_NOT_ISSUE: ${item.workItem}`,
+      };
+    }
     items.push({
-      workItem: lease.workItem,
-      state: String(issueValue.state ?? "UNKNOWN"),
-      projectItemPresent: config.provider.project ? projectItem !== undefined : undefined,
-      projectStatus: config.provider.project && projectItem
-        ? findConfiguredField(projectItem, config.provider.project.statusField)
-        : undefined,
-      url: typeof issueValue.url === "string" ? issueValue.url : undefined,
+      workItem: item.workItem,
+      state: String(value.state ?? "UNKNOWN").toUpperCase(),
+      url: typeof value.html_url === "string"
+        ? value.html_url
+        : typeof value.url === "string"
+          ? value.url
+          : undefined,
     });
+  }
+
+  const project = config.provider.project;
+  if (!project) {
+    return { kind: "github", configured: true, available: true, items };
+  }
+  const observedProject = projectItems(
+    root,
+    repository,
+    project,
+    numbered.map((item) => item.number as number),
+  );
+  for (const [index, item] of numbered.entries()) {
+    const value = observedProject.values.get(item.number as number);
+    items[index].projectItemPresent = value?.present;
+    items[index].projectStatus = value?.status;
+  }
+  if (observedProject.error) {
+    return {
+      kind: "github",
+      configured: true,
+      available: false,
+      items,
+      error: observedProject.error,
+    };
   }
   return { kind: "github", configured: true, available: true, items };
 }

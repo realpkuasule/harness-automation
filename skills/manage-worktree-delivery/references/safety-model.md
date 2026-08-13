@@ -40,7 +40,7 @@
 
 无 Provider 时仍可执行本机 `status`、`audit`、`review` 和保留期审计。
 
-GitHub Adapter 使用配置中的 repository、Project owner/number、status field 和 Done values；不得硬编码字段名。GitLab/Jira 未安装 Adapter 时必须显示 `blocked`。
+GitHub Adapter 使用配置中的 repository、Project owner/number、status field 和 Done values；不得硬编码字段名。Issue 状态走 REST；只有 ProjectV2 映射走一次批量 GraphQL，并在同一计划/漂移检查中复用观测。未配置 Project 时不得调用 GraphQL。配额耗尽必须显示 `GITHUB_GRAPHQL_RATE_LIMITED`，本地规则继续可观测，但需要 Project 证据的 mutation 仍 fail closed。GitLab/Jira 未安装 Adapter 时必须显示 `blocked`。
 
 批量接管必须在同一 `apply.lock` 内重采 path、branch、HEAD、index、dirty evidence/patch、租约缺失、host binding、容量和 Provider 状态。全部通过后才可写 lease；接管不得调用任何 `git worktree add/remove`、checkout 或 branch/ref 变更命令。
 
