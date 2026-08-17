@@ -1,0 +1,29 @@
+# harness-automation session 工作流默认策略（随包分发）
+# 项目可用 .harness/session-workflow.yaml 覆盖本文件；
+# 策略变更必须走 harness plan/apply 计划哈希批准流程，CLI 只读不写。
+schemaVersion: "session-workflow/1.0"
+thresholds:
+  turns: 12
+  steps: 150
+  llmMinutes: 30
+  titleChanges: 2
+  retries: 3
+  inboxSplices: 8
+  inputTokens: 5000000
+templates:
+  handoff: "handoff.md"
+  seed: "seed.md"
+provider:
+  project:
+    # provider 主体（repository / project 编号 / statusField）复用 .harness/worktree-delivery.json；
+    # 此处只声明 issue 附加字段名，供 session handoff 写入 ProjectV2 字段时使用。
+    handoffDocField: "Handoff Doc"
+    acceptanceField: "Acceptance Criteria"
+    # 看板 Status 字段显示名 <-> 协议状态名的确定性映射。
+    statusValues:
+      in-progress: "In Progress"
+      ready-for-review: "Ready for Review"
+seed:
+  constraints: >
+    不把 AI 自然语言摘要当作状态事实；进展只认 git 产物 + harness 回执 + issue 字段；
+    无回执证据不流转 issue 状态；交接文档 SEED 段由 CLI 确定性生成，勿手改。
