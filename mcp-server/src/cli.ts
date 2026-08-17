@@ -48,6 +48,7 @@ import {
   workspaceStatus,
 } from "./worktree/service.js";
 import type { WorktreeDeliveryConfig } from "./worktree/types.js";
+import { runSessionCommand } from "./session/cli.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -63,7 +64,7 @@ function ok(message: string): void { console.log(`${GREEN}✔${NC} ${message}`);
 function warn(message: string): void { console.log(`${YELLOW}⚠${NC} ${message}`); }
 function fail(message: string): void { console.error(`${RED}✘${NC} ${message}`); }
 
-interface ParsedArguments {
+export interface ParsedArguments {
   positionals: string[];
   values: Map<string, string[]>;
   flags: Set<string>;
@@ -401,6 +402,9 @@ Usage:
   harness-automation worktree adopt --manifest <json-path> [--project .]
   harness-automation worktree review [--commit <sha>] [--project .] -- <command> [args...]
   harness-automation worktree close --work-item <provider:id> --accepted-commit <sha> [--project .]
+  harness-automation session handoff --work-item <provider:repo#issue> --session <session-id> [--to-status ready-for-review] [--dry-run] [--project .]
+  harness-automation session status [--work-item <provider:repo#issue>] [--project .]
+  harness-automation session seed --work-item <provider:repo#issue> [--project .]
 
 All workflow commands emit stable JSON. Apply requires the exact hash printed by plan.
 Custom stack identifiers use lowercase kebab-case. Unknown stacks retain generic policies and report stack-specific enforcement as blocked.`);
@@ -483,6 +487,9 @@ function runWorkflow(argv: string[]): void {
       return;
     case "worktree":
       runWorktreeCommand(root, args, trailingCommand);
+      return;
+    case "session":
+      runSessionCommand(root, args);
       return;
     case "help":
     case "--help":

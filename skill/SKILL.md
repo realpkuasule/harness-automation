@@ -142,6 +142,16 @@ node <skill目录>/scripts/run.mjs context --project <项目绝对路径> --agen
 
 普通 Git 仓库的 `worktree status|audit|review|retention-audit` 不要求 PRD intake。正式启用 worktree policy 仍必须先生成计划，并由负责人批准完整哈希。
 
+## 会话交接协议
+
+长会话该切就切，恢复成本靠交接物落盘趋近于零。会话切换的交接、校验、回执与 issue 流转全部由 CLI `session` 命令组确定性执行（无 AI 参与），完整协议见 [session-workflow.md](references/session-workflow.md)。要点：
+
+- 跨会话进展只认 git 产物 + harness 回执 + GitHub issue 字段；AI 自然语言摘要不算状态事实。
+- 交接分两阶段：先 `session handoff` 生成 `docs/HANDOFF-<issue>.md` 模板骨架，Agent 填充内容段后再次运行同一命令完成校验、回执、receipts 评论与 `in-progress → ready-for-review` 流转；`--dry-run` 全程零写入。
+- 无回执证据、交接文档缺节/引用路径不存在/回执 id 与回执库不一致时，CLI 拒绝流转、不留半成品。
+- 阈值、seed/交接模板与字段映射存于 `.harness/session-workflow.yaml`（缺省用包内默认，CLI 只读）；其变更走 harness 计划哈希批准。
+- issue 写入复用既有 `gh` 凭据通道与 `.harness/worktree-delivery.json` 的 provider 映射，不新造凭据机制、不重复实现 worktree 逻辑。
+
 ## 回滚
 
 ```bash

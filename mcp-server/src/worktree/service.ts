@@ -205,7 +205,7 @@ function hostBindingFile(commonDir: string): string {
   return safePath(commonDir, HOST_BINDING_PATH);
 }
 
-function loadConfig(root: string): {
+export function loadConfig(root: string): {
   configured: boolean;
   config: WorktreeDeliveryConfig;
   legacyBinding?: WorktreeHostBinding;

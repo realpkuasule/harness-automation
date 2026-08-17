@@ -6,7 +6,7 @@ import type {
   WorkspaceLease,
 } from "./types.js";
 
-function commandJson(cwd: string, command: string, args: string[]): {
+export function commandJson(cwd: string, command: string, args: string[]): {
   ok: boolean;
   value?: unknown;
   error?: string;
