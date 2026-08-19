@@ -26,6 +26,7 @@ import {
   planWorkspaceAllocation,
   planWorkspaceClose,
   planWorkspaceConfiguration,
+  planWorkspaceRebind,
   rollbackWorkspaceChange,
   reviewWorkspace,
   retentionAuditWorkspace,
@@ -628,6 +629,65 @@ describe("hash-approved worktree lifecycle", () => {
       projectRoot: root,
       changeId: closeReceipt.id,
     })).toEqual(rolledBack);
+
+    git(root, "worktree", "remove", worktreePath);
+  });
+
+  it("rebinds a planned lease to its observed branch without touching the worktree", () => {
+    const root = repository();
+    const worktreePath = `${root}-rebind`;
+    repositories.push(worktreePath);
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 2 });
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#rebind",
+      branch: "issue-rebind-old",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    git(worktreePath, "checkout", "-b", "issue-rebind-new");
+
+    const planned = planWorkspaceRebind({
+      projectRoot: root,
+      workItem: "github:example/project#rebind",
+      branch: "issue-rebind-new",
+      now: new Date("2026-01-01T00:03:00.000Z"),
+    });
+    expect(planned.plan.operation.kind).toBe("rebind");
+    const receipt = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    expect(receipt.status).toBe("applied");
+    expect(receipt.steps).toContainEqual({
+      id: "rebind-lease",
+      status: "applied",
+      detail: "github:example/project#rebind",
+    });
+    expect(workspaceStatus(root).leases).toEqual([
+      expect.objectContaining({
+        workItem: "github:example/project#rebind",
+        branch: "issue-rebind-new",
+      }),
+    ]);
+    expect(workspaceStatus(root).worktrees.some((worktree) =>
+      worktree.path === git(worktreePath, "rev-parse", "--show-toplevel"))).toBe(true);
+    expect(applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toEqual(receipt);
+    expect(() => planWorkspaceRebind({
+      projectRoot: root,
+      workItem: "github:example/project#rebind",
+      branch: "issue-rebind-new",
+    })).toThrow(/WORKTREE_REBIND_NOOP/);
 
     git(root, "worktree", "remove", worktreePath);
   });

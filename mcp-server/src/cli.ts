@@ -43,6 +43,7 @@ import {
   planWorkspaceAllocation,
   planWorkspaceClose,
   planWorkspaceConfiguration,
+  planWorkspaceRebind,
   retentionAuditWorkspace,
   reviewWorkspace,
   workspaceStatus,
@@ -352,6 +353,13 @@ function runWorktreeCommand(
         acceptedCommit: required(args, "accepted-commit"),
       }));
       return;
+    case "rebind":
+      printWorkspacePlan(planWorkspaceRebind({
+        projectRoot: root,
+        workItem: required(args, "work-item"),
+        branch: required(args, "branch"),
+      }));
+      return;
     case "review": {
       const receipt = reviewWorkspace({
         projectRoot: root,
@@ -372,7 +380,7 @@ function runWorktreeCommand(
     }
     default:
       throw new Error(
-        "WORKTREE_COMMAND_REQUIRED: choose configure, allocate, adopt, review, status, audit, close, or retention-audit",
+        "WORKTREE_COMMAND_REQUIRED: choose configure, allocate, adopt, rebind, review, status, audit, close, or retention-audit",
       );
   }
 }

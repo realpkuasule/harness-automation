@@ -130,7 +130,7 @@ export interface WorkspaceAdoptionPlanItem {
 }
 
 export interface WorkspaceLeaseChange {
-  action: "create" | "remove" | "restore";
+  action: "create" | "remove" | "restore" | "update";
   workItem: string;
   path: string;
   branch: string;
@@ -236,6 +236,14 @@ export type WorkspaceOperation =
       lease: WorkspaceLease;
       expectedHead: string;
       expectedLeaseHash: string;
+    }
+  | {
+      kind: "rebind";
+      lease: WorkspaceLease;
+      replacementLease: WorkspaceLease;
+      expectedHead: string;
+      expectedLeaseHash: string;
+      afterLeaseHash: string;
     };
 
 export interface WorkspacePlan {
