@@ -244,6 +244,14 @@ export type WorkspaceOperation =
       expectedHead: string;
       expectedLeaseHash: string;
       afterLeaseHash: string;
+    }
+  | {
+      kind: "renew";
+      lease: WorkspaceLease;
+      replacementLease: WorkspaceLease;
+      expectedHead: string;
+      expectedLeaseHash: string;
+      afterLeaseHash: string;
     };
 
 export interface WorkspacePlan {

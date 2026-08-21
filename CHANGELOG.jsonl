@@ -221,3 +221,4 @@
 {"timestamp": "2026-08-17T14:08:43+08:00", "type": "docs", "phase": "implementation", "description": "Rewrite README.md (English) and add README.zh-CN.md (Chinese) covering v2.2.0 session handoff commands", "issueRef": "realpkuasule/harness-automation#27", "relatedFiles": ["README.md", "README.zh-CN.md"], "agent": "DSH"}
 {"timestamp": "2026-08-19T22:01:22+08:00", "type": "fix", "phase": 28, "description": "Add hash-approved persistent worktree lease rebind", "issueRef": "realpkuasule/harness-automation#28"}
 {"timestamp": "2026-08-21T02:34:51+08:00", "type": "fix", "phase": 29, "description": "Stream dirty binary patch evidence without loading full Git diffs", "issueRef": "realpkuasule/harness-automation#29"}
+{"timestamp": "2026-08-21T09:12:19+08:00", "type": "feat", "phase": 30, "description": "Add hash-approved worktree lease heartbeat renew", "issueRef": "realpkuasule/harness-automation#30"}

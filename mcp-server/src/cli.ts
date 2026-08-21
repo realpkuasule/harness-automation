@@ -44,6 +44,7 @@ import {
   planWorkspaceClose,
   planWorkspaceConfiguration,
   planWorkspaceRebind,
+  planWorkspaceRenew,
   retentionAuditWorkspace,
   reviewWorkspace,
   workspaceStatus,
@@ -360,6 +361,12 @@ function runWorktreeCommand(
         branch: required(args, "branch"),
       }));
       return;
+    case "renew":
+      printWorkspacePlan(planWorkspaceRenew({
+        projectRoot: root,
+        workItem: required(args, "work-item"),
+      }));
+      return;
     case "review": {
       const receipt = reviewWorkspace({
         projectRoot: root,
@@ -380,7 +387,7 @@ function runWorktreeCommand(
     }
     default:
       throw new Error(
-        "WORKTREE_COMMAND_REQUIRED: choose configure, allocate, adopt, rebind, review, status, audit, close, or retention-audit",
+        "WORKTREE_COMMAND_REQUIRED: choose configure, allocate, adopt, rebind, renew, review, status, audit, close, or retention-audit",
       );
   }
 }
@@ -410,6 +417,7 @@ Usage:
   harness-automation worktree adopt --manifest <json-path> [--project .]
   harness-automation worktree review [--commit <sha>] [--project .] -- <command> [args...]
   harness-automation worktree close --work-item <provider:id> --accepted-commit <sha> [--project .]
+  harness-automation worktree renew --work-item <provider:id> [--project .]
   harness-automation session handoff --work-item <provider:repo#issue> --session <session-id> [--to-status ready-for-review] [--dry-run] [--project .]
   harness-automation session status [--work-item <provider:repo#issue>] [--project .]
   harness-automation session seed --work-item <provider:repo#issue> [--project .]

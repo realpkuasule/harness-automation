@@ -1481,12 +1481,66 @@ export function planWorkspaceRebind(args: {
   }));
 }
 
+export function planWorkspaceRenew(args: {
+  projectRoot: string;
+  workItem: string;
+  now?: Date;
+}): { plan: WorkspacePlan; path: string } {
+  const status = workspaceStatus(args.projectRoot);
+  if (!status.configured || status.config.mode !== "enforced") {
+    throw new Error("WORKTREE_ENFORCEMENT_NOT_ENABLED");
+  }
+  requireHostBinding(status);
+  const matching = status.leases.filter((lease) => lease.workItem === args.workItem);
+  if (matching.length !== 1) {
+    throw new Error(matching.length === 0
+      ? `WORKTREE_LEASE_NOT_FOUND: ${args.workItem}`
+      : `DUPLICATE_WORK_ITEM_LEASE: ${args.workItem}`);
+  }
+  const lease = matching[0];
+  validateTarget(status.hostBinding, lease.path);
+  validateBranch(status.projectDir, lease.branch);
+  const observed = status.worktrees.find((worktree) => samePath(worktree.path, lease.path));
+  if (!observed || observed.branch !== lease.branch || observed.bare || observed.detached ||
+      observed.locked || observed.prunable || observed.head !== lease.acceptedCommit) {
+    throw new Error("WORKTREE_RENEW_PRECONDITION_FAILED: observed worktree does not match lease");
+  }
+  const branchHead = git(status.projectDir, [
+    "rev-parse",
+    "--verify",
+    `${lease.branch}^{commit}`,
+  ]).trim();
+  if (branchHead !== observed.head) {
+    throw new Error("WORKTREE_RENEW_PRECONDITION_FAILED: branch head changed");
+  }
+  const heartbeatAt = (args.now ?? new Date()).toISOString();
+  if (heartbeatAt === lease.heartbeatAt) {
+    throw new Error(`WORKTREE_RENEW_NOOP: ${args.workItem} already has this heartbeat`);
+  }
+  const replacementLease: WorkspaceLease = { ...lease, heartbeatAt };
+  const expectedLeaseHash = fileHash(leaseFile(status.commonDir, lease.workItem));
+  if (!expectedLeaseHash) throw new Error(`WORKTREE_LEASE_NOT_FOUND: ${args.workItem}`);
+  return savePlan(status.projectDir, planDraft({
+    status,
+    operation: {
+      kind: "renew",
+      lease,
+      replacementLease,
+      expectedHead: observed.head,
+      expectedLeaseHash,
+      afterLeaseHash: sha256(prettyJson(replacementLease)),
+    },
+    now: args.now,
+    warnings: ["Renew updates only the existing lease heartbeat; the worktree and branches are preserved."],
+  }));
+}
+
 function loadWorkspacePlan(root: string, path: string): WorkspacePlan {
   const plan = readJson<WorkspacePlan>(safePath(root, path));
   if (
     plan.schemaVersion !== "worktree-delivery/1.0" ||
     plan.kind !== "workspace-plan" ||
-    !["configure", "allocate", "adopt", "close", "rebind"].includes(plan.operation?.kind) ||
+    !["configure", "allocate", "adopt", "close", "rebind", "renew"].includes(plan.operation?.kind) ||
     (plan.operation.kind === "configure" && (
       plan.operation.hostBindingPath !== HOST_BINDING_PATH ||
       typeof plan.operation.beforeHostBindingHash !== "string" &&
@@ -1561,6 +1615,31 @@ function loadWorkspacePlan(root: string, path: string): WorkspacePlan {
         unchanged.some((key) => operation.lease[key] !== operation.replacementLease[key]) ||
         operation.lease.branch === operation.replacementLease.branch ||
         operation.replacementLease.acceptedCommit !== operation.expectedHead ||
+        operation.expectedLeaseHash !== sha256(prettyJson(operation.lease)) ||
+        operation.afterLeaseHash !== sha256(prettyJson(operation.replacementLease)) ||
+        !/^[a-f0-9]{40,64}$/u.test(operation.expectedHead) ||
+        !/^[a-f0-9]{64}$/u.test(operation.expectedLeaseHash) ||
+        !/^[a-f0-9]{64}$/u.test(operation.afterLeaseHash)
+      ) {
+        throw new Error("WORKSPACE_PLAN_INVALID");
+      }
+    } catch {
+      throw new Error("WORKSPACE_PLAN_INVALID");
+    }
+  }
+  if (plan.operation.kind === "renew") {
+    try {
+      const operation = plan.operation;
+      validLease(operation.lease, leaseRelativePath(operation.lease.workItem));
+      validLease(operation.replacementLease, leaseRelativePath(operation.replacementLease.workItem));
+      const unchanged = [
+        "workItem", "branch", "path", "owner", "thread", "workItemState", "acceptedCommit", "createdAt", "status",
+      ] as const;
+      if (
+        operation.lease.workItem !== operation.replacementLease.workItem ||
+        unchanged.some((key) => operation.lease[key] !== operation.replacementLease[key]) ||
+        operation.lease.heartbeatAt === operation.replacementLease.heartbeatAt ||
+        operation.lease.acceptedCommit !== operation.expectedHead ||
         operation.expectedLeaseHash !== sha256(prettyJson(operation.lease)) ||
         operation.afterLeaseHash !== sha256(prettyJson(operation.replacementLease)) ||
         !/^[a-f0-9]{40,64}$/u.test(operation.expectedHead) ||
@@ -1944,7 +2023,7 @@ export function applyWorkspacePlan(args: {
       "WORKSPACE_PLAN_REPLAN_REQUIRED: legacy allocation plan does not bind GitHub Project state",
     );
   }
-  const before = workspaceStatus(root, {
+  let before = workspaceStatus(root, {
     providerWorkItems: plan.operation.kind === "allocate" &&
         plan.operation.providerObservationBound
       ? [plan.operation.lease.workItem]
@@ -1952,6 +2031,10 @@ export function applyWorkspacePlan(args: {
   });
   validateWorkspacePlan(before, plan, args.approval);
   const lock = acquireLock(plan.commonDir);
+  if (plan.operation.kind === "renew") {
+    before = workspaceStatus(root);
+    validateWorkspacePlan(before, plan, args.approval);
+  }
   const receiptPath = receiptFile(plan.commonDir, plan.id);
   const receipt: WorkspaceReceipt = {
     schemaVersion: "worktree-delivery/1.0",
@@ -2070,6 +2153,31 @@ export function applyWorkspacePlan(args: {
         afterHash: operation.afterLeaseHash,
       }];
       receipt.steps.push({ id: "rebind-lease", status: "applied", detail: operation.lease.workItem });
+    } else if (plan.operation.kind === "renew") {
+      const operation = plan.operation;
+      requireHostBinding(before);
+      validateTarget(before.hostBinding, operation.lease.path);
+      assertCurrentHash(leaseFile(plan.commonDir, operation.lease.workItem), operation.expectedLeaseHash);
+      const observed = before.worktrees.find(
+        (worktree) => samePath(worktree.path, operation.lease.path),
+      );
+      if (!observed || observed.head !== operation.expectedHead ||
+          observed.branch !== operation.lease.branch || observed.bare || observed.detached ||
+          observed.locked || observed.prunable) {
+        throw new Error("WORKSPACE_DRIFT: renew preconditions changed");
+      }
+      atomicWrite(leaseFile(plan.commonDir, operation.lease.workItem), prettyJson(operation.replacementLease));
+      assertCurrentHash(leaseFile(plan.commonDir, operation.lease.workItem), operation.afterLeaseHash);
+      receipt.leaseChanges = [{
+        action: "update",
+        workItem: operation.lease.workItem,
+        path: operation.lease.path,
+        branch: operation.lease.branch,
+        leasePath: leaseRelativePath(operation.lease.workItem),
+        beforeHash: operation.expectedLeaseHash,
+        afterHash: operation.afterLeaseHash,
+      }];
+      receipt.steps.push({ id: "renew-lease", status: "applied", detail: operation.lease.workItem });
     }
     receipt.status = "applied";
     receipt.completedAt = (args.now ?? new Date()).toISOString();
@@ -2125,6 +2233,10 @@ export function applyWorkspacePlan(args: {
           fileHash(leaseFile(plan.commonDir, plan.operation.lease.workItem)) === plan.operation.afterLeaseHash) {
         atomicWrite(leaseFile(plan.commonDir, plan.operation.lease.workItem), prettyJson(plan.operation.lease));
         receipt.steps.push({ id: "restore-rebind", status: "compensated", detail: plan.operation.lease.workItem });
+      } else if (plan.operation.kind === "renew" &&
+          fileHash(leaseFile(plan.commonDir, plan.operation.lease.workItem)) === plan.operation.afterLeaseHash) {
+        atomicWrite(leaseFile(plan.commonDir, plan.operation.lease.workItem), prettyJson(plan.operation.lease));
+        receipt.steps.push({ id: "restore-renew", status: "compensated", detail: plan.operation.lease.workItem });
       }
     } catch (compensationError) {
       receipt.steps.push({
@@ -2360,6 +2472,28 @@ export function rollbackWorkspaceChange(args: {
       throw new Error(
         "WORKSPACE_ROLLBACK_REQUIRES_REBIND_PLAN: lease metadata must be restored with a new exact-hash rebind plan",
       );
+    } else if (plan.operation.kind === "renew") {
+      assertCurrentHash(
+        leaseFile(status.commonDir, plan.operation.lease.workItem),
+        plan.operation.afterLeaseHash,
+      );
+      atomicWrite(
+        leaseFile(status.commonDir, plan.operation.lease.workItem),
+        prettyJson(plan.operation.lease),
+      );
+      receipt.steps.push({ id: "rollback-renew", status: "compensated", detail: plan.operation.lease.workItem });
+      receipt.leaseChanges = [
+        ...(receipt.leaseChanges ?? []),
+        {
+          action: "update",
+          workItem: plan.operation.lease.workItem,
+          path: plan.operation.lease.path,
+          branch: plan.operation.lease.branch,
+          leasePath: leaseRelativePath(plan.operation.lease.workItem),
+          beforeHash: plan.operation.afterLeaseHash,
+          afterHash: plan.operation.expectedLeaseHash,
+        },
+      ];
     }
     receipt.status = "rolled-back";
     receipt.completedAt = (args.now ?? new Date()).toISOString();

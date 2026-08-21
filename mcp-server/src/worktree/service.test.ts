@@ -28,6 +28,7 @@ import {
   planWorkspaceClose,
   planWorkspaceConfiguration,
   planWorkspaceRebind,
+  planWorkspaceRenew,
   rollbackWorkspaceChange,
   reviewWorkspace,
   retentionAuditWorkspace,
@@ -691,6 +692,107 @@ describe("hash-approved worktree lifecycle", () => {
     })).toThrow(/WORKTREE_REBIND_NOOP/);
 
     git(root, "worktree", "remove", worktreePath);
+  });
+
+  it("renews an expired lease on its current branch without changing the worktree", () => {
+    const root = repository();
+    const worktreePath = `${root}-renew`;
+    repositories.push(worktreePath);
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 2 });
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#renew",
+      branch: "issue-renew",
+      path: worktreePath,
+      owner: "owner",
+      now: new Date("2020-01-01T00:00:00.000Z"),
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    expect(auditWorkspace(root).policies.find((policy) => policy.id === "workspace.lease-ttl"))
+      .toMatchObject({ passing: false });
+    const worktreesBefore = git(root, "worktree", "list", "--porcelain");
+    const refsBefore = git(root, "for-each-ref", "--format=%(refname)%00%(objectname)");
+    const headBefore = git(worktreePath, "rev-parse", "HEAD");
+
+    const planned = planWorkspaceRenew({
+      projectRoot: root,
+      workItem: "github:example/project#renew",
+      now: new Date("2030-01-02T00:00:00.000Z"),
+    });
+    if (planned.plan.operation.kind !== "renew") throw new Error("expected renew plan");
+    expect(planned.plan.operation.replacementLease).toMatchObject({
+      branch: "issue-renew",
+      heartbeatAt: "2030-01-02T00:00:00.000Z",
+    });
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: "0".repeat(64),
+    })).toThrow(/APPROVAL_MISMATCH/);
+    const receipt = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    expect(receipt).toMatchObject({ operation: "renew", status: "applied" });
+    expect(receipt.steps).toContainEqual({
+      id: "renew-lease",
+      status: "applied",
+      detail: "github:example/project#renew",
+    });
+    expect(workspaceStatus(root).leases).toEqual([
+      expect.objectContaining({ heartbeatAt: "2030-01-02T00:00:00.000Z" }),
+    ]);
+    expect(auditWorkspace(root).policies.find((policy) => policy.id === "workspace.lease-ttl"))
+      .toMatchObject({ passing: true });
+    expect(git(root, "worktree", "list", "--porcelain")).toBe(worktreesBefore);
+    expect(git(root, "for-each-ref", "--format=%(refname)%00%(objectname)")).toBe(refsBefore);
+    expect(git(worktreePath, "rev-parse", "HEAD")).toBe(headBefore);
+    expect(rollbackWorkspaceChange({ projectRoot: root, changeId: receipt.id }).status)
+      .toBe("rolled-back");
+    expect(workspaceStatus(root).leases).toEqual([
+      expect.objectContaining({ heartbeatAt: "2020-01-01T00:00:00.000Z" }),
+    ]);
+  });
+
+  it("rejects missing and drifted renewal plans", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 2 });
+    expect(() => planWorkspaceRenew({
+      projectRoot: root,
+      workItem: "github:example/project#missing",
+    })).toThrow(/WORKTREE_LEASE_NOT_FOUND/);
+
+    const worktreePath = `${root}-renew-drift`;
+    repositories.push(worktreePath);
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#renew-drift",
+      branch: "issue-renew-drift",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    const planned = planWorkspaceRenew({
+      projectRoot: root,
+      workItem: "github:example/project#renew-drift",
+      now: new Date("2030-01-03T00:00:00.000Z"),
+    });
+    writeFileSync(join(worktreePath, "README.md"), "drift\n", "utf8");
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toThrow(/WORKSPACE_DRIFT/);
+    rmSync(join(worktreePath, "README.md"));
   });
 
   it("rejects lifecycle drift and unsafe close preconditions", () => {
