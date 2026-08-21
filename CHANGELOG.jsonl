@@ -1,3 +1,9 @@
+## [2.4.1] - 2026-08-21
+
+### Fixed
+
+- write close receipt from management checkout (145427d)
+
 {"timestamp": "2026-04-23T16:30:00+08:00", "type": "milestone", "phase": 0, "description": "项目初始化：创建开发计划 dev-plan-1.0.md、任务跟踪 TASK.json、变更记录 CHANGELOG.jsonl"}
 {"timestamp": "2026-04-23T16:35:00+08:00", "type": "feat", "phase": 1, "description": "创建 MCP Server 项目结构：package.json、tsconfig.json、目录布局"}
 {"timestamp": "2026-04-23T16:40:00+08:00", "type": "feat", "phase": 1, "description": "实现类型定义系统 types.ts：RuleDefinition, RuleDecision, EngineInput/Output, MCP工具Schema, ABTest, ErrorMessage 等类型"}
