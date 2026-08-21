@@ -29,6 +29,15 @@ Host-specific allowed and protected roots live in
 `<git-common-dir>/harness/worktree-delivery/host-binding.json`. One configure
 plan hashes and applies both files.
 
+New host bindings may additionally select `container-v1`: a non-Git workspace
+container contains exactly `main/` for the protected management checkout and
+`worktrees/` for direct-child persistent Issue checkouts. The binding stores
+canonical absolute container/main/worktrees paths; portable repository policy
+stores none of them. Configure planning is zero-lifecycle-side-effect, while an
+approved configure apply may create only an absent, exact, empty `worktrees/`
+root and records that creation in its receipt. Existing bindings with no
+topology remain `legacy-flat` and are never inferred, moved, or rewritten.
+
 Policy v2 also supports optional orthogonal arrays:
 
 ```json
@@ -99,6 +108,17 @@ Credentials are never stored.
 replacement content for both the portable repository policy and host-local
 binding. Apply rechecks the observation and both file hashes before atomic
 writes. Failure compensation and rollback restore both previous contents.
+For `container-v1`, they also remove only the directory created by that receipt,
+and only while it is still empty; otherwise rollback fails closed.
+
+### Legacy migration
+
+`worktree migrate` is intentionally plan-only. It captures all lease, binding,
+management-checkout, ref, worktree, dirty, unique/unpushed, and path evidence
+for a requested container target, but it cannot be applied. Relocating an
+existing Git checkout and re-registering worktrees needs a separately designed
+transaction and exact-hash approval; configure must never masquerade as that
+migration.
 
 ### Delegated AI authorization
 

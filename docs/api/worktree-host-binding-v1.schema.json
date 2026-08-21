@@ -29,6 +29,18 @@
         "minLength": 1
       }
     },
+    "topology": {
+      "description": "Optional host-local container layout. Omitted bindings retain legacy-flat compatibility.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "workspaceContainer", "managementCheckout", "persistentWorktreeRoot"],
+      "properties": {
+        "kind": { "const": "container-v1" },
+        "workspaceContainer": { "type": "string", "minLength": 1 },
+        "managementCheckout": { "type": "string", "minLength": 1 },
+        "persistentWorktreeRoot": { "type": "string", "minLength": 1 }
+      }
+    },
     "approval": {
       "description": "Host-local plan authorization. Omitted bindings retain manual exact-hash approval.",
       "oneOf": [

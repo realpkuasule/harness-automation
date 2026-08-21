@@ -40,6 +40,24 @@ export type WorktreeApprovalPolicy =
       reviewerTimeoutSeconds: number;
     };
 
+export interface WorktreeContainerTopology {
+  kind: "container-v1";
+  workspaceContainer: string;
+  managementCheckout: string;
+  persistentWorktreeRoot: string;
+}
+
+export interface WorkspaceTopology {
+  kind: "container-v1" | "legacy-flat";
+  workspaceContainer?: string;
+  managementCheckout: string;
+  persistentWorktreeRoot?: string;
+  allowedRoots: string[];
+  protectedRoots: string[];
+  commonDir: string;
+  worktreeTopLevels: string[];
+}
+
 export interface WorktreeDeliveryConfig {
   schemaVersion: "1.0";
   mode: "audit-only" | "enforced";
@@ -65,6 +83,7 @@ export interface WorktreeHostBinding {
   schemaVersion: "1.0";
   allowedRoots: string[];
   protectedRoots: string[];
+  topology?: WorktreeContainerTopology;
   approval: WorktreeApprovalPolicy;
 }
 
@@ -105,6 +124,7 @@ export interface WorkspaceAdoptionManifest {
 
 export interface WorktreeRecord {
   path: string;
+  gitTopLevel?: string;
   head: string;
   branch: string | null;
   bare: boolean;
@@ -172,6 +192,8 @@ export interface WorkspaceStatus {
   mode: "audit-only" | "enforced";
   config: WorktreeDeliveryConfig;
   hostBinding: WorktreeHostBindingObservation;
+  topology: WorkspaceTopology;
+  capacity: { limit: number; used: number; available: number };
   worktrees: WorktreeRecord[];
   leases: WorkspaceLease[];
   provider: ProviderObservation;
@@ -213,6 +235,8 @@ export interface WorkspaceAudit {
   enforced: boolean;
   passing: boolean;
   observedHash: string;
+  topology: WorkspaceTopology;
+  capacity: { limit: number; used: number; available: number };
   policies: WorkspacePolicyResult[];
 }
 
@@ -227,6 +251,32 @@ export type WorkspaceOperation =
       beforeHostBindingHash: string | null;
       afterHostBindingHash: string;
       hostBindingContent: string;
+      topology: WorkspaceTopology;
+      allowedRoot?: { path: string; before: "absent" | "empty" };
+    }
+  | {
+      kind: "migrate";
+      topology: WorkspaceTopology;
+      preflight: {
+        hostBindingHash: string | null;
+        refsHash: string;
+        worktreeRegistrationHash: string;
+        leaseHashes: Array<{ path: string; sha256: string }>;
+        referencePaths: string[];
+        managementCheckout: string;
+        leases: Array<{ workItem: string; path: string; branch: string }>;
+        worktrees: Array<{
+          path: string;
+          branch: string | null;
+          head: string;
+          dirty: boolean;
+          dirtyEvidence: Array<{ path: string; status: string; size: number; sha256: string }>;
+          dirtyPatch: { size: number; sha256: string };
+          uniqueCommits: number;
+          unpushedCommits: number;
+        }>;
+      };
+      manualSteps: string[];
     }
   | {
       kind: "allocate";
@@ -345,6 +395,7 @@ export interface WorkspaceReceipt {
   rollbackAfter?: WorkspaceStatus;
   leaseChanges?: WorkspaceLeaseChange[];
   compensationStatus?: "not-required" | "completed" | "failed";
+  createdDirectories?: string[];
   authorizationMode?: "manual" | "delegated-ai";
   authorizationDecisionHash?: string;
   authorizationPolicyHash?: string;

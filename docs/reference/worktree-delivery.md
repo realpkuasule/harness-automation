@@ -14,6 +14,31 @@ lifecycle locks, and remote branches; it deletes none of them.
 
 ## Configure
 
+For new managed projects, use the explicit container topology. `--project` must
+be the existing Git checkout at `<workspace-container>/main`; the container is
+not a Git repository and `worktrees/` may be absent while the plan is created:
+
+```bash
+harness-automation worktree configure \
+  --project /absolute/container/main \
+  --mode enforced \
+  --management-branch main \
+  --topology container-v1 \
+  --workspace-container /absolute/container
+```
+
+The approved configure apply creates only the exact empty
+`/absolute/container/worktrees` directory when it was absent. It records the
+canonical container, management checkout, persistent root, protected roots,
+and Git common-dir in the plan and receipt. Allocation paths must then be
+direct children such as `/absolute/container/worktrees/24`; planning creates
+neither that directory, a branch, a worktree, nor a lease. The `main/` checkout
+and its `.git` directory are always protected.
+
+The older `--allow-root` form remains for existing flat layouts. It is rejected
+when container topology is selected, so a container cannot silently degrade to
+a shared parent directory.
+
 ```bash
 harness-automation worktree configure \
   --project . \
@@ -63,6 +88,24 @@ covers both. On a new host, run configure again to approve that host's roots;
 omitted portable options preserve the existing repository policy.
 Existing v1 configurations without `managementBranch` retain the legacy
 command-checkout behavior until an approved configure plan adds the selector.
+
+### Legacy migration preflight
+
+Existing flat layouts are never moved, renamed, deleted, or reconfigured into a
+container automatically. Generate an independently hash-bound, plan-only
+preflight instead:
+
+```bash
+harness-automation worktree migrate \
+  --project /absolute/legacy-checkout \
+  --workspace-container /absolute/new-container
+```
+
+It records management checkout, host binding and lease hashes, refs, registered
+worktrees, dirty/unique/unpushed evidence, and all referenced paths, together
+with the target `main/` and `worktrees/` mapping. `apply` deliberately rejects
+this operation: a future dedicated migration executor must receive a separate
+exact-hash approval. No GitHub Team plan or configuration is involved.
 
 ### Delegated AI authorization
 

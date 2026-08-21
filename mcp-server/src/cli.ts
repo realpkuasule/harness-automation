@@ -43,6 +43,7 @@ import {
   planWorkspaceAllocation,
   planWorkspaceClose,
   planWorkspaceConfiguration,
+  planWorkspaceMigration,
   planWorkspaceRebind,
   planWorkspaceRecover,
   planWorkspaceRenew,
@@ -331,6 +332,12 @@ function workspacePlanSummary(plan: WorkspacePlan): {
     preserves,
     risk: "high",
   };
+  if (operation.kind === "migrate") return {
+    goal: "Prepare a manual migration from a legacy flat layout",
+    changes: ["none; this plan cannot be applied"],
+    preserves: ["all checkouts", "branches", "leases", "Git state"],
+    risk: "high",
+  };
   return {
     goal: "Configure worktree governance and this host binding",
     changes: [operation.configPath, operation.hostBindingPath],
@@ -406,11 +413,19 @@ function runWorktreeCommand(
         remoteBranchRetentionDays: positiveInteger(args, "remote-retention-days"),
         allowedRoots: args.values.get("allow-root"),
         protectedRoots: args.values.get("protect-root"),
+        topology: value(args, "topology") as "container-v1" | undefined,
+        workspaceContainer: value(args, "workspace-container"),
         approval: worktreeApproval(args),
         provider: worktreeProvider(args),
       }));
       return;
     }
+    case "migrate":
+      printWorkspacePlan(planWorkspaceMigration({
+        projectRoot: root,
+        workspaceContainer: required(args, "workspace-container"),
+      }));
+      return;
     case "allocate":
       printWorkspacePlan(planWorkspaceAllocation({
         projectRoot: root,
@@ -486,7 +501,7 @@ function runWorktreeCommand(
     }
     default:
       throw new Error(
-        "WORKTREE_COMMAND_REQUIRED: choose configure, allocate, adopt, rebind, renew, recover, apply-ai, review, status, audit, close, or retention-audit",
+        "WORKTREE_COMMAND_REQUIRED: choose configure, migrate, allocate, adopt, rebind, renew, recover, apply-ai, review, status, audit, close, or retention-audit",
       );
   }
 }
@@ -511,7 +526,8 @@ Usage:
   harness-automation explain <policy-id> [--project .]
   harness-automation rollback [--project .] [--change <id>]
   harness-automation worktree status|audit|retention-audit [--project .]
-  harness-automation worktree configure [--mode audit-only|enforced] [--management-branch <branch>] [--allow-root <absolute-path>] [--approval-mode manual|delegated-ai] [--reviewer-model <model>] [--delegate-operation <kind>] [--project .]
+  harness-automation worktree configure [--mode audit-only|enforced] [--management-branch <branch>] [--topology container-v1 --workspace-container <absolute-path>] [--allow-root <absolute-path>] [--approval-mode manual|delegated-ai] [--reviewer-model <model>] [--delegate-operation <kind>] [--project .]
+  harness-automation worktree migrate --workspace-container <absolute-path> [--project .]
   harness-automation worktree allocate --work-item <provider:id> --branch <name> --path <absolute-path> --owner <name> [--project .]
   harness-automation worktree adopt --manifest <json-path> [--project .]
   harness-automation worktree review [--commit <sha>] [--project .] -- <command> [args...]

@@ -37,6 +37,24 @@ node <skill目录>/scripts/run.mjs worktree configure \
   --allow-root <worktree允许父目录的绝对路径>
 ```
 
+新项目优先使用项目容器：`<container>/main` 是唯一受保护的管理
+checkout，`<container>/worktrees/<id>` 是持久 Issue checkout。容器必须已
+存在且本身不是 Git 仓库；`worktrees/` 可以不存在，且只会在批准 configure
+apply 时创建：
+
+```bash
+node <skill目录>/scripts/run.mjs worktree configure \
+  --project <container绝对路径>/main \
+  --mode enforced \
+  --management-branch main \
+  --topology container-v1 \
+  --workspace-container <container绝对路径>
+```
+
+不要把 `--allow-root` 与容器拓扑混用。既有平铺 checkout 永不自动移动；只可
+生成 `worktree migrate --workspace-container <绝对路径>` 的只读预检计划，且
+当前 apply 会明确拒绝迁移执行。
+
 向项目负责人展示 `planPath`、完整 `planHash`、配置模式、management 分支选择器、主机绑定中的允许根/保护根、容量和 Provider 映射。仓库配置不得写入主机绝对路径；同一个哈希计划同时覆盖仓库策略和 Git common dir 下的主机绑定。缺失或歧义的 management checkout 在 enforced audit 中必须 fail closed。
 
 新机器缺少主机绑定、或旧配置仍内嵌绝对路径时，enforced 分配必须停止并重新生成 configure 迁移计划。未显式提供的 portable 选项沿用现有仓库策略。

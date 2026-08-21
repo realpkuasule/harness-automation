@@ -47,6 +47,7 @@ import {
   type WorkspaceAiDecision,
   type WorkspaceAiReviewResult,
   type WorktreeApprovalPolicy,
+  type WorktreeContainerTopology,
   type WorktreeDelegatableOperation,
   type WorktreeHostBinding,
   type WorktreeHostBindingObservation,
@@ -56,6 +57,7 @@ import {
   type WorkspacePolicyResult,
   type WorkspaceReceipt,
   type WorkspaceStatus,
+  type WorkspaceTopology,
   WORKTREE_DELEGATABLE_OPERATIONS,
 } from "./types.js";
 import { observeProvider } from "./provider.js";
@@ -118,14 +120,78 @@ function repositoryRoot(projectRoot: string): string {
 }
 
 function canonicalPath(path: string): string {
+  if (!isAbsolute(path)) throw new Error(`WORKTREE_PATH_MUST_BE_ABSOLUTE: ${path}`);
   const absolute = resolve(path);
-  return existsSync(absolute)
-    ? realpathSync.native(absolute)
-    : join(realpathSync.native(dirname(absolute)), basename(absolute));
+  let existing = absolute;
+  const missing: string[] = [];
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) throw new Error(`WORKTREE_PATH_UNRESOLVABLE: ${path}`);
+    missing.unshift(basename(existing));
+    existing = parent;
+  }
+  if (!lstatSync(existing).isDirectory() && missing.length > 0) {
+    throw new Error(`WORKTREE_PATH_PARENT_NOT_DIRECTORY: ${existing}`);
+  }
+  return join(realpathSync.native(existing), ...missing);
 }
 
 function samePath(left: string, right: string): boolean {
   return canonicalPath(left) === canonicalPath(right);
+}
+
+function rejectTraversal(path: string): void {
+  if (/(^|[\\/])\.\.([\\/]|$)/u.test(path)) {
+    throw new Error(`WORKTREE_PATH_TRAVERSAL: ${path}`);
+  }
+}
+
+function directoryState(path: string): "absent" | "empty" | "non-empty" {
+  if (!existsSync(path)) return "absent";
+  const metadata = lstatSync(path);
+  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+    throw new Error(`WORKTREE_PATH_INVALID: ${path}`);
+  }
+  return readdirSync(path).length === 0 ? "empty" : "non-empty";
+}
+
+function containerTopology(
+  root: string,
+  commonDir: string,
+  workspaceContainer: string,
+  managementBranch: string | undefined,
+  records: WorktreeRecord[],
+  requireEmptyRoot = false,
+): WorktreeContainerTopology {
+  rejectTraversal(workspaceContainer);
+  const container = canonicalPath(workspaceContainer);
+  if (container === resolve("/")) throw new Error("WORKTREE_CONTAINER_INVALID: root is not allowed");
+  if (!lstatSync(container).isDirectory()) throw new Error(`WORKTREE_CONTAINER_INVALID: ${container}`);
+  if (git(container, ["rev-parse", "--show-toplevel"], true).trim()) {
+    throw new Error(`WORKTREE_CONTAINER_GIT_ROOT: ${container}`);
+  }
+  const managementCheckout = canonicalPath(join(container, "main"));
+  if (!samePath(root, managementCheckout)) {
+    throw new Error(`WORKTREE_MANAGEMENT_CHECKOUT_REQUIRED: expected ${managementCheckout}, observed ${root}`);
+  }
+  const management = records.find((record) => samePath(record.path, root));
+  if (!management || management.bare || management.detached ||
+      (managementBranch && management.branch !== managementBranch)) {
+    throw new Error("WORKTREE_MANAGEMENT_CHECKOUT_INVALID");
+  }
+  const persistentWorktreeRoot = canonicalPath(join(container, "worktrees"));
+  const state = directoryState(persistentWorktreeRoot);
+  if (requireEmptyRoot && state === "non-empty") {
+    throw new Error(`WORKTREE_ALLOWED_ROOT_NOT_EMPTY: ${persistentWorktreeRoot}`);
+  }
+  if (samePath(persistentWorktreeRoot, managementCheckout) ||
+      isSameOrWithin(managementCheckout, persistentWorktreeRoot)) {
+    throw new Error(`WORKTREE_ALLOWED_ROOT_INVALID: ${persistentWorktreeRoot}`);
+  }
+  if (samePath(commonDir, persistentWorktreeRoot) || isSameOrWithin(persistentWorktreeRoot, commonDir)) {
+    throw new Error(`WORKTREE_ALLOWED_ROOT_INVALID: ${persistentWorktreeRoot}`);
+  }
+  return { kind: "container-v1", workspaceContainer: container, managementCheckout, persistentWorktreeRoot };
 }
 
 function gitCommonDir(root: string): string {
@@ -197,6 +263,12 @@ const hostBindingSchema = z.object({
   schemaVersion: z.literal(WORKTREE_SCHEMA_VERSION),
   allowedRoots: uniqueAbsolutePaths,
   protectedRoots: uniqueAbsolutePaths,
+  topology: z.object({
+    kind: z.literal("container-v1"),
+    workspaceContainer: z.string().min(1).refine(isAbsolute, "must be absolute"),
+    managementCheckout: z.string().min(1).refine(isAbsolute, "must be absolute"),
+    persistentWorktreeRoot: z.string().min(1).refine(isAbsolute, "must be absolute"),
+  }).strict().optional(),
   approval: z.discriminatedUnion("mode", [
     z.object({ mode: z.literal("manual") }).strict(),
     z.object({
@@ -337,6 +409,51 @@ function loadHostBinding(
   };
 }
 
+function observedTopology(
+  root: string,
+  commonDir: string,
+  config: WorktreeDeliveryConfig,
+  binding: WorktreeHostBinding,
+  records: WorktreeRecord[],
+): WorkspaceTopology {
+  if (binding.topology) {
+    const topology = containerTopology(
+      root,
+      commonDir,
+      binding.topology.workspaceContainer,
+      config.managementBranch,
+      records,
+    );
+    if (
+      topology.managementCheckout !== binding.topology.managementCheckout ||
+      topology.persistentWorktreeRoot !== binding.topology.persistentWorktreeRoot ||
+      binding.allowedRoots.length !== 1 ||
+      !samePath(binding.allowedRoots[0], topology.persistentWorktreeRoot) ||
+      !binding.protectedRoots.some((path) => samePath(path, topology.managementCheckout)) ||
+      !binding.protectedRoots.some((path) => samePath(path, commonDir))
+    ) {
+      throw new Error("WORKTREE_TOPOLOGY_INVALID: host binding paths drifted");
+    }
+    return {
+      ...topology,
+      allowedRoots: binding.allowedRoots,
+      protectedRoots: binding.protectedRoots,
+      commonDir,
+      worktreeTopLevels: records.filter((record) => !record.bare && !record.prunable)
+        .map((record) => canonicalPath(record.path)).sort(),
+    };
+  }
+  return {
+    kind: "legacy-flat",
+    managementCheckout: root,
+    allowedRoots: binding.allowedRoots,
+    protectedRoots: binding.protectedRoots,
+    commonDir,
+    worktreeTopLevels: records.filter((record) => !record.bare && !record.prunable)
+      .map((record) => canonicalPath(record.path)).sort(),
+  };
+}
+
 export function parseWorktreePorcelain(output: string): WorktreeRecord[] {
   const records: WorktreeRecord[] = [];
   let current: WorktreeRecord | null = null;
@@ -467,6 +584,10 @@ function enrichWorktree(
   adoptionSafe = false,
 ): WorktreeRecord {
   if (record.bare || record.prunable || !existsSync(record.path)) return record;
+  const gitTopLevel = git(root, ["-C", record.path, "rev-parse", "--show-toplevel"]).trim();
+  if (!samePath(record.path, gitTopLevel)) {
+    throw new Error(`WORKTREE_TOPLEVEL_MISMATCH: ${record.path}`);
+  }
   const tokens = worktreeStatusTokens(root, record.path, adoptionSafe);
   const dirty = tokens.length > 0;
   const otherRefs = record.branch
@@ -474,6 +595,7 @@ function enrichWorktree(
     : refs;
   return {
     ...record,
+    gitTopLevel,
     dirty,
     ...(dirty ? collectDirtyEvidence(root, record.path, tokens, adoptionSafe) : {}),
     uniqueCommits: record.head
@@ -611,6 +733,7 @@ export function workspaceStatus(
   const hostBinding = loadHostBinding(root, commonDir, loadedConfig.legacyBinding);
   const loadedLeases = leases(commonDir);
   const observedWorktrees = worktrees(root, options.adoptionSafe);
+  const topology = observedTopology(root, commonDir, loadedConfig.config, hostBinding, observedWorktrees);
   const provider = options.providerObservation ?? observeProvider(
       root,
       loadedConfig.config,
@@ -627,6 +750,10 @@ export function workspaceStatus(
   const errors = [
     ...loadedLeases.errors,
     ...(bindingError ? [bindingError] : []),
+    ...(loadedConfig.configured && hostBinding.topology &&
+      directoryState(hostBinding.topology.persistentWorktreeRoot) === "absent"
+      ? [`WORKTREE_ALLOWED_ROOT_MISSING: ${hostBinding.topology.persistentWorktreeRoot}`]
+      : []),
     ...(provider.configured && !provider.available ? [`PROVIDER_UNAVAILABLE: ${provider.error}`] : []),
   ];
   const refs = refsObservation(root);
@@ -649,6 +776,10 @@ export function workspaceStatus(
       };
     }),
     leases: loadedLeases.values,
+    topology,
+    allowedRootState: hostBinding.topology
+      ? directoryState(hostBinding.topology.persistentWorktreeRoot)
+      : undefined,
     provider,
     errors,
   };
@@ -663,6 +794,12 @@ export function workspaceStatus(
     mode: loadedConfig.config.mode,
     config: loadedConfig.config,
     hostBinding,
+    topology,
+    capacity: {
+      limit: loadedConfig.config.maxPersistentWorktrees,
+      used: loadedLeases.values.length,
+      available: Math.max(0, loadedConfig.config.maxPersistentWorktrees - loadedLeases.values.length),
+    },
     worktrees: observedWorktrees,
     leases: loadedLeases.values,
     provider,
@@ -768,11 +905,23 @@ export function auditWorkspace(projectRoot: string): WorkspaceAudit {
         : [];
     })
     : [];
+  const topologyErrors = status.topology.kind === "container-v1"
+    ? [
+        ...(managementPath && !samePath(managementPath, status.topology.managementCheckout)
+          ? [`management checkout must be ${status.topology.managementCheckout}`]
+          : []),
+        ...status.leases.flatMap((lease) =>
+          dirname(lease.path) !== status.topology.persistentWorktreeRoot
+            ? [`${lease.workItem}: not a direct child of ${status.topology.persistentWorktreeRoot}`]
+            : []),
+      ]
+    : [];
   const mappingErrors = [
     ...managementErrors,
     ...leaseMappingErrors,
     ...orphanWorktrees,
     ...projectMappingErrors,
+    ...topologyErrors,
   ];
   const staleLeases = status.leases.filter((lease) =>
     (Date.now() - Date.parse(lease.heartbeatAt)) / 3_600_000 > status.config.leaseTtlHours);
@@ -881,6 +1030,8 @@ export function auditWorkspace(projectRoot: string): WorkspaceAudit {
       (policy) => policy.status === "guidance" || policy.passing,
     ),
     observedHash: status.observedHash,
+    topology: status.topology,
+    capacity: status.capacity,
     policies,
   };
 }
@@ -927,7 +1078,11 @@ function validateBranch(root: string, branch: string): void {
 
 function validateTarget(binding: WorktreeHostBinding, target: string): string {
   if (!isAbsolute(target)) throw new Error("WORKTREE_PATH_MUST_BE_ABSOLUTE");
+  rejectTraversal(target);
   const resolved = canonicalPath(target);
+  if (resolved === resolve("/") || basename(resolved) === ".git") {
+    throw new Error(`WORKTREE_PATH_INVALID: ${resolved}`);
+  }
   if (protectedPath(binding, resolved)) {
     throw new Error(`WORKTREE_PROTECTED_PATH: ${resolved}`);
   }
@@ -936,6 +1091,12 @@ function validateTarget(binding: WorktreeHostBinding, target: string): string {
     !binding.allowedRoots.some((allowedRoot) => isSameOrWithin(allowedRoot, resolved))
   ) {
     throw new Error(`WORKTREE_PATH_NOT_ALLOWED: ${resolved}`);
+  }
+  if (binding.topology && (
+    dirname(resolved) !== binding.topology.persistentWorktreeRoot ||
+    samePath(resolved, binding.topology.managementCheckout)
+  )) {
+    throw new Error(`WORKTREE_TOPOLOGY_TARGET_INVALID: ${resolved}`);
   }
   return resolved;
 }
@@ -981,11 +1142,20 @@ export function planWorkspaceConfiguration(args: {
   remoteBranchRetentionDays?: number;
   allowedRoots?: string[];
   protectedRoots?: string[];
+  topology?: "container-v1";
+  workspaceContainer?: string;
   approval?: WorktreeApprovalPolicy;
   provider?: WorktreeDeliveryConfig["provider"];
   now?: Date;
 }): { plan: WorkspacePlan; path: string } {
   const status = workspaceStatus(args.projectRoot);
+  if (args.topology && args.topology !== "container-v1") {
+    throw new Error("WORKTREE_TOPOLOGY_INVALID: choose container-v1");
+  }
+  const containerRequested = args.topology === "container-v1" || args.workspaceContainer !== undefined;
+  if (containerRequested && !args.workspaceContainer) {
+    throw new Error("WORKTREE_CONTAINER_REQUIRED");
+  }
   const config = validConfig({
     ...status.config,
     mode: args.mode ?? status.config.mode,
@@ -997,22 +1167,66 @@ export function planWorkspaceConfiguration(args: {
       args.remoteBranchRetentionDays ?? status.config.remoteBranchRetentionDays,
     provider: args.provider ?? status.config.provider,
   });
-  const hostBinding = validHostBinding({
-    schemaVersion: WORKTREE_SCHEMA_VERSION,
-    allowedRoots: (
-      args.allowedRoots ??
-      (status.hostBinding.allowedRoots.length > 0
-        ? status.hostBinding.allowedRoots
-        : [dirname(status.projectDir)])
-    ).map(canonicalPath),
-    protectedRoots: (
-      args.protectedRoots ??
-      (status.hostBinding.protectedRoots.length > 0
-        ? status.hostBinding.protectedRoots
-        : [status.projectDir, status.commonDir, resolve("/")])
-    ).map(canonicalPath),
-    approval: args.approval ?? status.hostBinding.approval,
-  });
+  let hostBinding: WorktreeHostBinding;
+  let topology: WorkspaceTopology;
+  let allowedRoot: Extract<WorkspacePlan["operation"], { kind: "configure" }>["allowedRoot"];
+  if (containerRequested) {
+    if (args.allowedRoots || args.protectedRoots) {
+      throw new Error("WORKTREE_CONTAINER_TOPOLOGY_PATHS_DERIVED");
+    }
+    const managementBranch = config.managementBranch;
+    if (!managementBranch) throw new Error("WORKTREE_MANAGEMENT_BRANCH_REQUIRED");
+    const existingTopology = status.hostBinding.topology;
+    const candidate = containerTopology(
+      status.projectDir,
+      status.commonDir,
+      args.workspaceContainer!,
+      managementBranch,
+      status.worktrees,
+      !existingTopology || !samePath(existingTopology.persistentWorktreeRoot,
+        canonicalPath(join(canonicalPath(args.workspaceContainer!), "worktrees"))),
+    );
+    const rootState = directoryState(candidate.persistentWorktreeRoot);
+    hostBinding = validHostBinding({
+      schemaVersion: WORKTREE_SCHEMA_VERSION,
+      allowedRoots: [candidate.persistentWorktreeRoot],
+      protectedRoots: [status.projectDir, status.commonDir, resolve("/")].map(canonicalPath),
+      topology: candidate,
+      approval: args.approval ?? status.hostBinding.approval,
+    });
+    topology = {
+      ...candidate,
+      allowedRoots: hostBinding.allowedRoots,
+      protectedRoots: hostBinding.protectedRoots,
+      commonDir: status.commonDir,
+      worktreeTopLevels: status.worktrees.filter((worktree) => !worktree.bare && !worktree.prunable)
+        .map((worktree) => canonicalPath(worktree.path)).sort(),
+    };
+    allowedRoot = rootState === "absent"
+      ? { path: candidate.persistentWorktreeRoot, before: "absent" }
+      : rootState === "empty"
+        ? { path: candidate.persistentWorktreeRoot, before: "empty" }
+        : undefined;
+  } else {
+    hostBinding = validHostBinding({
+      schemaVersion: WORKTREE_SCHEMA_VERSION,
+      allowedRoots: (
+        args.allowedRoots ??
+        (status.hostBinding.allowedRoots.length > 0
+          ? status.hostBinding.allowedRoots
+          : [dirname(status.projectDir)])
+      ).map(canonicalPath),
+      protectedRoots: (
+        args.protectedRoots ??
+        (status.hostBinding.protectedRoots.length > 0
+          ? status.hostBinding.protectedRoots
+          : [status.projectDir, status.commonDir, resolve("/")])
+      ).map(canonicalPath),
+      topology: status.hostBinding.topology,
+      approval: args.approval ?? status.hostBinding.approval,
+    });
+    topology = status.topology;
+  }
   const content = prettyJson(config);
   const hostBindingContent = prettyJson(hostBinding);
   const operation: WorkspacePlan["operation"] = {
@@ -1025,8 +1239,105 @@ export function planWorkspaceConfiguration(args: {
     beforeHostBindingHash: status.hostBinding.hash,
     afterHostBindingHash: sha256(hostBindingContent),
     hostBindingContent,
+    topology,
+    ...(allowedRoot ? { allowedRoot } : {}),
   };
   return savePlan(status.projectDir, planDraft({ status, operation, now: args.now }));
+}
+
+function migrationTargetTopology(root: string, commonDir: string, workspaceContainer: string): WorkspaceTopology {
+  rejectTraversal(workspaceContainer);
+  const container = canonicalPath(workspaceContainer);
+  if (container === resolve("/") || isSameOrWithin(container, root) || isSameOrWithin(root, container)) {
+    throw new Error(`WORKTREE_MIGRATION_CONTAINER_INVALID: ${container}`);
+  }
+  if (existsSync(container)) {
+    if (!lstatSync(container).isDirectory() || lstatSync(container).isSymbolicLink() ||
+        directoryState(container) !== "empty") {
+      throw new Error(`WORKTREE_MIGRATION_CONTAINER_INVALID: ${container}`);
+    }
+  }
+  const managementCheckout = canonicalPath(join(container, "main"));
+  const persistentWorktreeRoot = canonicalPath(join(container, "worktrees"));
+  if (existsSync(managementCheckout) || existsSync(persistentWorktreeRoot)) {
+    throw new Error(`WORKTREE_MIGRATION_TARGET_EXISTS: ${container}`);
+  }
+  return {
+    kind: "container-v1",
+    workspaceContainer: container,
+    managementCheckout,
+    persistentWorktreeRoot,
+    allowedRoots: [persistentWorktreeRoot],
+    protectedRoots: [managementCheckout, commonDir, resolve("/")].map(canonicalPath),
+    commonDir,
+    worktreeTopLevels: [],
+  };
+}
+
+export function planWorkspaceMigration(args: {
+  projectRoot: string;
+  workspaceContainer: string;
+  now?: Date;
+}): { plan: WorkspacePlan; path: string } {
+  const status = workspaceStatus(args.projectRoot);
+  if (!status.configured || !status.hostBinding.configured) {
+    throw new Error("WORKTREE_MIGRATION_CONFIGURATION_REQUIRED");
+  }
+  if (status.hostBinding.topology) throw new Error("WORKTREE_MIGRATION_NOT_LEGACY_FLAT");
+  if (!status.config.managementBranch) throw new Error("WORKTREE_MANAGEMENT_BRANCH_REQUIRED");
+  const management = status.worktrees.filter((worktree) =>
+    !worktree.bare && !worktree.prunable && worktree.branch === status.config.managementBranch);
+  if (management.length !== 1 || !samePath(management[0].path, status.projectDir)) {
+    throw new Error("WORKTREE_MIGRATION_MANAGEMENT_CHECKOUT_INVALID");
+  }
+  const topology = migrationTargetTopology(status.projectDir, status.commonDir, args.workspaceContainer);
+  const worktreeRecords = status.worktrees.map((worktree) => ({
+    path: canonicalPath(worktree.path),
+    branch: worktree.branch,
+    head: worktree.head,
+    dirty: Boolean(worktree.dirty),
+    dirtyEvidence: worktree.dirtyEvidence ?? [],
+    dirtyPatch: worktree.dirtyPatch ?? { size: 0, sha256: sha256("") },
+    uniqueCommits: worktree.uniqueCommits ?? 0,
+    unpushedCommits: worktree.unpushedCommits ?? 0,
+  })).sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  const referencePaths = [
+    ...status.hostBinding.allowedRoots,
+    ...status.hostBinding.protectedRoots,
+    ...status.leases.map((lease) => lease.path),
+    ...worktreeRecords.map((worktree) => worktree.path),
+  ].map(canonicalPath).sort();
+  return savePlan(status.projectDir, planDraft({
+    status,
+    operation: {
+      kind: "migrate",
+      topology,
+      preflight: {
+        hostBindingHash: status.hostBinding.hash,
+        refsHash: hashObject(refsObservation(status.projectDir)),
+        worktreeRegistrationHash: hashObject(worktreeRegistrationObservation(status.worktrees)),
+        leaseHashes: leaseStateObservation(status.commonDir).map((lease) => ({
+          path: lease.leasePath,
+          sha256: lease.sha256,
+        })),
+        referencePaths,
+        managementCheckout: status.projectDir,
+        leases: status.leases.map((lease) => ({
+          workItem: lease.workItem,
+          path: lease.path,
+          branch: lease.branch,
+        })).sort((left, right) => left.workItem < right.workItem ? -1 : 1),
+        worktrees: worktreeRecords,
+      },
+      manualSteps: [
+        `Create ${topology.workspaceContainer} as a non-Git container.`,
+        `Move the exact management checkout to ${topology.managementCheckout} only after a separate approved migration executor exists.`,
+        `Create ${topology.persistentWorktreeRoot} and re-register each persistent worktree only through a future migration receipt.`,
+      ],
+    },
+    now: args.now,
+    warnings: ["Migration is plan-only. Applying this plan is deliberately unsupported and performs zero mutations."],
+  }));
 }
 
 export function planWorkspaceAllocation(args: {
@@ -1611,16 +1922,30 @@ function loadWorkspacePlan(root: string, path: string): WorkspacePlan {
   if (
     plan.schemaVersion !== "worktree-delivery/1.0" ||
     plan.kind !== "workspace-plan" ||
-    !["configure", "allocate", "adopt", "close", "rebind", "renew", "recover"].includes(plan.operation?.kind) ||
+    !["configure", "migrate", "allocate", "adopt", "close", "rebind", "renew", "recover"].includes(plan.operation?.kind) ||
     (plan.operation.kind === "configure" && (
       plan.operation.hostBindingPath !== HOST_BINDING_PATH ||
       typeof plan.operation.beforeHostBindingHash !== "string" &&
         plan.operation.beforeHostBindingHash !== null ||
       typeof plan.operation.afterHostBindingHash !== "string" ||
-      typeof plan.operation.hostBindingContent !== "string"
+      typeof plan.operation.hostBindingContent !== "string" ||
+      !plan.operation.topology
     ))
   ) {
     throw new Error("WORKSPACE_PLAN_INVALID");
+  }
+  if (plan.operation.kind === "migrate") {
+    const operation = plan.operation;
+    if (
+      operation.topology?.kind !== "container-v1" ||
+      !Array.isArray(operation.preflight?.leases) ||
+      !Array.isArray(operation.preflight?.worktrees) ||
+      !Array.isArray(operation.preflight?.referencePaths) ||
+      !Array.isArray(operation.manualSteps) ||
+      operation.manualSteps.length === 0
+    ) {
+      throw new Error("WORKSPACE_PLAN_INVALID");
+    }
   }
   if (plan.operation.kind === "adopt") {
     try {
@@ -2424,6 +2749,9 @@ export function applyWorkspacePlan(args: {
   const root = repositoryRoot(args.projectRoot);
   const plan = loadWorkspacePlan(root, args.planPath);
   validateWorkspacePlanEnvelope(root, gitCommonDir(root), plan, plan.planHash);
+  if (plan.operation.kind === "migrate") {
+    throw new Error("WORKTREE_MIGRATION_APPLY_UNSUPPORTED");
+  }
   const authorization = workspaceAuthorization({
     root,
     plan,
@@ -2481,6 +2809,7 @@ export function applyWorkspacePlan(args: {
   let worktreeCreated = false;
   let configWritten = false;
   let hostBindingWritten = false;
+  let allowedRootCreated = false;
   let worktreeRemoved = false;
   let recoveryRemoved = false;
   try {
@@ -2488,6 +2817,37 @@ export function applyWorkspacePlan(args: {
     if (plan.operation.kind === "configure") {
       const target = safePath(root, plan.operation.configPath);
       const hostBindingTarget = safePath(plan.commonDir, plan.operation.hostBindingPath);
+      const plannedConfig = validConfig(JSON.parse(plan.operation.content));
+      const plannedBinding = validHostBinding(JSON.parse(plan.operation.hostBindingContent));
+      if (plannedBinding.topology) {
+        containerTopology(
+          root,
+          plan.commonDir,
+          plannedBinding.topology.workspaceContainer,
+          plannedConfig.managementBranch,
+          before.worktrees,
+          Boolean(plan.operation.allowedRoot),
+        );
+      }
+      if (plan.operation.allowedRoot) {
+        const state = directoryState(plan.operation.allowedRoot.path);
+        if (state !== plan.operation.allowedRoot.before) {
+          throw new Error(`WORKSPACE_DRIFT: allowed root changed: ${plan.operation.allowedRoot.path}`);
+        }
+        if (state === "absent") {
+          mkdirSync(plan.operation.allowedRoot.path);
+          if (directoryState(plan.operation.allowedRoot.path) !== "empty") {
+            throw new Error(`WORKTREE_ALLOWED_ROOT_CREATE_FAILED: ${plan.operation.allowedRoot.path}`);
+          }
+          allowedRootCreated = true;
+          receipt.createdDirectories = [plan.operation.allowedRoot.path];
+          receipt.steps.push({
+            id: "create-allowed-root",
+            status: "applied",
+            detail: plan.operation.allowedRoot.path,
+          });
+        }
+      }
       assertCurrentHash(target, plan.operation.beforeHash);
       assertCurrentHash(hostBindingTarget, plan.operation.beforeHostBindingHash);
       receipt.backupContent = plan.operation.beforeHash === null
@@ -2673,6 +3033,17 @@ export function applyWorkspacePlan(args: {
           }
           receipt.steps.push({ id: "restore-config", status: "compensated", detail: target });
         }
+        if (allowedRootCreated && plan.operation.allowedRoot) {
+          if (directoryState(plan.operation.allowedRoot.path) !== "empty") {
+            throw new Error(`WORKTREE_ALLOWED_ROOT_COMPENSATION_UNSAFE: ${plan.operation.allowedRoot.path}`);
+          }
+          rmdirSync(plan.operation.allowedRoot.path);
+          receipt.steps.push({
+            id: "remove-allowed-root",
+            status: "compensated",
+            detail: plan.operation.allowedRoot.path,
+          });
+        }
       } else if (plan.operation.kind === "allocate" && worktreeCreated) {
         git(root, ["worktree", "remove", plan.operation.lease.path]);
         if (existsSync(leaseFile(plan.commonDir, plan.operation.lease.workItem))) {
@@ -2854,6 +3225,9 @@ export function rollbackWorkspaceChange(args: {
   }
   const planPathValue = planPath(root, receipt.id);
   const plan = loadWorkspacePlan(root, planPathValue);
+  if (plan.operation.kind === "migrate") {
+    throw new Error("WORKTREE_MIGRATION_APPLY_UNSUPPORTED");
+  }
   if (plan.operation.kind === "adopt") {
     return rollbackWorkspaceAdoption({
       root,
@@ -2892,6 +3266,18 @@ export function rollbackWorkspaceChange(args: {
         status: "compensated",
         detail: hostBindingTarget,
       });
+      if (plan.operation.allowedRoot &&
+          receipt.createdDirectories?.includes(plan.operation.allowedRoot.path)) {
+        if (directoryState(plan.operation.allowedRoot.path) !== "empty") {
+          throw new Error(`WORKSPACE_ROLLBACK_UNSAFE: allowed root is not empty: ${plan.operation.allowedRoot.path}`);
+        }
+        rmdirSync(plan.operation.allowedRoot.path);
+        receipt.steps.push({
+          id: "rollback-allowed-root",
+          status: "compensated",
+          detail: plan.operation.allowedRoot.path,
+        });
+      }
     } else if (plan.operation.kind === "allocate") {
       throw new Error(
         "WORKSPACE_ROLLBACK_REQUIRES_CLOSE_PLAN: an allocated worktree must pass a new exact-hash close plan",

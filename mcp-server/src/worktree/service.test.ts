@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { hashObject, prettyJson, sha256, withoutHash } from "../v2/fs.js";
 import type { WorktreeApprovalPolicy, WorktreeDelegatableOperation } from "./types.js";
@@ -28,6 +28,7 @@ import {
   planWorkspaceAllocation,
   planWorkspaceClose,
   planWorkspaceConfiguration,
+  planWorkspaceMigration,
   planWorkspaceRebind,
   planWorkspaceRecover,
   planWorkspaceRenew,
@@ -134,6 +135,25 @@ function repositoryWithRemote(): string {
   git(root, "remote", "add", "origin", remote);
   git(root, "push", "-u", "origin", "main");
   return root;
+}
+
+function containerRepository(): { container: string; main: string; worktrees: string } {
+  const container = mkdtempSync(join(tmpdir(), "harness-container-"));
+  repositories.push(container);
+  const main = join(container, "main");
+  mkdirSync(main);
+  git(main, "init", "-b", "main");
+  git(main, "config", "user.email", "harness@example.test");
+  git(main, "config", "user.name", "Harness Test");
+  writeFileSync(join(main, "README.md"), "# fixture\n", "utf8");
+  git(main, "add", "README.md");
+  git(main, "commit", "-m", "test: initialize container fixture");
+  const canonicalContainer = realpathSync.native(container);
+  return {
+    container: canonicalContainer,
+    main: join(canonicalContainer, "main"),
+    worktrees: join(canonicalContainer, "worktrees"),
+  };
 }
 
 function worktreeCount(root: string): number {
@@ -494,6 +514,167 @@ describe("hash-approved worktree lifecycle", () => {
     expect(workspaceStatus(root)).toMatchObject({
       hostBinding: { configured: true, source: "host-local" },
     });
+  });
+
+  it("configures a parameterized container topology without plan-time filesystem changes", () => {
+    const { container, main, worktrees } = containerRepository();
+    const refsBefore = git(main, "for-each-ref", "--format=%(refname)%00%(objectname)");
+    const registrationsBefore = git(main, "worktree", "list", "--porcelain");
+    const planned = planWorkspaceConfiguration({
+      projectRoot: main,
+      mode: "enforced",
+      managementBranch: "main",
+      topology: "container-v1",
+      workspaceContainer: container,
+    });
+    expect(existsSync(worktrees)).toBe(false);
+    expect(git(main, "for-each-ref", "--format=%(refname)%00%(objectname)")).toBe(refsBefore);
+    expect(git(main, "worktree", "list", "--porcelain")).toBe(registrationsBefore);
+    expect(planned.plan.operation).toMatchObject({
+      kind: "configure",
+      topology: {
+        kind: "container-v1",
+        workspaceContainer: realpathSync.native(container),
+        managementCheckout: realpathSync.native(main),
+        persistentWorktreeRoot: worktrees,
+      },
+      allowedRoot: { path: worktrees, before: "absent" },
+    });
+    if (planned.plan.operation.kind !== "configure") throw new Error("expected configure plan");
+    expect(() => applyWorkspacePlan({
+      projectRoot: main,
+      planPath: planned.path,
+      approval: "0".repeat(64),
+    })).toThrow(/APPROVAL_MISMATCH/);
+    expect(existsSync(worktrees)).toBe(false);
+
+    const receipt = applyWorkspacePlan({
+      projectRoot: main,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    expect(receipt.createdDirectories).toEqual([worktrees]);
+    expect(receipt.steps).toContainEqual({
+      id: "create-allowed-root",
+      status: "applied",
+      detail: worktrees,
+    });
+    expect(existsSync(worktrees)).toBe(true);
+    expect(readFileSync(join(main, ".harness", "worktree-delivery.json"), "utf8")).toContain("main");
+    expect(workspaceStatus(main)).toMatchObject({
+      topology: {
+        kind: "container-v1",
+        workspaceContainer: realpathSync.native(container),
+        managementCheckout: realpathSync.native(main),
+        persistentWorktreeRoot: worktrees,
+        allowedRoots: [worktrees],
+      },
+      capacity: { used: 0, available: 4 },
+    });
+    expect(auditWorkspace(main)).toMatchObject({
+      topology: { kind: "container-v1", persistentWorktreeRoot: worktrees },
+      capacity: { used: 0 },
+    });
+  });
+
+  it("allocates only from the configured container root and preserves plan-time zero side effects", () => {
+    const { container, main, worktrees } = containerRepository();
+    const configured = planWorkspaceConfiguration({
+      projectRoot: main,
+      mode: "enforced",
+      managementBranch: "main",
+      topology: "container-v1",
+      workspaceContainer: container,
+    });
+    applyWorkspacePlan({ projectRoot: main, planPath: configured.path, approval: configured.plan.planHash });
+    const target = join(worktrees, "42");
+    const refsBefore = git(main, "for-each-ref", "--format=%(refname)%00%(objectname)");
+    const planned = planWorkspaceAllocation({
+      projectRoot: main,
+      workItem: "github:example/project#42",
+      branch: "issue-42",
+      path: target,
+      owner: "owner",
+    });
+    expect(existsSync(target)).toBe(false);
+    expect(workspaceStatus(main).leases).toHaveLength(0);
+    expect(git(main, "for-each-ref", "--format=%(refname)%00%(objectname)")).toBe(refsBefore);
+    const receipt = applyWorkspacePlan({
+      projectRoot: main,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    expect(receipt.status).toBe("applied");
+    expect(git(target, "rev-parse", "--show-toplevel")).toBe(target);
+    expect(workspaceStatus(main)).toMatchObject({
+      capacity: { used: 1, available: 3 },
+      leases: [expect.objectContaining({ path: target, branch: "issue-42" })],
+      worktrees: expect.arrayContaining([expect.objectContaining({
+        path: target,
+        gitTopLevel: target,
+      })]),
+    });
+  });
+
+  it("rejects nested, traversing, symlinked, and existing container targets", () => {
+    const { container, main, worktrees } = containerRepository();
+    const configured = planWorkspaceConfiguration({
+      projectRoot: main,
+      mode: "enforced",
+      managementBranch: "main",
+      topology: "container-v1",
+      workspaceContainer: container,
+    });
+    applyWorkspacePlan({ projectRoot: main, planPath: configured.path, approval: configured.plan.planHash });
+    const allocate = (path: string) => planWorkspaceAllocation({
+      projectRoot: main,
+      workItem: `github:example/project#${randomBytes(4).toString("hex")}`,
+      branch: `issue-${randomBytes(4).toString("hex")}`,
+      path,
+      owner: "owner",
+    });
+    expect(() => allocate(worktrees)).toThrow(/WORKTREE_TOPOLOGY_TARGET_INVALID/);
+    expect(() => allocate(join(main, ".worktrees", "1"))).toThrow(/WORKTREE_(PROTECTED_PATH|PATH_NOT_ALLOWED)/);
+    expect(() => allocate(`${worktrees}/../escape`)).toThrow(/WORKTREE_PATH_TRAVERSAL/);
+    const nonEmpty = join(worktrees, "non-empty");
+    mkdirSync(nonEmpty);
+    writeFileSync(join(nonEmpty, "keep"), "x", "utf8");
+    expect(() => allocate(nonEmpty)).toThrow(/WORKTREE_PATH_EXISTS/);
+    const escaped = join(worktrees, "escaped");
+    symlinkSync(dirname(worktrees), escaped);
+    expect(() => allocate(escaped)).toThrow(/WORKTREE_PATH_NOT_ALLOWED/);
+  });
+
+  it("keeps legacy flat checkouts unchanged and emits a plan-only migration preflight", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main" });
+    const targetContainer = join(dirname(root), `harness-migration-${randomBytes(4).toString("hex")}`);
+    const canonicalTargetContainer = join(realpathSync.native(dirname(root)), basename(targetContainer));
+    const registrationsBefore = git(root, "worktree", "list", "--porcelain");
+    const refsBefore = git(root, "for-each-ref", "--format=%(refname)%00%(objectname)");
+    const migration = planWorkspaceMigration({ projectRoot: root, workspaceContainer: targetContainer });
+    expect(migration.plan.operation).toMatchObject({
+      kind: "migrate",
+      topology: {
+        workspaceContainer: canonicalTargetContainer,
+        managementCheckout: join(canonicalTargetContainer, "main"),
+        persistentWorktreeRoot: join(canonicalTargetContainer, "worktrees"),
+      },
+      preflight: {
+        managementCheckout: realpathSync.native(root),
+        hostBindingHash: expect.any(String),
+        referencePaths: expect.arrayContaining([realpathSync.native(root)]),
+      },
+    });
+    expect(existsSync(targetContainer)).toBe(false);
+    expect(git(root, "worktree", "list", "--porcelain")).toBe(registrationsBefore);
+    expect(git(root, "for-each-ref", "--format=%(refname)%00%(objectname)")).toBe(refsBefore);
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: migration.path,
+      approval: migration.plan.planHash,
+    })).toThrow(/WORKTREE_MIGRATION_APPLY_UNSUPPORTED/);
+    expect(existsSync(targetContainer)).toBe(false);
   });
 
   it("detects host-binding drift before applying an allocation", () => {

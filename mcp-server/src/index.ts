@@ -72,6 +72,7 @@ import {
   planWorkspaceAllocation,
   planWorkspaceClose,
   planWorkspaceConfiguration,
+  planWorkspaceMigration,
   reviewAndApplyWorkspacePlan,
   retentionAuditWorkspace,
   reviewWorkspace,
@@ -260,6 +261,8 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
             remoteBranchRetentionDays: { type: "integer", minimum: 1 },
             allowedRoots: { type: "array", items: { type: "string" } },
             protectedRoots: { type: "array", items: { type: "string" } },
+            topology: { enum: ["container-v1"] },
+            workspaceContainer: { type: "string", minLength: 1 },
             approval: {
               type: "object",
               additionalProperties: false,
@@ -297,6 +300,19 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
                 },
               },
             },
+          },
+        },
+      },
+      {
+        name: "harness_worktree_migrate",
+        description: "Create a read-only exact-hash migration preflight from a legacy flat layout; applying it is intentionally unsupported",
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["projectDir", "workspaceContainer"],
+          properties: {
+            projectDir: { type: "string" },
+            workspaceContainer: { type: "string", minLength: 1 },
           },
         },
       },
@@ -659,10 +675,27 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         protectedRoots: Array.isArray(v2Args.protectedRoots)
           ? v2Args.protectedRoots.filter((item): item is string => typeof item === "string")
           : undefined,
+        topology: v2Args.topology === "container-v1" ? "container-v1" : undefined,
+        workspaceContainer: typeof v2Args.workspaceContainer === "string"
+          ? v2Args.workspaceContainer
+          : undefined,
         approval: v2WorktreeApproval(),
         provider: v2Args.provider && typeof v2Args.provider === "object"
           ? v2Args.provider as WorktreeDeliveryConfig["provider"]
           : undefined,
+      });
+      return v2Result({
+        planPath: result.path,
+        planHash: result.plan.planHash,
+        operation: result.plan.operation.kind,
+        warnings: result.plan.warnings,
+      });
+    }
+
+    case "harness_worktree_migrate": {
+      const result = planWorkspaceMigration({
+        projectRoot: v2String("projectDir"),
+        workspaceContainer: v2String("workspaceContainer"),
       });
       return v2Result({
         planPath: result.path,
