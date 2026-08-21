@@ -72,11 +72,16 @@ import {
   planWorkspaceAllocation,
   planWorkspaceClose,
   planWorkspaceConfiguration,
+  reviewAndApplyWorkspacePlan,
   retentionAuditWorkspace,
   reviewWorkspace,
   workspaceStatus,
 } from "./worktree/service.js";
-import type { WorkspaceAdoptionInput, WorktreeDeliveryConfig } from "./worktree/types.js";
+import type {
+  WorkspaceAdoptionInput,
+  WorktreeApprovalPolicy,
+  WorktreeDeliveryConfig,
+} from "./worktree/types.js";
 import {
   EvaluateRulesInputSchema,
   GenerateConfigInputSchema,
@@ -255,6 +260,23 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
             remoteBranchRetentionDays: { type: "integer", minimum: 1 },
             allowedRoots: { type: "array", items: { type: "string" } },
             protectedRoots: { type: "array", items: { type: "string" } },
+            approval: {
+              type: "object",
+              additionalProperties: false,
+              required: ["mode"],
+              properties: {
+                mode: { enum: ["manual", "delegated-ai"] },
+                reviewerModel: { type: "string", minLength: 1 },
+                allowedOperations: {
+                  type: "array",
+                  minItems: 1,
+                  uniqueItems: true,
+                  items: { enum: ["allocate", "adopt", "close", "rebind", "renew", "recover"] },
+                },
+                planTtlSeconds: { type: "integer", minimum: 30, maximum: 3600 },
+                reviewerTimeoutSeconds: { type: "integer", minimum: 10, maximum: 600 },
+              },
+            },
             provider: {
               type: "object",
               additionalProperties: false,
@@ -325,6 +347,20 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
                 },
               },
             },
+          },
+        },
+      },
+      {
+        name: "harness_worktree_apply_ai",
+        description: "Ask the configured independent AI reviewer to authorize one exact worktree plan, then apply it only on APPROVE",
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["projectDir", "planPath", "intent"],
+          properties: {
+            projectDir: { type: "string" },
+            planPath: { type: "string" },
+            intent: { type: "string", minLength: 1 },
           },
         },
       },
@@ -486,6 +522,28 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
     if (typeof value !== "string" || value.length === 0) throw new Error(`ARGUMENT_REQUIRED: ${key}`);
     return value;
   };
+  const v2WorktreeApproval = (): WorktreeApprovalPolicy | undefined => {
+    if (!v2Args.approval || typeof v2Args.approval !== "object") return undefined;
+    const approval = v2Args.approval as Record<string, unknown>;
+    if (approval.mode === "manual") return { mode: "manual" };
+    if (approval.mode !== "delegated-ai") {
+      throw new Error("INVALID_WORKTREE_APPROVAL_MODE: choose manual or delegated-ai");
+    }
+    return {
+      mode: "delegated-ai",
+      reviewer: { kind: "claude", model: String(approval.reviewerModel ?? "") },
+      allowedOperations: Array.isArray(approval.allowedOperations)
+        ? approval.allowedOperations as Extract<
+            WorktreeApprovalPolicy,
+            { mode: "delegated-ai" }
+          >["allowedOperations"]
+        : ["allocate", "renew"],
+      planTtlSeconds: typeof approval.planTtlSeconds === "number" ? approval.planTtlSeconds : 600,
+      reviewerTimeoutSeconds: typeof approval.reviewerTimeoutSeconds === "number"
+        ? approval.reviewerTimeoutSeconds
+        : 120,
+    };
+  };
   const v2Result = (value: unknown) => ({
     content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
   });
@@ -601,6 +659,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         protectedRoots: Array.isArray(v2Args.protectedRoots)
           ? v2Args.protectedRoots.filter((item): item is string => typeof item === "string")
           : undefined,
+        approval: v2WorktreeApproval(),
         provider: v2Args.provider && typeof v2Args.provider === "object"
           ? v2Args.provider as WorktreeDeliveryConfig["provider"]
           : undefined,
@@ -643,6 +702,13 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         warnings: result.plan.warnings,
       });
     }
+
+    case "harness_worktree_apply_ai":
+      return v2Result(reviewAndApplyWorkspacePlan({
+        projectRoot: v2String("projectDir"),
+        planPath: v2String("planPath"),
+        intent: v2String("intent"),
+      }));
 
     case "harness_worktree_review":
       return v2Result(reviewWorkspace({

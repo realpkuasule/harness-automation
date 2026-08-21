@@ -171,8 +171,17 @@ describe("v2 CLI forward flow", () => {
       "main",
       "--allow-root",
       join(root, ".."),
+      "--approval-mode",
+      "delegated-ai",
+      "--reviewer-model",
+      "test-reviewer",
+      "--delegate-operation",
+      "allocate",
+      "--delegate-operation",
+      "renew",
     ]);
     expect(planned.operation).toBe("configure");
+    expect(planned.summary).toMatchObject({ risk: "high" });
     run(root, [
       "apply",
       "--plan",
@@ -183,6 +192,13 @@ describe("v2 CLI forward flow", () => {
     expect(run(root, ["worktree", "status"])).toMatchObject({
       configured: true,
       config: { managementBranch: "main" },
+      hostBinding: {
+        approval: {
+          mode: "delegated-ai",
+          reviewer: { kind: "claude", model: "test-reviewer" },
+          allowedOperations: ["allocate", "renew"],
+        },
+      },
     });
   }, 15_000);
 

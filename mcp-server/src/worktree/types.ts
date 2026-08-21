@@ -19,6 +19,27 @@ export const WORKTREE_POLICY_IDS = [
 
 export type WorktreePolicyId = typeof WORKTREE_POLICY_IDS[number];
 
+export const WORKTREE_DELEGATABLE_OPERATIONS = [
+  "allocate",
+  "adopt",
+  "close",
+  "rebind",
+  "renew",
+  "recover",
+] as const;
+
+export type WorktreeDelegatableOperation = typeof WORKTREE_DELEGATABLE_OPERATIONS[number];
+
+export type WorktreeApprovalPolicy =
+  | { mode: "manual" }
+  | {
+      mode: "delegated-ai";
+      reviewer: { kind: "claude"; model: string };
+      allowedOperations: WorktreeDelegatableOperation[];
+      planTtlSeconds: number;
+      reviewerTimeoutSeconds: number;
+    };
+
 export interface WorktreeDeliveryConfig {
   schemaVersion: "1.0";
   mode: "audit-only" | "enforced";
@@ -44,6 +65,7 @@ export interface WorktreeHostBinding {
   schemaVersion: "1.0";
   allowedRoots: string[];
   protectedRoots: string[];
+  approval: WorktreeApprovalPolicy;
 }
 
 export interface WorktreeHostBindingObservation extends WorktreeHostBinding {
@@ -275,6 +297,33 @@ export interface WorkspacePlan {
   planHash: string;
 }
 
+export interface WorkspaceAiDecision {
+  schemaVersion: "worktree-ai-decision/1.0";
+  kind: "workspace-ai-decision";
+  id: string;
+  planHash: string;
+  intent: string;
+  intentHash: string;
+  policyHash: string;
+  projectDir: string;
+  commonDir: string;
+  observedHash: string;
+  operation: WorktreeDelegatableOperation;
+  reviewer: { kind: "claude"; model: string };
+  verdict: "approve" | "deny" | "abstain";
+  reasonCodes: string[];
+  summary: string;
+  issuedAt: string;
+  expiresAt: string;
+  decisionHash: string;
+}
+
+export interface WorkspaceAiReviewResult {
+  decisionPath: string;
+  decision: WorkspaceAiDecision;
+  receipt?: WorkspaceReceipt;
+}
+
 export interface WorkspaceReceipt {
   schemaVersion: "worktree-delivery/1.0";
   kind: "workspace-receipt";
@@ -296,6 +345,10 @@ export interface WorkspaceReceipt {
   rollbackAfter?: WorkspaceStatus;
   leaseChanges?: WorkspaceLeaseChange[];
   compensationStatus?: "not-required" | "completed" | "failed";
+  authorizationMode?: "manual" | "delegated-ai";
+  authorizationDecisionHash?: string;
+  authorizationPolicyHash?: string;
+  authorizationReviewer?: { kind: "claude"; model: string };
 }
 
 export interface ReviewReceipt {

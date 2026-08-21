@@ -44,6 +44,10 @@ import {
   type RetentionAudit,
   type ReviewReceipt,
   type WorkspaceAudit,
+  type WorkspaceAiDecision,
+  type WorkspaceAiReviewResult,
+  type WorktreeApprovalPolicy,
+  type WorktreeDelegatableOperation,
   type WorktreeHostBinding,
   type WorktreeHostBindingObservation,
   type WorkspaceLease,
@@ -52,6 +56,7 @@ import {
   type WorkspacePolicyResult,
   type WorkspaceReceipt,
   type WorkspaceStatus,
+  WORKTREE_DELEGATABLE_OPERATIONS,
 } from "./types.js";
 import { observeProvider } from "./provider.js";
 
@@ -192,6 +197,20 @@ const hostBindingSchema = z.object({
   schemaVersion: z.literal(WORKTREE_SCHEMA_VERSION),
   allowedRoots: uniqueAbsolutePaths,
   protectedRoots: uniqueAbsolutePaths,
+  approval: z.discriminatedUnion("mode", [
+    z.object({ mode: z.literal("manual") }).strict(),
+    z.object({
+      mode: z.literal("delegated-ai"),
+      reviewer: z.object({
+        kind: z.literal("claude"),
+        model: z.string().trim().min(1),
+      }).strict(),
+      allowedOperations: z.array(z.enum(WORKTREE_DELEGATABLE_OPERATIONS)).min(1)
+        .refine((operations) => new Set(operations).size === operations.length, "must be unique"),
+      planTtlSeconds: z.number().int().min(30).max(3600),
+      reviewerTimeoutSeconds: z.number().int().min(10).max(600),
+    }).strict(),
+  ]).optional(),
 }).strict();
 
 const adoptionInputSchema = z.object({
@@ -236,7 +255,7 @@ function validHostBinding(input: unknown): WorktreeHostBinding {
       `WORKTREE_HOST_BINDING_INVALID: ${issue.path.join(".") || "binding"} ${issue.message}`,
     );
   }
-  return parsed.data;
+  return { ...parsed.data, approval: parsed.data.approval ?? { mode: "manual" } };
 }
 
 const HOST_BINDING_PATH = "harness/worktree-delivery/host-binding.json" as const;
@@ -265,6 +284,7 @@ export function loadConfig(root: string): {
         schemaVersion: WORKTREE_SCHEMA_VERSION,
         allowedRoots,
         protectedRoots,
+        approval: { mode: "manual" },
       },
     };
   }
@@ -276,6 +296,7 @@ function defaultHostBinding(root: string, commonDir: string): WorktreeHostBindin
     schemaVersion: WORKTREE_SCHEMA_VERSION,
     allowedRoots: [],
     protectedRoots: [root, commonDir, resolve("/")],
+    approval: { mode: "manual" },
   };
 }
 
@@ -880,6 +901,10 @@ function receiptFile(commonDir: string, id: string): string {
   return safePath(commonDir, `harness/worktree-delivery/receipts/${id}.json`);
 }
 
+function aiDecisionFile(commonDir: string, id: string): string {
+  return safePath(commonDir, `harness/worktree-delivery/ai-decisions/${id}.json`);
+}
+
 function planPath(root: string, id: string): string {
   return `.harness/plans/${id}.json`;
 }
@@ -956,6 +981,7 @@ export function planWorkspaceConfiguration(args: {
   remoteBranchRetentionDays?: number;
   allowedRoots?: string[];
   protectedRoots?: string[];
+  approval?: WorktreeApprovalPolicy;
   provider?: WorktreeDeliveryConfig["provider"];
   now?: Date;
 }): { plan: WorkspacePlan; path: string } {
@@ -985,6 +1011,7 @@ export function planWorkspaceConfiguration(args: {
         ? status.hostBinding.protectedRoots
         : [status.projectDir, status.commonDir, resolve("/")])
     ).map(canonicalPath),
+    approval: args.approval ?? status.hostBinding.approval,
   });
   const content = prettyJson(config);
   const hostBindingContent = prettyJson(hostBinding);
@@ -1749,6 +1776,332 @@ function validateWorkspacePlanEnvelope(
   }
 }
 
+const aiReviewerOutputSchema = z.object({
+  verdict: z.enum(["approve", "deny", "abstain"]),
+  reasonCodes: z.array(z.string().regex(/^[A-Z][A-Z0-9_]{1,63}$/u)).min(1).max(8),
+  summary: z.string().trim().min(1).max(1_000),
+}).strict();
+
+const aiReviewerJsonSchema = JSON.stringify({
+  type: "object",
+  additionalProperties: false,
+  required: ["verdict", "reasonCodes", "summary"],
+  properties: {
+    verdict: { enum: ["approve", "deny", "abstain"] },
+    reasonCodes: {
+      type: "array",
+      minItems: 1,
+      maxItems: 8,
+      items: { type: "string", pattern: "^[A-Z][A-Z0-9_]{1,63}$" },
+    },
+    summary: { type: "string", minLength: 1, maxLength: 1_000 },
+  },
+});
+
+function isDelegatableOperation(kind: WorkspacePlan["operation"]["kind"]):
+kind is WorktreeDelegatableOperation {
+  return (WORKTREE_DELEGATABLE_OPERATIONS as readonly string[]).includes(kind);
+}
+
+function decisionWithoutHash(decision: WorkspaceAiDecision): Omit<WorkspaceAiDecision, "decisionHash"> {
+  const body: Partial<WorkspaceAiDecision> = { ...decision };
+  delete body.decisionHash;
+  return body as Omit<WorkspaceAiDecision, "decisionHash">;
+}
+
+function parseReviewerOutput(output: string): z.infer<typeof aiReviewerOutputSchema> {
+  const envelope = JSON.parse(output) as Record<string, unknown>;
+  let candidate: unknown = envelope.structured_output ?? envelope;
+  if (typeof candidate === "string") candidate = JSON.parse(candidate);
+  if (candidate === envelope && typeof envelope.result === "string") {
+    candidate = JSON.parse(envelope.result);
+  }
+  return aiReviewerOutputSchema.parse(candidate);
+}
+
+function destructiveAiEvidence(root: string, plan: WorkspacePlan): {
+  safe: boolean;
+  uniqueCommits: number;
+  unpushedCommits: number;
+  ignoredPathCount: number;
+  ignoredPathsHash: string;
+} | undefined {
+  if (plan.operation.kind !== "close" && plan.operation.kind !== "recover") return undefined;
+  const target = plan.operation.kind === "close" ? plan.operation.lease.path : plan.operation.path;
+  const record = worktrees(root).find((worktree) => samePath(worktree.path, target));
+  if (!record) {
+    return {
+      safe: false,
+      uniqueCommits: 0,
+      unpushedCommits: 0,
+      ignoredPathCount: 0,
+      ignoredPathsHash: hashObject([]),
+    };
+  }
+  const ignored = git(root, [
+    "-C",
+    target,
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+    "--ignored=matching",
+  ]).split("\0").filter((token) => token.startsWith("!! ")).map((token) => token.slice(3)).sort();
+  const uniqueCommits = record.uniqueCommits ?? 0;
+  const unpushedCommits = record.unpushedCommits ?? 0;
+  return {
+    safe: !record.dirty && uniqueCommits === 0 && unpushedCommits === 0 && ignored.length === 0,
+    uniqueCommits,
+    unpushedCommits,
+    ignoredPathCount: ignored.length,
+    ignoredPathsHash: hashObject(ignored),
+  };
+}
+
+function runClaudeReviewer(args: {
+  plan: WorkspacePlan;
+  intent: string;
+  policy: Extract<WorktreeApprovalPolicy, { mode: "delegated-ai" }>;
+  destructiveEvidence?: ReturnType<typeof destructiveAiEvidence>;
+}): z.infer<typeof aiReviewerOutputSchema> {
+  const prompt = [
+    "You are the independent, read-only authorization reviewer for a Git worktree governance plan.",
+    "You have no mutation authority. Decide whether the stated human intent matches the exact canonical plan.",
+    "Deterministic safety checks run separately and cannot be waived. APPROVE only when the operation and every target match the intent and delegated policy. DENY contradictions or unsafe intent. ABSTAIN when evidence is insufficient.",
+    "Return only the required structured result.",
+    prettyJson({
+      intent: args.intent,
+      delegatedPolicy: args.policy,
+      destructiveEvidence: args.destructiveEvidence,
+      plan: args.plan,
+    }),
+  ].join("\n\n");
+  const isolatedCwd = mkdtempSync(join(tmpdir(), "harness-ai-reviewer-"));
+  try {
+    const result = spawnSync("claude", [
+      "--print",
+      "--safe-mode",
+      "--no-session-persistence",
+      "--tools",
+      "",
+      "--permission-mode",
+      "plan",
+      "--output-format",
+      "json",
+      "--json-schema",
+      aiReviewerJsonSchema,
+      "--model",
+      args.policy.reviewer.model,
+    ], {
+      cwd: isolatedCwd,
+      encoding: "utf8",
+      input: prompt,
+      timeout: args.policy.reviewerTimeoutSeconds * 1_000,
+      maxBuffer: 1024 * 1024,
+      env: { ...process.env, CI: "1" },
+    });
+    if (result.error || result.status !== 0) {
+      const detail = `${result.stderr ?? result.stdout ?? result.error ?? ""}`.trim().slice(-2_000);
+      throw new Error(`WORKSPACE_AI_REVIEWER_FAILED: ${detail}`);
+    }
+    try {
+      return parseReviewerOutput(result.stdout);
+    } catch (error) {
+      throw new Error(
+        `WORKSPACE_AI_REVIEWER_INVALID: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  } finally {
+    rmdirSync(isolatedCwd);
+  }
+}
+
+function buildAiDecision(args: {
+  plan: WorkspacePlan;
+  intent: string;
+  policy: Extract<WorktreeApprovalPolicy, { mode: "delegated-ai" }>;
+  verdict: WorkspaceAiDecision["verdict"];
+  reasonCodes: string[];
+  summary: string;
+  now: Date;
+}): WorkspaceAiDecision {
+  if (!isDelegatableOperation(args.plan.operation.kind)) {
+    throw new Error(`WORKSPACE_AI_OPERATION_UNSUPPORTED: ${args.plan.operation.kind}`);
+  }
+  const issuedAt = args.now.toISOString();
+  const planExpiresAt = Date.parse(args.plan.createdAt) + args.policy.planTtlSeconds * 1_000;
+  const decision: WorkspaceAiDecision = {
+    schemaVersion: "worktree-ai-decision/1.0",
+    kind: "workspace-ai-decision",
+    id: `ai-${args.plan.id}-${issuedAt.replace(/[:.]/gu, "-")}`,
+    planHash: args.plan.planHash,
+    intent: args.intent,
+    intentHash: sha256(args.intent),
+    policyHash: hashObject(args.policy),
+    projectDir: args.plan.projectDir,
+    commonDir: args.plan.commonDir,
+    observedHash: args.plan.observedHash,
+    operation: args.plan.operation.kind,
+    reviewer: args.policy.reviewer,
+    verdict: args.verdict,
+    reasonCodes: args.reasonCodes,
+    summary: args.summary,
+    issuedAt,
+    expiresAt: new Date(Math.min(
+      args.now.getTime() + args.policy.planTtlSeconds * 1_000,
+      planExpiresAt,
+    )).toISOString(),
+    decisionHash: "",
+  };
+  decision.decisionHash = hashObject(decisionWithoutHash(decision));
+  return decision;
+}
+
+function validateAiAuthorization(
+  plan: WorkspacePlan,
+  policy: Extract<WorktreeApprovalPolicy, { mode: "delegated-ai" }>,
+  decision: WorkspaceAiDecision | undefined,
+  now: Date,
+): WorkspaceAiDecision {
+  if (!decision) throw new Error("WORKSPACE_AI_AUTHORIZATION_REQUIRED");
+  const output = aiReviewerOutputSchema.safeParse({
+    verdict: decision.verdict,
+    reasonCodes: decision.reasonCodes,
+    summary: decision.summary,
+  });
+  if (
+    decision.schemaVersion !== "worktree-ai-decision/1.0" ||
+    decision.kind !== "workspace-ai-decision" ||
+    !decision.id ||
+    !decision.intent ||
+    decision.intentHash !== sha256(decision.intent) ||
+    !/^[a-f0-9]{64}$/u.test(decision.planHash) ||
+    !/^[a-f0-9]{64}$/u.test(decision.policyHash) ||
+    !/^[a-f0-9]{64}$/u.test(decision.observedHash) ||
+    !/^[a-f0-9]{64}$/u.test(decision.decisionHash) ||
+    !output.success ||
+    hashObject(decisionWithoutHash(decision)) !== decision.decisionHash ||
+    decision.verdict !== "approve" ||
+    decision.planHash !== plan.planHash ||
+    decision.policyHash !== hashObject(policy) ||
+    decision.projectDir !== plan.projectDir ||
+    decision.commonDir !== plan.commonDir ||
+    decision.observedHash !== plan.observedHash ||
+    decision.operation !== plan.operation.kind ||
+    decision.reviewer.kind !== policy.reviewer.kind ||
+    decision.reviewer.model !== policy.reviewer.model ||
+    !policy.allowedOperations.includes(decision.operation) ||
+    !Number.isFinite(Date.parse(decision.issuedAt)) ||
+    !Number.isFinite(Date.parse(decision.expiresAt)) ||
+    Date.parse(decision.issuedAt) > now.getTime() ||
+    Date.parse(decision.expiresAt) <= now.getTime()
+  ) {
+    throw new Error("WORKSPACE_AI_AUTHORIZATION_INVALID");
+  }
+  return decision;
+}
+
+function workspaceAuthorization(args: {
+  root: string;
+  plan: WorkspacePlan;
+  decision?: WorkspaceAiDecision;
+  now: Date;
+}): WorkspaceAiDecision | undefined {
+  const binding = loadHostBinding(args.root, args.plan.commonDir);
+  if (args.plan.operation.kind === "configure" || binding.approval.mode === "manual") {
+    if (args.decision) throw new Error("WORKSPACE_AI_DELEGATION_NOT_ENABLED");
+    return undefined;
+  }
+  return validateAiAuthorization(args.plan, binding.approval, args.decision, args.now);
+}
+
+function receiptAuthorization(decision?: WorkspaceAiDecision): Pick<
+WorkspaceReceipt,
+"authorizationMode" | "authorizationDecisionHash" | "authorizationPolicyHash" |
+"authorizationReviewer"
+> {
+  return decision
+    ? {
+        authorizationMode: "delegated-ai",
+        authorizationDecisionHash: decision.decisionHash,
+        authorizationPolicyHash: decision.policyHash,
+        authorizationReviewer: decision.reviewer,
+      }
+    : { authorizationMode: "manual" };
+}
+
+export function reviewAndApplyWorkspacePlan(args: {
+  projectRoot: string;
+  planPath: string;
+  intent: string;
+  now?: Date;
+}): WorkspaceAiReviewResult {
+  const root = repositoryRoot(args.projectRoot);
+  const plan = loadWorkspacePlan(root, args.planPath);
+  validateWorkspacePlanEnvelope(root, gitCommonDir(root), plan, plan.planHash);
+  const intent = args.intent.trim();
+  if (!intent) throw new Error("WORKSPACE_AI_INTENT_REQUIRED");
+  const binding = loadHostBinding(root, plan.commonDir);
+  if (!binding.configured || binding.approval.mode !== "delegated-ai") {
+    throw new Error("WORKSPACE_AI_DELEGATION_NOT_ENABLED");
+  }
+  const policy = binding.approval;
+  const now = args.now ?? new Date();
+  let verdict: WorkspaceAiDecision["verdict"] = "abstain";
+  let reasonCodes = ["REVIEWER_UNAVAILABLE"];
+  let summary = "The delegated reviewer was not available.";
+  const createdAt = Date.parse(plan.createdAt);
+  const destructiveEvidence = destructiveAiEvidence(root, plan);
+  if (!isDelegatableOperation(plan.operation.kind) ||
+      !policy.allowedOperations.includes(plan.operation.kind)) {
+    verdict = "deny";
+    reasonCodes = ["OPERATION_NOT_DELEGATED"];
+    summary = `Operation ${plan.operation.kind} is not authorized by the host-local delegation.`;
+  } else if (!Number.isFinite(createdAt) || createdAt > now.getTime() ||
+      now.getTime() - createdAt > policy.planTtlSeconds * 1_000) {
+    reasonCodes = ["PLAN_EXPIRED"];
+    summary = "The plan is outside the delegated review TTL and must be regenerated.";
+  } else if (destructiveEvidence && !destructiveEvidence.safe) {
+    verdict = "deny";
+    reasonCodes = ["DESTRUCTIVE_EVIDENCE_UNSAFE"];
+    summary = "Destructive delegation requires zero dirty, unique, unpushed, and ignored evidence.";
+  } else {
+    try {
+      ({ verdict, reasonCodes, summary } = runClaudeReviewer({
+        plan,
+        intent,
+        policy,
+        destructiveEvidence,
+      }));
+    } catch (error) {
+      summary = error instanceof Error ? error.message : String(error);
+      reasonCodes = [summary.startsWith("WORKSPACE_AI_REVIEWER_INVALID")
+        ? "REVIEWER_INVALID"
+        : "REVIEWER_UNAVAILABLE"];
+    }
+  }
+  const decision = buildAiDecision({
+    plan,
+    intent,
+    policy,
+    verdict,
+    reasonCodes,
+    summary,
+    now,
+  });
+  const decisionPath = aiDecisionFile(plan.commonDir, decision.id);
+  atomicWrite(decisionPath, prettyJson(decision));
+  if (decision.verdict !== "approve") return { decisionPath, decision };
+  const receipt = applyWorkspacePlan({
+    projectRoot: root,
+    planPath: args.planPath,
+    approval: plan.planHash,
+    authorization: decision,
+    now,
+  });
+  return { decisionPath, decision, receipt };
+}
+
 function acquireLock(commonDir: string): string {
   return acquireNamedLock(commonDir, "apply.lock");
 }
@@ -1925,7 +2278,12 @@ function applyWorkspaceAdoptionPlan(
   plan: WorkspacePlan & {
     operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>;
   },
-  args: { approval: string; now?: Date; testFailAfterLeaseWrites?: number },
+  args: {
+    approval: string;
+    authorization?: WorkspaceAiDecision;
+    now?: Date;
+    testFailAfterLeaseWrites?: number;
+  },
 ): WorkspaceReceipt {
   validateWorkspacePlanEnvelope(root, gitCommonDir(root), plan, args.approval);
   const lock = acquireLock(plan.commonDir);
@@ -1973,6 +2331,7 @@ function applyWorkspaceAdoptionPlan(
       beforeObservedHash: before.observedHash,
       leaseChanges: [],
       compensationStatus: "not-required",
+      ...receiptAuthorization(args.authorization),
     };
     const written: WorkspaceAdoptionPlanItem[] = [];
     writeReceipt(path, receipt);
@@ -2057,12 +2416,20 @@ export function applyWorkspacePlan(args: {
   projectRoot: string;
   planPath: string;
   approval: string;
+  authorization?: WorkspaceAiDecision;
   now?: Date;
   testFailAfterLeaseWrites?: number;
   testFailCloseAfterWorktreeRemove?: boolean;
 }): WorkspaceReceipt {
   const root = repositoryRoot(args.projectRoot);
   const plan = loadWorkspacePlan(root, args.planPath);
+  validateWorkspacePlanEnvelope(root, gitCommonDir(root), plan, plan.planHash);
+  const authorization = workspaceAuthorization({
+    root,
+    plan,
+    decision: args.authorization,
+    now: args.now ?? new Date(),
+  });
   if (plan.operation.kind === "adopt") {
     return applyWorkspaceAdoptionPlan(root, plan as WorkspacePlan & {
       operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>;
@@ -2089,8 +2456,13 @@ export function applyWorkspacePlan(args: {
   });
   validateWorkspacePlan(before, plan, args.approval);
   const lock = acquireLock(plan.commonDir);
-  if (plan.operation.kind === "renew" || plan.operation.kind === "recover") {
-    before = workspaceStatus(root);
+  if (authorization || plan.operation.kind === "renew" || plan.operation.kind === "recover") {
+    before = workspaceStatus(root, {
+      providerWorkItems: plan.operation.kind === "allocate" &&
+          plan.operation.providerObservationBound
+        ? [plan.operation.lease.workItem]
+        : undefined,
+    });
     validateWorkspacePlan(before, plan, args.approval);
   }
   const receiptPath = receiptFile(plan.commonDir, plan.id);
@@ -2104,6 +2476,7 @@ export function applyWorkspacePlan(args: {
     startedAt: (args.now ?? new Date()).toISOString(),
     steps: [],
     before,
+    ...receiptAuthorization(authorization),
   };
   let worktreeCreated = false;
   let configWritten = false;
@@ -2161,6 +2534,9 @@ export function applyWorkspacePlan(args: {
       }];
     } else if (plan.operation.kind === "close") {
       const operation = plan.operation;
+      if (authorization && destructiveAiEvidence(root, plan)?.safe !== true) {
+        throw new Error("WORKSPACE_AI_DESTRUCTIVE_PRECONDITION_FAILED");
+      }
       requireHostBinding(before);
       validateTarget(before.hostBinding, operation.lease.path);
       assertCurrentHash(leaseFile(plan.commonDir, operation.lease.workItem), operation.expectedLeaseHash);
@@ -2239,6 +2615,9 @@ export function applyWorkspacePlan(args: {
       receipt.steps.push({ id: "renew-lease", status: "applied", detail: operation.lease.workItem });
     } else if (plan.operation.kind === "recover") {
       const operation = plan.operation;
+      if (authorization && destructiveAiEvidence(root, plan)?.safe !== true) {
+        throw new Error("WORKSPACE_AI_DESTRUCTIVE_PRECONDITION_FAILED");
+      }
       requireHostBinding(before);
       if (protectedPath(before.hostBinding, operation.path)) {
         throw new Error(`PROTECTED_WORKTREE_PATH: ${operation.path}`);

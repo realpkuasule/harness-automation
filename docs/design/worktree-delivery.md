@@ -13,8 +13,10 @@ It is exposed through two Skill entry points:
 - `manage-worktree-delivery` operates worktree lifecycle through the shared CLI.
 
 The default is audit-only. Installing or upgrading the package creates no
-worktrees and deletes no state. Persistent configure, allocate, adopt, and close
-operations require dry-run planning and exact-hash apply.
+worktrees and deletes no state. Persistent operations require dry-run planning.
+Manual mode uses exact-hash apply; an optional host-local `delegated-ai` policy
+may authorize explicitly allowlisted lifecycle plans through an independent,
+no-tools reviewer decision bound to the same plan hash.
 
 ## Layers
 
@@ -81,6 +83,7 @@ Repository-scoped runtime state lives under the resolved Git common dir:
   apply.lock
   review.lock
   host-binding.json
+  ai-decisions/<decision-id>.json
   leases/<sha256(work-item)>.json
   receipts/<change-id>.json
 ```
@@ -96,6 +99,18 @@ Credentials are never stored.
 replacement content for both the portable repository policy and host-local
 binding. Apply rechecks the observation and both file hashes before atomic
 writes. Failure compensation and rollback restore both previous contents.
+
+### Delegated AI authorization
+
+The host binding may name one Claude Code model and an operation allowlist.
+`worktree apply-ai` runs that reviewer in a fresh no-tools, no-persistence
+process and records `approve`, `deny`, or `abstain` as a canonical decision.
+An approval binds the plan, plain-language intent, host policy, observation,
+model, and TTL. It does not replace deterministic validation: apply rechecks
+the plan under the repository lock and records the decision and policy hashes
+in its receipt. Reviewer failure or uncertainty creates no lifecycle mutation.
+Close and recover also require zero ignored, unique, and unpushed evidence.
+Configure and rollback are never AI-delegated.
 
 ### Allocate
 

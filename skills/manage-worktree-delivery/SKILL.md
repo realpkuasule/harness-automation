@@ -52,6 +52,17 @@ node <skill目录>/scripts/run.mjs apply \
 
 “继续”“可以”不等于对尚未展示的计划哈希批准。
 
+若 host binding 已通过一次人工 configure 计划启用 `delegated-ai`，不再要求用户逐次阅读机器计划或复制 hash。向用户展示简短意图卡（目的、创建/删除内容、保留内容、风险）；完整 plan 仅供审计。随后调用：
+
+```bash
+node <skill目录>/scripts/run.mjs worktree apply-ai \
+  --project <项目绝对路径> \
+  --plan <相对计划路径> \
+  --intent <一句自然语言业务意图>
+```
+
+只有独立只读 reviewer 返回 `approve` 才会 apply。`deny`、`abstain`、超时、格式错误、越权、过期或漂移均视为未执行，不得自行回填 plan hash 绕过 reviewer。确定性路径保护、dirty/lease/容量/Provider/HEAD 检查始终优先；`close`/`recover` 还必须满足零 ignored、unique 和 unpushed 证据。`configure`、扩大委托范围和 rollback 仍需负责人一次性授权。
+
 ## 分配持久 worktree
 
 每个工作项只能有一个持久租约。先确认工作项、branch、绝对路径和负责人，再生成计划：

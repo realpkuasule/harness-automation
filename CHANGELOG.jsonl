@@ -223,3 +223,4 @@
 {"timestamp": "2026-08-21T02:34:51+08:00", "type": "fix", "phase": 29, "description": "Stream dirty binary patch evidence without loading full Git diffs", "issueRef": "realpkuasule/harness-automation#29"}
 {"timestamp": "2026-08-21T09:12:19+08:00", "type": "feat", "phase": 30, "description": "Add hash-approved worktree lease heartbeat renew", "issueRef": "realpkuasule/harness-automation#30"}
 {"timestamp": "2026-08-21T12:25:03+08:00", "type": "feat", "phase": 31, "description": "Add hash-approved detached worktree recovery", "issueRef": "realpkuasule/harness-automation#31"}
+{"timestamp": "2026-08-21T14:53:28+08:00", "type": "feat", "phase": 32, "description": "Add delegated AI authorization for worktree plans", "issueRef": "realpkuasule/harness-automation#32"}

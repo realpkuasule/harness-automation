@@ -28,6 +28,54 @@
         "type": "string",
         "minLength": 1
       }
+    },
+    "approval": {
+      "description": "Host-local plan authorization. Omitted bindings retain manual exact-hash approval.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": { "const": "manual" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "reviewer", "allowedOperations", "planTtlSeconds", "reviewerTimeoutSeconds"],
+          "properties": {
+            "mode": { "const": "delegated-ai" },
+            "reviewer": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "model"],
+              "properties": {
+                "kind": { "const": "claude" },
+                "model": { "type": "string", "minLength": 1 }
+              }
+            },
+            "allowedOperations": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": ["allocate", "adopt", "close", "rebind", "renew", "recover"]
+              }
+            },
+            "planTtlSeconds": {
+              "type": "integer",
+              "minimum": 30,
+              "maximum": 3600
+            },
+            "reviewerTimeoutSeconds": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 600
+            }
+          }
+        }
+      ]
     }
   }
 }

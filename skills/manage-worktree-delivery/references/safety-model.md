@@ -7,6 +7,7 @@
 - 配置计划哈希同时覆盖项目策略和 `host-binding.json`；缺失或旧式内嵌绑定时 enforced 分配 fail-closed。
 - 临时 Review 回执：操作系统 state 目录。
 - 凭据不进入任何上述文件。
+- 可选 `delegated-ai` 策略位于 host binding；AI decision 位于 Git common dir 的 `ai-decisions/`，绑定 plan、意图、策略、观测、模型和 TTL。模型凭据仍由已登录的 reviewer CLI 管理。
 - 既有 worktree 接管 manifest 和计划不得成为第二套状态库；批准后只新增 Git common dir lease 与回执。
 
 ## 策略类型
@@ -47,3 +48,12 @@ GitHub Adapter 使用配置中的 repository、Project owner/number、status fie
 ## CI 边界
 
 CI 通常只能看到自身 checkout，无法观察开发机 worktree 和 Git common-dir 租约。`check --mode ci` 只验证仓库配置并把 host-local enforcement 报告为 `blocked`；真正的 workspace gate 在本机会话开始和提交前运行。
+
+## AI 委托边界
+
+- reviewer 以无工具、无会话持久化的独立进程运行，不能写 worktree 或调用 apply；
+- AI 只能在 host-local allowlist 内批准，不能覆盖 deterministic failure；
+- `deny`、`abstain`、不可用、无效输出、过期和漂移全部 fail closed；
+- `close`/`recover` 自动批准前必须确定性证明零 dirty、ignored、unique 和 unpushed 证据；
+- `configure`、委托扩权和 rollback 不得由 AI 自我授权；
+- 同一 OS 用户下的独立进程主要防误操作，不抵御恶意同权限进程；更强隔离需要受保护的本地 broker。

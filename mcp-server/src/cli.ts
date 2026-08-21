@@ -47,10 +47,17 @@ import {
   planWorkspaceRecover,
   planWorkspaceRenew,
   retentionAuditWorkspace,
+  reviewAndApplyWorkspacePlan,
   reviewWorkspace,
   workspaceStatus,
 } from "./worktree/service.js";
-import type { WorktreeDeliveryConfig } from "./worktree/types.js";
+import {
+  WORKTREE_DELEGATABLE_OPERATIONS,
+  type WorktreeApprovalPolicy,
+  type WorktreeDelegatableOperation,
+  type WorktreeDeliveryConfig,
+  type WorkspacePlan,
+} from "./worktree/types.js";
 import { runSessionCommand } from "./session/cli.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -275,8 +282,82 @@ function printWorkspacePlan(result: ReturnType<typeof planWorkspaceConfiguration
     planPath: result.path,
     planHash: result.plan.planHash,
     operation: result.plan.operation.kind,
+    summary: workspacePlanSummary(result.plan),
     warnings: result.plan.warnings,
   });
+}
+
+function workspacePlanSummary(plan: WorkspacePlan): {
+  goal: string;
+  changes: string[];
+  preserves: string[];
+  risk: "low" | "medium" | "high";
+} {
+  const operation = plan.operation;
+  const preserves = ["main", "remote refs", "other worktrees"];
+  if (operation.kind === "allocate") return {
+    goal: `Create an isolated workspace for ${operation.lease.workItem}`,
+    changes: [`local branch ${operation.lease.branch}`, `worktree ${operation.lease.path}`, "one lease"],
+    preserves,
+    risk: "low",
+  };
+  if (operation.kind === "renew") return {
+    goal: `Renew the lease heartbeat for ${operation.lease.workItem}`,
+    changes: ["heartbeatAt only"],
+    preserves: [...preserves, "worktree HEAD and content"],
+    risk: "low",
+  };
+  if (operation.kind === "rebind") return {
+    goal: `Bind ${operation.lease.workItem} to its observed branch`,
+    changes: [`lease branch ${operation.lease.branch} -> ${operation.replacementLease.branch}`],
+    preserves: [...preserves, "worktree HEAD and content"],
+    risk: "medium",
+  };
+  if (operation.kind === "adopt") return {
+    goal: `Govern ${operation.items.length} existing worktree(s)`,
+    changes: [`${operation.items.length} lease(s)`],
+    preserves: [...preserves, "existing worktree content"],
+    risk: "medium",
+  };
+  if (operation.kind === "close") return {
+    goal: `Close the workspace for ${operation.lease.workItem}`,
+    changes: [`remove worktree ${operation.lease.path}`, "remove its lease"],
+    preserves: [...preserves, `local branch ${operation.lease.branch}`],
+    risk: "high",
+  };
+  if (operation.kind === "recover") return {
+    goal: "Remove one clean detached unleased worktree",
+    changes: [`remove worktree ${operation.path}`],
+    preserves,
+    risk: "high",
+  };
+  return {
+    goal: "Configure worktree governance and this host binding",
+    changes: [operation.configPath, operation.hostBindingPath],
+    preserves,
+    risk: "high",
+  };
+}
+
+function worktreeApproval(args: ParsedArguments): WorktreeApprovalPolicy | undefined {
+  const mode = value(args, "approval-mode");
+  if (mode === undefined) return undefined;
+  if (mode === "manual") return { mode: "manual" };
+  if (mode !== "delegated-ai") {
+    throw new Error("INVALID_WORKTREE_APPROVAL_MODE: choose manual or delegated-ai");
+  }
+  const operations = args.values.get("delegate-operation") ?? ["allocate", "renew"];
+  if (operations.some((operation) =>
+    !(WORKTREE_DELEGATABLE_OPERATIONS as readonly string[]).includes(operation))) {
+    throw new Error(`INVALID_WORKTREE_DELEGATED_OPERATION: choose ${WORKTREE_DELEGATABLE_OPERATIONS.join(", ")}`);
+  }
+  return {
+    mode: "delegated-ai",
+    reviewer: { kind: "claude", model: required(args, "reviewer-model") },
+    allowedOperations: operations as WorktreeDelegatableOperation[],
+    planTtlSeconds: positiveInteger(args, "plan-ttl-seconds") ?? 600,
+    reviewerTimeoutSeconds: positiveInteger(args, "reviewer-timeout-seconds") ?? 120,
+  };
 }
 
 function adoptionManifest(root: string, args: ParsedArguments) {
@@ -325,6 +406,7 @@ function runWorktreeCommand(
         remoteBranchRetentionDays: positiveInteger(args, "remote-retention-days"),
         allowedRoots: args.values.get("allow-root"),
         protectedRoots: args.values.get("protect-root"),
+        approval: worktreeApproval(args),
         provider: worktreeProvider(args),
       }));
       return;
@@ -374,6 +456,16 @@ function runWorktreeCommand(
         path: required(args, "path"),
       }));
       return;
+    case "apply-ai": {
+      const result = reviewAndApplyWorkspacePlan({
+        projectRoot: root,
+        planPath: required(args, "plan"),
+        intent: required(args, "intent"),
+      });
+      printJson(result);
+      if (!result.receipt) process.exitCode = 2;
+      return;
+    }
     case "review": {
       const receipt = reviewWorkspace({
         projectRoot: root,
@@ -394,7 +486,7 @@ function runWorktreeCommand(
     }
     default:
       throw new Error(
-        "WORKTREE_COMMAND_REQUIRED: choose configure, allocate, adopt, rebind, renew, recover, review, status, audit, close, or retention-audit",
+        "WORKTREE_COMMAND_REQUIRED: choose configure, allocate, adopt, rebind, renew, recover, apply-ai, review, status, audit, close, or retention-audit",
       );
   }
 }
@@ -419,13 +511,14 @@ Usage:
   harness-automation explain <policy-id> [--project .]
   harness-automation rollback [--project .] [--change <id>]
   harness-automation worktree status|audit|retention-audit [--project .]
-  harness-automation worktree configure [--mode audit-only|enforced] [--management-branch <branch>] [--allow-root <absolute-path>] [--project .]
+  harness-automation worktree configure [--mode audit-only|enforced] [--management-branch <branch>] [--allow-root <absolute-path>] [--approval-mode manual|delegated-ai] [--reviewer-model <model>] [--delegate-operation <kind>] [--project .]
   harness-automation worktree allocate --work-item <provider:id> --branch <name> --path <absolute-path> --owner <name> [--project .]
   harness-automation worktree adopt --manifest <json-path> [--project .]
   harness-automation worktree review [--commit <sha>] [--project .] -- <command> [args...]
   harness-automation worktree close --work-item <provider:id> --accepted-commit <sha> [--project .]
   harness-automation worktree renew --work-item <provider:id> [--project .]
   harness-automation worktree recover --path <absolute-path> [--project .]
+  harness-automation worktree apply-ai --plan <relative-path> --intent <plain-language intent> [--project .]
   harness-automation session handoff --work-item <provider:repo#issue> --session <session-id> [--to-status ready-for-review] [--dry-run] [--project .]
   harness-automation session status [--work-item <provider:repo#issue>] [--project .]
   harness-automation session seed --work-item <provider:repo#issue> [--project .]
