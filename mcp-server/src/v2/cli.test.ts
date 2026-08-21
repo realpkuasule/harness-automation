@@ -27,6 +27,15 @@ function run(root: string, args: string[]): Record<string, unknown> {
   return JSON.parse(result.stdout) as Record<string, unknown>;
 }
 
+function runResult(root: string, args: string[]) {
+  return spawnSync(process.execPath, ["--import", "tsx", cli, ...args, "--project", root], {
+    cwd: packageRoot,
+    encoding: "utf8",
+    env: { ...process.env, HOME: join(root, ".test-home") },
+    timeout: 30_000,
+  });
+}
+
 afterEach(() => {
   for (const project of projects.splice(0)) rmSync(project, { recursive: true, force: true });
 });
@@ -201,6 +210,25 @@ describe("v2 CLI forward flow", () => {
       },
     });
   }, 15_000);
+
+  it("returns 2 for retention parse errors without changing workspace state", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-cli-retention-"));
+    projects.push(root);
+    execFileSync("git", ["init", "-b", "main"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "harness@example.test"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Harness Test"], { cwd: root });
+    write(root, "README.md", "# fixture\n");
+    execFileSync("git", ["add", "README.md"], { cwd: root });
+    execFileSync("git", ["commit", "-m", "test: initialize fixture"], { cwd: root });
+    write(root, ".test-home/Library/Application Support/harness-automation/reviews/bad.json", "{not json");
+    const refsBefore = execFileSync("git", ["for-each-ref", "--format=%(refname)%00%(objectname)"], { cwd: root, encoding: "utf8" });
+
+    const result = runResult(root, ["worktree", "retention-audit"]);
+
+    expect(result.status).toBe(2);
+    expect(JSON.parse(result.stdout).errors).toHaveLength(1);
+    expect(execFileSync("git", ["for-each-ref", "--format=%(refname)%00%(objectname)"], { cwd: root, encoding: "utf8" })).toBe(refsBefore);
+  });
 
   it("plans, applies, and rolls back a batch adoption from one strict manifest", () => {
     const root = mkdtempSync(join(tmpdir(), "harness-cli-adopt-"));

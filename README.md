@@ -215,6 +215,7 @@ Plain Git repositories can run read-only checks without a PRD or a provider:
 harness-automation worktree status --project .
 harness-automation worktree audit --project .
 harness-automation worktree retention-audit --project .
+harness-automation worktree integration-check --project . --work-item github:owner/repository#24 [--target main]
 ```
 
 Configuring, allocating, adopting existing worktrees, and closing produce plans by default:
@@ -227,10 +228,9 @@ harness-automation worktree configure \
   --allow-root /absolute/worktree-parent
 
 harness-automation worktree allocate \
-  --project . \
+  --project /absolute/container/main \
   --work-item github:owner/repository#24 \
-  --branch issue-24 \
-  --path /absolute/worktree-parent/issue-24 \
+  --branch codex/24-description \
   --owner <owner>
 
 harness-automation worktree adopt \
@@ -243,7 +243,7 @@ harness-automation worktree close \
   --accepted-commit <sha>
 ```
 
-All plans emitted by these commands are executed through the unified `apply --plan ... --approve <sha256>`. `adopt` only batch-creates leases for worktrees already registered in the manifest; it accepts and hash-pins dirty content but never adds/removes worktrees, switches branches, or touches HEAD/index/working-tree files. Any drift or failure stops before writing, or compensates only the leases created by this run. `status`, `audit`, retention audits, and planning create zero worktrees. `.harness/worktree-delivery.json` holds portable policy only; allowed and protected roots are host bindings stored in the Git common dir. The configuration plan hash covers both, and each new machine must approve its own host binding.
+All plans emitted by these commands are executed through the unified `apply --plan ... --approve <sha256>`. New configurations default to 2 persistent worktrees and a 72-hour lease; explicit existing values remain unchanged. For container-v1, allocation derives `<persistentWorktreeRoot>/<work-item-id>` and requires a branch containing that case-sensitive ID as a complete segment; legacy-flat still requires `--path`, and existing/adopted paths never move or rename. `integration-check` is read-only: it uses an isolated native merge-tree result, reports dirty/unpushed/conflict evidence, and never fetches, merges, rebases, checks out, or runs tests. Behind is a warning; dirty, unresolved or predicted conflict, unpushed work, and mapping drift block. `adopt` only batch-creates leases for worktrees already registered in the manifest; it accepts and hash-pins dirty content but never adds/removes worktrees, switches branches, or touches HEAD/index/working-tree files. Any drift or failure stops before writing, or compensates only the leases created by this run. `status`, `audit`, retention audits, integration checks, and planning create zero worktrees. `.harness/worktree-delivery.json` holds portable policy only; allowed and protected roots are host bindings stored in the Git common dir. The configuration plan hash covers both, and each new machine must approve its own host binding.
 
 Temporary review uses detached HEAD and OS temp directories, never creating local branches:
 
@@ -310,7 +310,7 @@ harness-automation context --project . --agent codex
 
 ## CLI and MCP
 
-v2 CLI commands: `doctor`, `research github`, `intake`, `discover`, `plan`, `apply`, `context`, `check`, `drift`, `explain`, `rollback`, plus `worktree configure|allocate|adopt|review|status|audit|close|retention-audit` and `session handoff|status|seed`. `plan` supports orthogonal `deliveryProfile`, `domainProfile`, and `qualityProfile`. `check --mode commit|ci` runs the trusted project gates visible in the plan; EDD runners execute only in CI mode and report `blocked` when a runtime is missing. When CI cannot observe host-local worktrees, workspace enforcement is reported honestly as unavailable.
+v2 CLI commands: `doctor`, `research github`, `intake`, `discover`, `plan`, `apply`, `context`, `check`, `drift`, `explain`, `rollback`, plus `worktree configure|allocate|adopt|review|status|audit|close|retention-audit|integration-check` and `session handoff|status|seed`. `plan` supports orthogonal `deliveryProfile`, `domainProfile`, and `qualityProfile`. `check --mode commit|ci` runs the trusted project gates visible in the plan; EDD runners execute only in CI mode and report `blocked` when a runtime is missing. When CI cannot observe host-local worktrees, workspace enforcement is reported honestly as unavailable.
 
 The MCP server exposes the same service layer, including the core `harness_*` tools and the matching `harness_worktree_*` tools. The CLI remains the portable baseline for Claude Code, Codex, and DeepSeek/GLM agents.
 

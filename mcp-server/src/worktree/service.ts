@@ -45,6 +45,7 @@ import {
   type RetentionAudit,
   type ReviewReceipt,
   type WorkspaceAudit,
+  type WorkspaceIntegrationCheck,
   type WorkspaceAiDecision,
   type WorkspaceAiReviewResult,
   type WorktreeApprovalPolicy,
@@ -75,6 +76,36 @@ function git(cwd: string, args: string[], allowFailure = false): string {
     throw new Error(`GIT_COMMAND_FAILED: git ${args.join(" ")}: ${detail}`);
   }
   return result.status === 0 ? result.stdout : "";
+}
+
+function gitCommand(cwd: string, args: string[], env: NodeJS.ProcessEnv): {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  error: string | null;
+} {
+  const result = spawnSync("git", args, {
+    cwd,
+    env,
+    encoding: "buffer",
+    maxBuffer: 10 * 1024 * 1024,
+    timeout: 30_000,
+  });
+  return {
+    status: result.status,
+    stdout: Buffer.isBuffer(result.stdout) ? result.stdout.toString("utf8") : String(result.stdout ?? ""),
+    stderr: Buffer.isBuffer(result.stderr) ? result.stderr.toString("utf8") : String(result.stderr ?? ""),
+    error: result.error ? result.error.message : null,
+  };
+}
+
+function removeTemporaryTree(path: string): void {
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    const target = join(path, entry.name);
+    if (entry.isDirectory() && !entry.isSymbolicLink()) removeTemporaryTree(target);
+    else unlinkSync(target);
+  }
+  rmdirSync(path);
 }
 
 function gitDirtyPatch(cwd: string, args: string[], allowFailure = false): {
@@ -209,8 +240,8 @@ function defaultConfig(): WorktreeDeliveryConfig {
   return {
     schemaVersion: WORKTREE_SCHEMA_VERSION,
     mode: "audit-only",
-    maxPersistentWorktrees: 4,
-    leaseTtlHours: 168,
+    maxPersistentWorktrees: 2,
+    leaseTtlHours: 72,
     reviewTtlMinutes: 120,
     remoteBranchRetentionDays: 14,
     remoteBranchDeletion: false,
@@ -502,17 +533,15 @@ function worktreeStatusTokens(
   worktreePath: string,
   adoptionSafe = false,
 ): string[] {
-  return git(root, adoptionSafe
-    ? [
-        "--no-optional-locks",
-        "-C",
-        worktreePath,
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-      ]
-    : ["-C", worktreePath, "status", "--porcelain=v1", "-z"], !adoptionSafe)
+  return git(root, [
+    "--no-optional-locks",
+    "-C",
+    worktreePath,
+    "status",
+    "--porcelain=v1",
+    "-z",
+    ...(adoptionSafe ? ["--untracked-files=all"] : []),
+  ], !adoptionSafe)
     .split("\0").filter(Boolean);
 }
 
@@ -567,7 +596,7 @@ function collectDirtyEvidence(
         "HEAD",
         "--",
       ]
-    : ["-C", worktreePath, "diff", "--binary", "--no-ext-diff", "HEAD", "--"],
+    : ["--no-optional-locks", "-C", worktreePath, "diff", "--binary", "--no-ext-diff", "HEAD", "--"],
   !adoptionSafe);
   return {
     dirtyEvidence: adoptionSafe
@@ -1090,6 +1119,21 @@ function validateBranch(root: string, branch: string): void {
   git(root, ["check-ref-format", "--branch", branch]);
 }
 
+function workItemId(workItem: string): string {
+  const value = workItem.trim();
+  const separator = Math.max(value.lastIndexOf("#"), value.lastIndexOf(":"));
+  const id = separator === -1 ? "" : value.slice(separator + 1);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(id) || id === "." || id === "..") {
+    throw new Error(`WORK_ITEM_ID_INVALID: ${workItem}`);
+  }
+  return id;
+}
+
+function branchContainsWorkItemId(branch: string, id: string): boolean {
+  const escaped = id.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return new RegExp(`(?:^|[/._-])${escaped}(?=$|[/._-])`, "u").test(branch);
+}
+
 function validateTarget(binding: WorktreeHostBinding, target: string): string {
   if (!isAbsolute(target)) throw new Error("WORKTREE_PATH_MUST_BE_ABSOLUTE");
   rejectTraversal(target);
@@ -1408,11 +1452,172 @@ export function planWorkspaceMigration(args: {
   }));
 }
 
+function managementRoot(projectRoot: string): string {
+  const root = repositoryRoot(projectRoot);
+  const records = worktrees(root).filter((record) => !record.bare && !record.prunable && !record.detached);
+  const branches = [...new Set(records.flatMap((record) => {
+    try {
+      const loaded = loadConfig(record.path);
+      return loaded.configured && loaded.config.managementBranch ? [loaded.config.managementBranch] : [];
+    } catch {
+      return [];
+    }
+  }))];
+  if (branches.length === 0) return root;
+  if (branches.length !== 1) throw new Error("WORKTREE_MANAGEMENT_CHECKOUT_INVALID");
+  const matches = records.filter((record) => record.branch === branches[0]);
+  if (matches.length !== 1) throw new Error("WORKTREE_MANAGEMENT_CHECKOUT_INVALID");
+  return canonicalPath(matches[0].path);
+}
+
+function localTarget(root: string, target: string): { ref: string; head: string } {
+  const ref = git(root, ["rev-parse", "--symbolic-full-name", "--verify", target], true).trim();
+  if (!ref.startsWith("refs/heads/") && !ref.startsWith("refs/tags/")) {
+    throw new Error(`WORKTREE_INTEGRATION_TARGET_UNAVAILABLE: ${target}`);
+  }
+  const head = git(root, ["rev-parse", "--verify", `${ref}^{commit}`], true).trim();
+  if (!/^[0-9a-f]{40,64}$/u.test(head)) {
+    throw new Error(`WORKTREE_INTEGRATION_TARGET_UNAVAILABLE: ${target}`);
+  }
+  return { ref: target, head };
+}
+
+export function integrationCheckWorkspace(args: {
+  projectRoot: string;
+  workItem: string;
+  target?: string;
+  temporaryRootParent?: string;
+  cleanupTemporaryTree?: (path: string) => void;
+}): WorkspaceIntegrationCheck {
+  const root = managementRoot(args.projectRoot);
+  const status = workspaceStatus(root, {
+    providerObservation: { kind: "none", configured: false, available: true, items: [] },
+  });
+  if (!status.configured || status.config.mode !== "enforced" || !status.hostBinding.configured || status.errors.length > 0) {
+    throw new Error(`WORKTREE_INTEGRATION_PRECONDITION_FAILED: ${status.errors.join(", ") || `configured=${status.configured}, mode=${status.config.mode}, binding=${status.hostBinding.configured}`}`);
+  }
+  const workItem = args.workItem.trim();
+  const id = workItemId(workItem);
+  const matchingLeases = status.leases.filter((lease) => lease.workItem === workItem);
+  if (matchingLeases.length === 0) throw new Error(`WORKTREE_LEASE_NOT_FOUND: ${workItem}`);
+  if (matchingLeases.length !== 1) throw new Error(`DUPLICATE_WORK_ITEM_LEASE: ${workItem}`);
+  const lease = matchingLeases[0];
+  const matchingWorktrees = status.worktrees.filter((record) => samePath(record.path, lease.path));
+  if (matchingWorktrees.length !== 1) throw new Error(`WORKTREE_NOT_FOUND: ${lease.path}`);
+  const source = matchingWorktrees[0];
+  if (source.bare || source.detached || source.locked || source.prunable || source.branch !== lease.branch ||
+      !source.gitTopLevel || !samePath(source.gitTopLevel, lease.path) ||
+      (status.topology.kind === "container-v1" && dirname(lease.path) !== status.topology.persistentWorktreeRoot)) {
+    throw new Error(`WORKTREE_INTEGRATION_PRECONDITION_FAILED: ${workItem} lease/worktree mapping drifted`);
+  }
+  const sourceHead = git(source.path, ["--no-optional-locks", "rev-parse", "--verify", "HEAD^{commit}"], true).trim();
+  if (sourceHead !== source.head) {
+    throw new Error(`WORKTREE_INTEGRATION_PRECONDITION_FAILED: ${workItem} HEAD drifted`);
+  }
+  const targetRef = args.target ?? status.config.managementBranch;
+  if (!targetRef) throw new Error("WORKTREE_INTEGRATION_TARGET_UNAVAILABLE: management branch is required");
+  const target = localTarget(root, targetRef);
+  const mergeBase = git(root, ["merge-base", target.head, sourceHead], true).trim();
+  if (!/^[0-9a-f]{40,64}$/u.test(mergeBase)) {
+    throw new Error(`WORKTREE_INTEGRATION_TARGET_UNAVAILABLE: no merge-base for ${targetRef}`);
+  }
+  const ahead = commitCount(root, [`${target.head}..${sourceHead}`]);
+  const behind = commitCount(root, [`${sourceHead}..${target.head}`]);
+  const currentConflicts = (source.dirtyEvidence ?? [])
+    .filter((entry) => ["DD", "AU", "UD", "UA", "DU", "AA", "UU"].includes(entry.status))
+    .map(({ path, status: conflictStatus }) => ({ path, status: conflictStatus }));
+  const temporaryRoot = mkdtempSync(join(args.temporaryRootParent ?? tmpdir(), "harness-integration-"));
+  const objectDirectory = join(temporaryRoot, "objects");
+  mkdirSync(objectDirectory);
+  let command: ReturnType<typeof gitCommand> | undefined;
+  try {
+    command = gitCommand(root, [
+      "--no-optional-locks",
+      "merge-tree",
+      "--write-tree",
+      "--name-only",
+      "-z",
+      target.head,
+      sourceHead,
+    ], {
+      ...process.env,
+      GIT_OBJECT_DIRECTORY: objectDirectory,
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: realpathSync.native(join(status.commonDir, "objects")),
+      GIT_OPTIONAL_LOCKS: "0",
+    });
+    if (command.error || (command.status !== 0 && command.status !== 1)) {
+      throw new Error(
+        `WORKTREE_INTEGRATION_GIT_FAILED: exit=${command.status ?? "spawn"}; stdout=${command.stdout}; stderr=${command.stderr}; error=${command.error ?? ""}`,
+      );
+    }
+    const conflictingPaths = [...new Set(command.stdout.split("\0").flatMap((token) => {
+      const value = token.trim();
+      const explicit = /^Auto-merging (.+)$/u.exec(value)?.[1] ??
+        /\b(?:in|for) ([^\n]+)$/u.exec(value)?.[1];
+      if (explicit) return [explicit];
+      const candidate = join(root, value);
+      return value && !value.includes("\n") && !value.includes("\0") &&
+        !/^(?:\d+|[0-9a-f]{40,64}|CONFLICT \(.+\))$/u.test(value) &&
+        !relative(root, candidate).startsWith("..") && existsSync(candidate)
+        ? [value]
+        : [];
+    }))].sort();
+    const blockers: WorkspaceIntegrationCheck["blockers"] = [];
+    if (source.dirty && currentConflicts.length === 0) {
+      blockers.push({ code: "WORKTREE_INTEGRATION_DIRTY", detail: `${source.path} has uncommitted changes` });
+    }
+    if (currentConflicts.length > 0) {
+      blockers.push({ code: "WORKTREE_INTEGRATION_CONFLICTED", detail: `${source.path} has unresolved conflicts` });
+    }
+    if ((source.unpushedCommits ?? 0) > 0) {
+      blockers.push({ code: "WORKTREE_INTEGRATION_UNPUSHED", detail: `${source.unpushedCommits} source commits are not in a remote ref` });
+    }
+    if (command.status === 1 || conflictingPaths.length > 0) {
+      blockers.push({ code: "WORKTREE_INTEGRATION_MERGE_CONFLICT", detail: conflictingPaths.join(", ") || "git merge-tree reported a conflict" });
+    }
+    const warnings: WorkspaceIntegrationCheck["warnings"] = behind > 0
+      ? [{ code: "WORKTREE_INTEGRATION_BEHIND", detail: `${source.path} is behind ${targetRef} by ${behind} commits` }]
+      : [];
+    const check: WorkspaceIntegrationCheck = {
+      schemaVersion: "worktree-integration-check/1.0",
+      projectDir: status.projectDir,
+      commonDir: status.commonDir,
+      workItem,
+      workItemId: id,
+      source: { path: source.path, branch: lease.branch, head: sourceHead, unpushedCommits: source.unpushedCommits ?? 0 },
+      target: { ref: targetRef, head: target.head, source: args.target ? "explicit-local-ref" : "management-branch" },
+      mergeBase,
+      ahead,
+      behind,
+      clean: !source.dirty,
+      currentConflicts,
+      mergeable: command.status === 0,
+      conflictingPaths,
+      blockers,
+      warnings,
+      status: blockers.length > 0 ? "blocked" : warnings.length > 0 ? "warning" : "ready",
+      passing: blockers.length === 0,
+      observedHash: "",
+    };
+    check.observedHash = hashObject({ ...check, observedHash: undefined, workspaceObservedHash: status.observedHash });
+    return check;
+  } finally {
+    try {
+      (args.cleanupTemporaryTree ?? removeTemporaryTree)(temporaryRoot);
+    } catch (error) {
+      const diagnostic = command
+        ? ` stdout=${command.stdout}; stderr=${command.stderr}; exit=${command.status ?? "spawn"}`
+        : "";
+      throw new Error(`WORKTREE_INTEGRATION_TEMP_CLEANUP_FAILED: ${temporaryRoot}: ${error instanceof Error ? error.message : String(error)};${diagnostic}`);
+    }
+  }
+}
+
 export function planWorkspaceAllocation(args: {
   projectRoot: string;
   workItem: string;
   branch: string;
-  path: string;
+  path?: string;
   owner: string;
   thread?: string;
   startPoint?: string;
@@ -1420,6 +1625,7 @@ export function planWorkspaceAllocation(args: {
 }): { plan: WorkspacePlan; path: string } {
   const workItem = args.workItem.trim();
   if (!workItem) throw new Error("WORK_ITEM_REQUIRED");
+  const id = workItemId(workItem);
   const root = repositoryRoot(args.projectRoot);
   const configuredProvider = loadConfig(root).config.provider;
   if (
@@ -1444,7 +1650,17 @@ export function planWorkspaceAllocation(args: {
     throw new Error(`PROVIDER_PROJECT_ITEM_REQUIRED: ${workItem}`);
   }
   validateBranch(status.projectDir, args.branch);
-  const target = validateTarget(status.hostBinding, args.path);
+  if (!branchContainsWorkItemId(args.branch, id)) {
+    throw new Error(`WORKTREE_BRANCH_ID_REQUIRED: ${id}`);
+  }
+  const derived = status.topology.kind === "container-v1"
+    ? canonicalPath(join(status.topology.persistentWorktreeRoot!, id))
+    : undefined;
+  if (derived && args.path !== undefined && canonicalPath(args.path) !== derived) {
+    throw new Error(`WORKTREE_PATH_ID_MISMATCH: expected ${derived}, observed ${args.path}`);
+  }
+  if (!derived && !args.path) throw new Error("WORKTREE_PATH_REQUIRED");
+  const target = validateTarget(status.hostBinding, derived ?? args.path!);
   if (existsSync(target)) throw new Error(`WORKTREE_PATH_EXISTS: ${target}`);
   if (status.leases.some((lease) => lease.workItem === workItem)) {
     throw new Error(`DUPLICATE_WORK_ITEM_LEASE: ${workItem}`);

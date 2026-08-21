@@ -86,14 +86,16 @@ node <skill目录>/scripts/run.mjs worktree apply-ai \
 
 ## 分配持久 worktree
 
-每个工作项只能有一个持久租约。先确认工作项、branch、绝对路径和负责人，再生成计划：
+每个工作项只能有一个持久租约。container-v1 从 work-item 的稳定 ID 自动得到
+`<persistentWorktreeRoot>/<id>`；branch 仍须显式提供，并以 `/`、`.`、`_` 或 `-`
+为边界包含大小写一致的 ID。legacy-flat 仍须提供绝对 `--path`：
 
 ```bash
 node <skill目录>/scripts/run.mjs worktree allocate \
   --project <项目绝对路径> \
   --work-item <provider:repository#issue> \
   --branch <branch> \
-  --path <绝对路径> \
+  [--path <绝对路径>] \
   --owner <负责人> \
   [--thread <会话标识>] \
   [--start-point <commit>]
@@ -102,6 +104,20 @@ node <skill目录>/scripts/run.mjs worktree allocate \
 `allocate` 本身不得创建 worktree。审阅计划并按上节使用统一 `apply` 精确批准。
 
 容量超限、重复工作项、branch 已被检出、路径不在 allowlist、路径命中保护根、Provider 不可用或观测漂移时停止。
+container-v1 若显式 path 不等于派生路径会拒绝；既有/adopted/legacy-flat worktree 不移动、不改名。
+
+## 交付前集成证据
+
+先运行只读检查：
+
+```bash
+node <skill目录>/scripts/run.mjs worktree integration-check \
+  --project <management或leased checkout> \
+  --work-item <provider:repository#issue> \
+  [--target <local-ref>]
+```
+
+省略 target 使用 management branch。behind 只是 warning；dirty、未解决冲突、未推送提交、预测冲突或映射漂移均为 blocked。它不 fetch、merge、rebase、checkout 或运行项目测试；真实 mergeability 只认隔离 `git merge-tree`。冲突时仅列出路径和证据，然后请求 owner 决定。
 
 ## 接管既有 worktree
 
@@ -156,6 +172,7 @@ node <skill目录>/scripts/run.mjs worktree retention-audit --project <项目绝
 ```
 
 报告超时 Review、陈旧锁和超过保留期的远端 branch。默认永不删除远端 branch。
+陈旧 lease、Review、锁或解析错误使 CLI 返回 2；只有旧 remote branch 仍返回 0。不得借此生成/apply plan、续期或删除内容。
 
 需要撤销已应用 change 时使用：
 

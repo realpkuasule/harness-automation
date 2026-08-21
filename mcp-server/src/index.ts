@@ -68,6 +68,7 @@ import {
 } from "./v2/types.js";
 import {
   auditWorkspace,
+  integrationCheckWorkspace,
   planWorkspaceAdoption,
   planWorkspaceAllocation,
   planWorkspaceClose,
@@ -305,7 +306,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
       },
       {
         name: "harness_worktree_migrate",
-        description: "Create a read-only exact-hash migration preflight from a legacy flat layout; applying it is intentionally unsupported",
+        description: "Create a read-only exact-hash migration preflight from a legacy flat layout; only explicit worktree migrate apply may execute it",
         inputSchema: {
           type: "object",
           additionalProperties: false,
@@ -322,7 +323,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         inputSchema: {
           type: "object",
           additionalProperties: false,
-          required: ["projectDir", "workItem", "branch", "path", "owner"],
+          required: ["projectDir", "workItem", "branch", "owner"],
           properties: {
             projectDir: { type: "string" },
             workItem: { type: "string" },
@@ -405,6 +406,20 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
             projectDir: { type: "string" },
             workItem: { type: "string" },
             acceptedCommit: { type: "string" },
+          },
+        },
+      },
+      {
+        name: "harness_worktree_integration_check",
+        description: "Read-only isolated mergeability evidence for one leased worktree against a local target ref",
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["projectDir", "workItem"],
+          properties: {
+            projectDir: { type: "string" },
+            workItem: { type: "string", minLength: 1 },
+            target: { type: "string", minLength: 1 },
           },
         },
       },
@@ -710,7 +725,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         projectRoot: v2String("projectDir"),
         workItem: v2String("workItem"),
         branch: v2String("branch"),
-        path: v2String("path"),
+        path: typeof v2Args.path === "string" ? v2Args.path : undefined,
         owner: v2String("owner"),
         thread: typeof v2Args.thread === "string" ? v2Args.thread : undefined,
         startPoint: typeof v2Args.startPoint === "string" ? v2Args.startPoint : undefined,
@@ -768,6 +783,13 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
 
     case "harness_worktree_retention_audit":
       return v2Result(retentionAuditWorkspace({ projectRoot: v2String("projectDir") }));
+
+    case "harness_worktree_integration_check":
+      return v2Result(integrationCheckWorkspace({
+        projectRoot: v2String("projectDir"),
+        workItem: v2String("workItem"),
+        target: typeof v2Args.target === "string" ? v2Args.target : undefined,
+      }));
 
     case "evaluate_rules": {
       const input = EvaluateRulesInputSchema.parse(args);

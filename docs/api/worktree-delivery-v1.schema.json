@@ -32,11 +32,13 @@
     },
     "maxPersistentWorktrees": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "description": "New configurations default to 2; explicit existing values are preserved."
     },
     "leaseTtlHours": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "description": "New configurations default to 72 hours; explicit existing values are preserved."
     },
     "reviewTtlMinutes": {
       "type": "integer",

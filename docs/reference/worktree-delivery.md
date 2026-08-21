@@ -6,11 +6,22 @@
 harness-automation worktree status --project .
 harness-automation worktree audit --project .
 harness-automation worktree retention-audit --project .
+harness-automation worktree integration-check --project . --work-item github:owner/repository#24 [--target main]
 ```
 
 These commands require only Git. They do not require PRD intake and create no
 worktree. Retention audit reports expired review receipts, lease heartbeats,
-lifecycle locks, and remote branches; it deletes none of them.
+lifecycle locks, and remote branches; it deletes none of them. Stale reviews,
+leases, locks, or parse errors return exit 2; old remote branches alone return 0.
+
+`integration-check` accepts one existing lease and a local target ref (default:
+the management branch). It does not fetch, merge, rebase, checkout, alter a
+conflict, or run tests. It reports HEADs, merge-base, ahead/behind, dirty and
+unpushed evidence, current/forecast conflicts, blockers, warnings, and an
+observed hash. Behind is a warning; dirty, unresolved conflict, unpushed work,
+mapping drift, or a forecast conflict return `blocked` and exit 2. Mergeability
+uses isolated `git merge-tree --write-tree --name-only -z`, with generated
+objects confined to a cleaned OS temporary object directory.
 
 ## Configure
 
@@ -46,8 +57,8 @@ harness-automation worktree configure \
   --management-branch main \
   --allow-root /absolute/parent \
   [--protect-root /absolute/protected] \
-  [--max-persistent 4] \
-  [--lease-ttl-hours 168] \
+  [--max-persistent 2] \
+  [--lease-ttl-hours 72] \
   [--review-ttl-minutes 120] \
   [--remote-retention-days 14]
 ```
@@ -85,7 +96,8 @@ The approved plan writes portable policy to
 `.harness/worktree-delivery.json` and host-specific canonical roots to
 `<git-common-dir>/harness/worktree-delivery/host-binding.json`. The plan hash
 covers both. On a new host, run configure again to approve that host's roots;
-omitted portable options preserve the existing repository policy.
+omitted portable options preserve the existing repository policy. For a new
+configuration the defaults are 2 persistent worktrees and a 72-hour lease.
 Existing v1 configurations without `managementBranch` retain the legacy
 command-checkout behavior until an approved configure plan adds the selector.
 
@@ -161,16 +173,20 @@ Use a separately protected local broker if that stronger threat model matters.
 
 ```bash
 harness-automation worktree allocate \
-  --project . \
+  --project /absolute/container/main \
   --work-item github:owner/repository#24 \
-  --branch issue-24 \
-  --path /absolute/parent/issue-24 \
+  --branch codex/24-description \
   --owner owner \
   [--thread thread-id] \
   [--start-point HEAD]
 ```
 
-This writes only a plan. In manual mode apply it with:
+For container-v1, the path is derived as `<container>/worktrees/24`; an explicit
+path is accepted only when it is exactly that canonical path. The branch must
+contain the case-sensitive work-item ID as a complete `/`, `.`, `_`, or `-`
+segment. Legacy-flat allocation continues to require its explicit absolute
+`--path`; existing and adopted paths are never renamed or moved. This writes
+only a plan. In manual mode apply it with:
 
 ```bash
 harness-automation apply \

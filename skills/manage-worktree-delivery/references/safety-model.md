@@ -29,6 +29,12 @@
 - `workspace.cleanup-receipt`
 - `workspace.remote-delete-disabled`
 
+交付前的 `worktree integration-check` 是只读证据：它以工具自建临时
+`GIT_OBJECT_DIRECTORY` 和项目 common object directory 的 alternates 运行原生
+`git merge-tree --write-tree --name-only -z`。项目 objects、refs、index、worktree
+和 Git common dir 零写入；临时目录清理失败 fail closed。behind 只 warning，dirty、
+unresolved conflict、unpushed、预测 conflict 和映射漂移均不得由 AI 覆盖。
+
 只能保留为 guidance：
 
 - dirty 内容的业务、资产或法律价值；

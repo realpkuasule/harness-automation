@@ -24,6 +24,7 @@ import {
   applyWorkspacePlan,
   applyWorkspaceMigration,
   auditWorkspace,
+  integrationCheckWorkspace,
   parseWorkspaceAdoptionManifest,
   parseWorktreePorcelain,
   planWorkspaceAdoption,
@@ -215,6 +216,15 @@ afterEach(() => {
 });
 
 describe("portable worktree inventory", () => {
+  it("uses 2 persistent worktrees and a 72-hour lease for new projects", () => {
+    const root = repository();
+
+    expect(workspaceStatus(root).config).toMatchObject({
+      maxPersistentWorktrees: 2,
+      leaseTtlHours: 72,
+    });
+  });
+
   it("keeps the adoption manifest schema aligned with trimmed runtime fields", () => {
     const schema = JSON.parse(readFileSync(
       new URL("../../../docs/api/worktree-adopt-v1.schema.json", import.meta.url),
@@ -571,7 +581,7 @@ describe("hash-approved worktree lifecycle", () => {
         persistentWorktreeRoot: worktrees,
         allowedRoots: [worktrees],
       },
-      capacity: { used: 0, available: 4 },
+      capacity: { used: 0, available: 2 },
     });
     expect(auditWorkspace(main)).toMatchObject({
       topology: { kind: "container-v1", persistentWorktreeRoot: worktrees },
@@ -594,10 +604,10 @@ describe("hash-approved worktree lifecycle", () => {
     const planned = planWorkspaceAllocation({
       projectRoot: main,
       workItem: "github:example/project#42",
-      branch: "issue-42",
-      path: target,
+      branch: "codex/42-container-allocation",
       owner: "owner",
     });
+    expect(planned.plan.operation).toMatchObject({ kind: "allocate", lease: { path: target } });
     expect(existsSync(target)).toBe(false);
     expect(workspaceStatus(main).leases).toHaveLength(0);
     expect(git(main, "for-each-ref", "--format=%(refname)%00%(objectname)")).toBe(refsBefore);
@@ -609,13 +619,146 @@ describe("hash-approved worktree lifecycle", () => {
     expect(receipt.status).toBe("applied");
     expect(git(target, "rev-parse", "--show-toplevel")).toBe(target);
     expect(workspaceStatus(main)).toMatchObject({
-      capacity: { used: 1, available: 3 },
-      leases: [expect.objectContaining({ path: target, branch: "issue-42" })],
+      capacity: { used: 1, available: 1 },
+      leases: [expect.objectContaining({ path: target, branch: "codex/42-container-allocation" })],
       worktrees: expect.arrayContaining([expect.objectContaining({
         path: target,
         gitTopLevel: target,
       })]),
     });
+  });
+
+  it("derives container paths from a safe work-item ID and rejects ambiguous branch IDs", () => {
+    const { container, main, worktrees } = containerRepository();
+    const configured = planWorkspaceConfiguration({
+      projectRoot: main,
+      mode: "enforced",
+      managementBranch: "main",
+      topology: "container-v1",
+      workspaceContainer: container,
+    });
+    applyWorkspacePlan({ projectRoot: main, planPath: configured.path, approval: configured.plan.planHash });
+
+    expect(() => planWorkspaceAllocation({
+      projectRoot: main,
+      workItem: "portable:team:ABC-7",
+      branch: "codex/ABC-7-identity",
+      path: join(worktrees, "other"),
+      owner: "owner",
+    })).toThrow(/WORKTREE_PATH_ID_MISMATCH/);
+    expect(() => planWorkspaceAllocation({
+      projectRoot: main,
+      workItem: "github:example/project#113",
+      branch: "codex/2113-not-the-id",
+      owner: "owner",
+    })).toThrow(/WORKTREE_BRANCH_ID_REQUIRED/);
+  });
+
+  it("reports isolated mergeability without changing the project or common object database", () => {
+    const root = repositoryWithRemote();
+    configure(root, { managementBranch: "main" });
+    const worktreePath = `${root}-113`;
+    repositories.push(worktreePath);
+    const planned = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#113",
+      branch: "codex/113-ready",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+    const temporaryRootParent = mkdtempSync(join(tmpdir(), "harness-integration-parent-"));
+    repositories.push(temporaryRootParent);
+    const before = {
+      refs: git(root, "for-each-ref", "--format=%(refname)%00%(objectname)"),
+      worktrees: git(root, "worktree", "list", "--porcelain"),
+      objects: git(root, "count-objects", "-v"),
+      index: readFileSync(join(root, ".git", "index")),
+    };
+
+    const check = integrationCheckWorkspace({
+      projectRoot: worktreePath,
+      workItem: "github:example/project#113",
+      temporaryRootParent,
+    });
+
+    expect(check).toMatchObject({
+      target: { ref: "main", source: "management-branch" },
+      clean: true,
+      mergeable: true,
+      status: "ready",
+      passing: true,
+      blockers: [],
+      warnings: [],
+      observedHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(readdirSync(temporaryRootParent)).toEqual([]);
+    expect({
+      refs: git(root, "for-each-ref", "--format=%(refname)%00%(objectname)"),
+      worktrees: git(root, "worktree", "list", "--porcelain"),
+      objects: git(root, "count-objects", "-v"),
+      index: readFileSync(join(root, ".git", "index")),
+    }).toEqual(before);
+  });
+
+  it("blocks predicted integration conflicts without attempting a merge", () => {
+    const root = repositoryWithRemote();
+    configure(root, { managementBranch: "main" });
+    const worktreePath = `${root}-113-conflict`;
+    repositories.push(worktreePath);
+    const planned = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#113",
+      branch: "codex/113-conflict",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+    writeFileSync(join(worktreePath, "README.md"), "source\n", "utf8");
+    git(worktreePath, "commit", "-am", "test: source change");
+    git(worktreePath, "push", "-u", "origin", "codex/113-conflict");
+    writeFileSync(join(root, "README.md"), "target\n", "utf8");
+    git(root, "commit", "-am", "test: target change");
+    git(root, "push");
+
+    const check = integrationCheckWorkspace({
+      projectRoot: root,
+      workItem: "github:example/project#113",
+      target: "main",
+    });
+
+    expect(check).toMatchObject({
+      mergeable: false,
+      conflictingPaths: ["README.md"],
+      status: "blocked",
+      passing: false,
+      blockers: [expect.objectContaining({ code: "WORKTREE_INTEGRATION_MERGE_CONFLICT" })],
+    });
+  });
+
+  it("fails closed and retains the diagnostic temporary path when integration cleanup fails", () => {
+    const root = repositoryWithRemote();
+    configure(root, { managementBranch: "main" });
+    const worktreePath = `${root}-113-cleanup`;
+    repositories.push(worktreePath);
+    const planned = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#113",
+      branch: "codex/113-cleanup",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+    const temporaryRootParent = mkdtempSync(join(tmpdir(), "harness-integration-cleanup-"));
+    repositories.push(temporaryRootParent);
+
+    expect(() => integrationCheckWorkspace({
+      projectRoot: root,
+      workItem: "github:example/project#113",
+      temporaryRootParent,
+      cleanupTemporaryTree: () => { throw new Error("injected cleanup failure"); },
+    })).toThrow(/WORKTREE_INTEGRATION_TEMP_CLEANUP_FAILED: .*injected cleanup failure/);
+    expect(readdirSync(temporaryRootParent)).toHaveLength(1);
   });
 
   it("rejects nested, traversing, symlinked, and existing container targets", () => {
@@ -628,23 +771,26 @@ describe("hash-approved worktree lifecycle", () => {
       workspaceContainer: container,
     });
     applyWorkspacePlan({ projectRoot: main, planPath: configured.path, approval: configured.plan.planHash });
-    const allocate = (path: string) => planWorkspaceAllocation({
-      projectRoot: main,
-      workItem: `github:example/project#${randomBytes(4).toString("hex")}`,
-      branch: `issue-${randomBytes(4).toString("hex")}`,
-      path,
-      owner: "owner",
-    });
-    expect(() => allocate(worktrees)).toThrow(/WORKTREE_TOPOLOGY_TARGET_INVALID/);
-    expect(() => allocate(join(main, ".worktrees", "1"))).toThrow(/WORKTREE_(PROTECTED_PATH|PATH_NOT_ALLOWED)/);
-    expect(() => allocate(`${worktrees}/../escape`)).toThrow(/WORKTREE_PATH_TRAVERSAL/);
+    const allocate = (path: string) => {
+      const id = randomBytes(4).toString("hex");
+      return planWorkspaceAllocation({
+        projectRoot: main,
+        workItem: `github:example/project#${id}`,
+        branch: `issue-${id}`,
+        path,
+        owner: "owner",
+      });
+    };
+    expect(() => allocate(worktrees)).toThrow(/WORKTREE_PATH_ID_MISMATCH/);
+    expect(() => allocate(join(main, ".worktrees", "1"))).toThrow(/WORKTREE_PATH_ID_MISMATCH/);
+    expect(() => allocate(`${worktrees}/../escape`)).toThrow(/WORKTREE_PATH_ID_MISMATCH/);
     const nonEmpty = join(worktrees, "non-empty");
     mkdirSync(nonEmpty);
     writeFileSync(join(nonEmpty, "keep"), "x", "utf8");
-    expect(() => allocate(nonEmpty)).toThrow(/WORKTREE_PATH_EXISTS/);
+    expect(() => allocate(nonEmpty)).toThrow(/WORKTREE_PATH_ID_MISMATCH/);
     const escaped = join(worktrees, "escaped");
     symlinkSync(dirname(worktrees), escaped);
-    expect(() => allocate(escaped)).toThrow(/WORKTREE_PATH_NOT_ALLOWED/);
+    expect(() => allocate(escaped)).toThrow(/WORKTREE_PATH_ID_MISMATCH/);
   });
 
   it("keeps legacy flat checkouts unchanged and emits a plan-only migration preflight", () => {
@@ -708,7 +854,7 @@ describe("hash-approved worktree lifecycle", () => {
         managementCheckout: topology.managementCheckout,
         persistentWorktreeRoot: topology.persistentWorktreeRoot,
       },
-      capacity: { used: 0, available: 4 },
+      capacity: { used: 0, available: 2 },
       leases: [],
       worktrees: [expect.objectContaining({
         path: topology.managementCheckout,
@@ -1685,7 +1831,7 @@ describe("hash-approved worktree lifecycle", () => {
     mkdirSync(target);
     expect(() => planWorkspaceAllocation(allocation)).toThrow(/WORKTREE_PATH_EXISTS/);
     rmdirSync(target);
-    expect(() => planWorkspaceAllocation({ ...allocation, branch: "main" }))
+    expect(() => planWorkspaceAllocation({ ...allocation, workItem: "github:example/project#main", branch: "main" }))
       .toThrow(/BRANCH_ALREADY_CHECKED_OUT/);
 
     const commonDir = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir");
@@ -1707,6 +1853,7 @@ describe("hash-approved worktree lifecycle", () => {
     expect(() => planWorkspaceAllocation({
       ...allocation,
       workItem: "github:example/project#other",
+      branch: "issue-other",
       path: leasePath,
     })).toThrow(/DUPLICATE_WORKTREE_PATH/);
 
@@ -1714,6 +1861,7 @@ describe("hash-approved worktree lifecycle", () => {
     expect(() => planWorkspaceAllocation({
       ...allocation,
       workItem: "github:example/project#capacity",
+      branch: "issue-capacity",
     })).toThrow(/WORKTREE_CAPACITY_EXCEEDED/);
     rmSync(join(leaseDir, "guard.json"));
 

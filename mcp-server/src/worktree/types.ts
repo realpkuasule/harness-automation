@@ -240,6 +240,32 @@ export interface WorkspaceAudit {
   policies: WorkspacePolicyResult[];
 }
 
+export interface WorkspaceIntegrationCheck {
+  schemaVersion: "worktree-integration-check/1.0";
+  projectDir: string;
+  commonDir: string;
+  workItem: string;
+  workItemId: string;
+  source: { path: string; branch: string; head: string; unpushedCommits: number };
+  target: { ref: string; head: string; source: "explicit-local-ref" | "management-branch" };
+  mergeBase: string;
+  ahead: number;
+  behind: number;
+  clean: boolean;
+  currentConflicts: Array<{ path: string; status: string }>;
+  mergeable: boolean;
+  conflictingPaths: string[];
+  blockers: Array<{
+    code: "WORKTREE_INTEGRATION_DIRTY" | "WORKTREE_INTEGRATION_CONFLICTED" |
+      "WORKTREE_INTEGRATION_UNPUSHED" | "WORKTREE_INTEGRATION_MERGE_CONFLICT";
+    detail: string;
+  }>;
+  warnings: Array<{ code: "WORKTREE_INTEGRATION_BEHIND"; detail: string }>;
+  status: "ready" | "warning" | "blocked";
+  passing: boolean;
+  observedHash: string;
+}
+
 export type WorkspaceOperation =
   | {
       kind: "configure";

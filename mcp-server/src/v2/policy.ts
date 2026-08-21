@@ -239,13 +239,13 @@ function deliveryProfileRules(
   return [rule({
     id: "worktree-delivery-gate",
     title: "Worktree delivery gate",
-    statement: "Run the host-local worktree audit before implementation and delivery; persistent lifecycle changes require an exact-hash plan and durable receipt.",
+    statement: "Run the host-local worktree audit before implementation and the read-only integration-check before delivery; persistent lifecycle changes require an exact-hash plan and durable receipt. Unresolved or predicted conflicts remain owner decisions.",
     rationale: "One shared lease and cleanup protocol prevents duplicate worktrees and cross-session delivery drift.",
     scope: { include: ["**/*"], exclude: [".git/**"], boundaries: ["code", "deployment"] },
     formalization: "procedural",
     severity: "error",
     targets: [{ kind: "custom-command", adapter: "harness-worktree", command: ["harness-automation", "worktree", "audit", "--project", "."] }],
-    verification: { commands: [], passCriteria: "The local workspace audit is available and passing; CI reports host visibility as blocked." },
+    verification: { commands: [], passCriteria: "The local workspace audit and integration-check are available; CI reports host visibility as blocked." },
   }, owner, sources)];
 }
 

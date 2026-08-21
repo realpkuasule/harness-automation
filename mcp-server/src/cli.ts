@@ -38,6 +38,7 @@ import {
 } from "./v2/types.js";
 import {
   auditWorkspace,
+  integrationCheckWorkspace,
   applyWorkspaceMigration,
   parseWorkspaceAdoptionManifest,
   planWorkspaceAdoption,
@@ -335,7 +336,7 @@ function workspacePlanSummary(plan: WorkspacePlan): {
   };
   if (operation.kind === "migrate") return {
     goal: "Prepare a manual migration from a legacy flat layout",
-    changes: ["none; this plan cannot be applied"],
+    changes: ["plan-only; only explicit worktree migrate apply may execute it"],
     preserves: ["all checkouts", "branches", "leases", "Git state"],
     risk: "high",
   };
@@ -440,7 +441,7 @@ function runWorktreeCommand(
         projectRoot: root,
         workItem: required(args, "work-item"),
         branch: required(args, "branch"),
-        path: required(args, "path"),
+        path: value(args, "path"),
         owner: required(args, "owner"),
         thread: value(args, "thread"),
         startPoint: value(args, "start-point"),
@@ -503,14 +504,24 @@ function runWorktreeCommand(
     case "retention-audit": {
       const audit = retentionAuditWorkspace({ projectRoot: root });
       printJson(audit);
-      if (audit.staleReviews.length > 0 || audit.staleLocks.length > 0) {
+      if (audit.staleReviews.length > 0 || audit.staleLeases.length > 0 || audit.staleLocks.length > 0 || audit.errors.length > 0) {
         process.exitCode = 2;
       }
       return;
     }
+    case "integration-check": {
+      const check = integrationCheckWorkspace({
+        projectRoot: root,
+        workItem: required(args, "work-item"),
+        target: value(args, "target"),
+      });
+      printJson(check);
+      if (!check.passing) process.exitCode = 2;
+      return;
+    }
     default:
       throw new Error(
-        "WORKTREE_COMMAND_REQUIRED: choose configure, migrate, allocate, adopt, rebind, renew, recover, apply-ai, review, status, audit, close, or retention-audit",
+        "WORKTREE_COMMAND_REQUIRED: choose configure, migrate, allocate, adopt, rebind, renew, recover, apply-ai, review, status, audit, close, retention-audit, or integration-check",
       );
   }
 }
@@ -535,10 +546,11 @@ Usage:
   harness-automation explain <policy-id> [--project .]
   harness-automation rollback [--project .] [--change <id>]
   harness-automation worktree status|audit|retention-audit [--project .]
+  harness-automation worktree integration-check --work-item <provider:id> [--target <local-ref>] [--project .]
   harness-automation worktree configure [--mode audit-only|enforced] [--management-branch <branch>] [--topology container-v1 --workspace-container <absolute-path>] [--allow-root <absolute-path>] [--approval-mode manual|delegated-ai] [--reviewer-model <model>] [--delegate-operation <kind>] [--project .]
   harness-automation worktree migrate --workspace-container <absolute-path> [--project .]
   harness-automation worktree migrate apply --plan <relative-plan-path> --approve <sha256> [--project .]
-  harness-automation worktree allocate --work-item <provider:id> --branch <name> --path <absolute-path> --owner <name> [--project .]
+  harness-automation worktree allocate --work-item <provider:id> --branch <name> [--path <absolute-path>] --owner <name> [--project .]
   harness-automation worktree adopt --manifest <json-path> [--project .]
   harness-automation worktree review [--commit <sha>] [--project .] -- <command> [args...]
   harness-automation worktree close --work-item <provider:id> --accepted-commit <sha> [--project .]

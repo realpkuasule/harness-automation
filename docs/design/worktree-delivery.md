@@ -137,8 +137,11 @@ Configure and rollback are never AI-delegated.
 
 ### Allocate
 
-`worktree allocate` requires a work item, branch, absolute path, owner, and
-start point. Planning rejects duplicate work-item leases, duplicate paths,
+`worktree allocate` requires a work item, branch, owner, and start point.
+container-v1 derives `<persistentWorktreeRoot>/<work-item-id>`; an optional
+explicit path must match exactly, while legacy-flat still requires an absolute
+path. Branches contain the case-sensitive work-item ID as a complete segment.
+Planning rejects duplicate work-item leases, duplicate paths,
 checked-out branches, protected roots, paths outside allowed roots, Provider
 failure, and capacity overflow.
 
@@ -198,6 +201,18 @@ A process killed before cleanup leaves an active receipt. `retention-audit`
 reports receipts and lease heartbeats older than their configured TTL. It never
 force-cleans them.
 
+### Integration check
+
+`worktree integration-check` is read-only and resolves one lease plus a local
+target (the management branch by default). It reports source/target HEAD,
+merge-base, ahead/behind, dirty, unpushed, conflict, blocker/warning, and hash
+evidence. Behind is only a warning. Dirty, unresolved conflict, unpushed work,
+lease mapping drift, unavailable target, or forecast conflict blocks delivery.
+Forecast mergeability is native `git merge-tree --write-tree --name-only -z`
+with a tool-owned temporary `GIT_OBJECT_DIRECTORY` and the canonical common
+object directory only as alternates. The project object DB, refs, index,
+working tree, and common dir remain unchanged; cleanup failure is fail-closed.
+
 ## Dirty-content evidence
 
 Dirty worktrees block close and automatic cleanup. Read-only observation
@@ -242,7 +257,7 @@ real local audit and fail when it does not pass.
 ## Safety invariants
 
 - one work item has at most one persistent lease;
-- management, status, audit, retention audit, and planning create zero
+- management, status, audit, retention audit, integration-check, and planning create zero
   worktrees;
 - Review is detached, temporary, branchless, and serialized;
 - all mutation targets are canonical absolute paths;
