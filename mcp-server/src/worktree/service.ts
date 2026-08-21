@@ -1535,12 +1535,56 @@ export function planWorkspaceRenew(args: {
   }));
 }
 
+export function planWorkspaceRecover(args: {
+  projectRoot: string;
+  path: string;
+  now?: Date;
+}): { plan: WorkspacePlan; path: string } {
+  const status = workspaceStatus(args.projectRoot);
+  if (!status.configured || status.config.mode !== "enforced") {
+    throw new Error("WORKTREE_ENFORCEMENT_NOT_ENABLED");
+  }
+  requireHostBinding(status);
+  const target = canonicalPath(args.path);
+  if (protectedPath(status.hostBinding, target)) {
+    throw new Error(`PROTECTED_WORKTREE_PATH: ${target}`);
+  }
+  const matches = status.worktrees.filter((worktree) => samePath(worktree.path, target));
+  if (matches.length !== 1) throw new Error(`WORKTREE_NOT_FOUND: ${target}`);
+  const worktree = matches[0];
+  if (worktree.dirty) {
+    throw new Error(`WORKTREE_DIRTY: ${target}: ${JSON.stringify({
+      files: worktree.dirtyEvidence,
+      patch: worktree.dirtyPatch,
+    })}`);
+  }
+  if (!worktree.detached || worktree.branch !== null || worktree.bare || worktree.locked || worktree.prunable) {
+    throw new Error("WORKTREE_RECOVER_PRECONDITION_FAILED: worktree must be clean and detached");
+  }
+  if (status.leases.some((lease) => samePath(lease.path, target))) {
+    throw new Error(`WORKTREE_RECOVER_LEASED: ${target}`);
+  }
+  return savePlan(status.projectDir, planDraft({
+    status,
+    operation: {
+      kind: "recover",
+      path: target,
+      removePath: target,
+      expectedHead: worktree.head,
+      dirtyEvidence: [],
+      dirtyPatch: { size: 0, sha256: sha256("") },
+    },
+    now: args.now,
+    warnings: ["Recovery removes only the exact clean, detached, unleased worktree; branches are preserved."],
+  }));
+}
+
 function loadWorkspacePlan(root: string, path: string): WorkspacePlan {
   const plan = readJson<WorkspacePlan>(safePath(root, path));
   if (
     plan.schemaVersion !== "worktree-delivery/1.0" ||
     plan.kind !== "workspace-plan" ||
-    !["configure", "allocate", "adopt", "close", "rebind", "renew"].includes(plan.operation?.kind) ||
+    !["configure", "allocate", "adopt", "close", "rebind", "renew", "recover"].includes(plan.operation?.kind) ||
     (plan.operation.kind === "configure" && (
       plan.operation.hostBindingPath !== HOST_BINDING_PATH ||
       typeof plan.operation.beforeHostBindingHash !== "string" &&
@@ -1649,6 +1693,20 @@ function loadWorkspacePlan(root: string, path: string): WorkspacePlan {
         throw new Error("WORKSPACE_PLAN_INVALID");
       }
     } catch {
+      throw new Error("WORKSPACE_PLAN_INVALID");
+    }
+  }
+  if (plan.operation.kind === "recover") {
+    const operation = plan.operation;
+    if (
+      !isAbsolute(operation.path) ||
+      operation.removePath !== operation.path ||
+      !/^[a-f0-9]{40,64}$/u.test(operation.expectedHead) ||
+      !Array.isArray(operation.dirtyEvidence) ||
+      operation.dirtyEvidence.length !== 0 ||
+      operation.dirtyPatch?.size !== 0 ||
+      operation.dirtyPatch.sha256 !== sha256("")
+    ) {
       throw new Error("WORKSPACE_PLAN_INVALID");
     }
   }
@@ -2031,7 +2089,7 @@ export function applyWorkspacePlan(args: {
   });
   validateWorkspacePlan(before, plan, args.approval);
   const lock = acquireLock(plan.commonDir);
-  if (plan.operation.kind === "renew") {
+  if (plan.operation.kind === "renew" || plan.operation.kind === "recover") {
     before = workspaceStatus(root);
     validateWorkspacePlan(before, plan, args.approval);
   }
@@ -2051,6 +2109,7 @@ export function applyWorkspacePlan(args: {
   let configWritten = false;
   let hostBindingWritten = false;
   let worktreeRemoved = false;
+  let recoveryRemoved = false;
   try {
     writeReceipt(receiptPath, receipt);
     if (plan.operation.kind === "configure") {
@@ -2178,6 +2237,25 @@ export function applyWorkspacePlan(args: {
         afterHash: operation.afterLeaseHash,
       }];
       receipt.steps.push({ id: "renew-lease", status: "applied", detail: operation.lease.workItem });
+    } else if (plan.operation.kind === "recover") {
+      const operation = plan.operation;
+      requireHostBinding(before);
+      if (protectedPath(before.hostBinding, operation.path)) {
+        throw new Error(`PROTECTED_WORKTREE_PATH: ${operation.path}`);
+      }
+      if (before.leases.some((lease) => samePath(lease.path, operation.path))) {
+        throw new Error(`WORKTREE_RECOVER_LEASED: ${operation.path}`);
+      }
+      const observed = before.worktrees.find((worktree) => samePath(worktree.path, operation.path));
+      if (!observed || observed.head !== operation.expectedHead || observed.dirty ||
+          !observed.detached || observed.branch !== null || observed.bare || observed.locked ||
+          observed.prunable || operation.dirtyEvidence.length !== 0 || operation.dirtyPatch.size !== 0 ||
+          operation.dirtyPatch.sha256 !== sha256("")) {
+        throw new Error("WORKSPACE_DRIFT: recover preconditions changed");
+      }
+      git(root, ["worktree", "remove", operation.removePath]);
+      recoveryRemoved = true;
+      receipt.steps.push({ id: "remove-recovered-worktree", status: "applied", detail: operation.removePath });
     }
     receipt.status = "applied";
     receipt.completedAt = (args.now ?? new Date()).toISOString();
@@ -2237,6 +2315,9 @@ export function applyWorkspacePlan(args: {
           fileHash(leaseFile(plan.commonDir, plan.operation.lease.workItem)) === plan.operation.afterLeaseHash) {
         atomicWrite(leaseFile(plan.commonDir, plan.operation.lease.workItem), prettyJson(plan.operation.lease));
         receipt.steps.push({ id: "restore-renew", status: "compensated", detail: plan.operation.lease.workItem });
+      } else if (plan.operation.kind === "recover" && recoveryRemoved) {
+        git(root, ["worktree", "add", "--detach", plan.operation.path, plan.operation.expectedHead]);
+        receipt.steps.push({ id: "restore-recovered-worktree", status: "compensated", detail: plan.operation.path });
       }
     } catch (compensationError) {
       receipt.steps.push({
@@ -2494,6 +2575,23 @@ export function rollbackWorkspaceChange(args: {
           afterHash: plan.operation.expectedLeaseHash,
         },
       ];
+    } else if (plan.operation.kind === "recover") {
+      const operation = plan.operation;
+      requireHostBinding(status);
+      if (protectedPath(status.hostBinding, operation.path)) {
+        throw new Error(`PROTECTED_WORKTREE_PATH: ${operation.path}`);
+      }
+      if (status.worktrees.some((worktree) => samePath(worktree.path, operation.path))) {
+        throw new Error(`WORKSPACE_ROLLBACK_UNSAFE: path exists: ${operation.path}`);
+      }
+      git(status.projectDir, [
+        "worktree",
+        "add",
+        "--detach",
+        operation.path,
+        operation.expectedHead,
+      ]);
+      receipt.steps.push({ id: "rollback-recover", status: "compensated", detail: operation.path });
     }
     receipt.status = "rolled-back";
     receipt.completedAt = (args.now ?? new Date()).toISOString();

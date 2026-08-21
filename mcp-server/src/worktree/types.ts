@@ -252,6 +252,14 @@ export type WorkspaceOperation =
       expectedHead: string;
       expectedLeaseHash: string;
       afterLeaseHash: string;
+    }
+  | {
+      kind: "recover";
+      path: string;
+      removePath: string;
+      expectedHead: string;
+      dirtyEvidence: Array<{ path: string; status: string; size: number; sha256: string }>;
+      dirtyPatch: { size: number; sha256: string };
     };
 
 export interface WorkspacePlan {

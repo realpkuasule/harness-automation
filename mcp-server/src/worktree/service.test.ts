@@ -28,6 +28,7 @@ import {
   planWorkspaceClose,
   planWorkspaceConfiguration,
   planWorkspaceRebind,
+  planWorkspaceRecover,
   planWorkspaceRenew,
   rollbackWorkspaceChange,
   reviewWorkspace,
@@ -793,6 +794,90 @@ describe("hash-approved worktree lifecycle", () => {
       approval: planned.plan.planHash,
     })).toThrow(/WORKSPACE_DRIFT/);
     rmSync(join(worktreePath, "README.md"));
+  });
+
+  it("recovers a clean detached unleased worktree through an approved plan", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 2 });
+    const worktreePath = `${root}-recover`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "--detach", worktreePath, "HEAD");
+    const refsBefore = git(root, "for-each-ref", "--format=%(refname)%00%(objectname)");
+
+    const planned = planWorkspaceRecover({ projectRoot: root, path: worktreePath });
+    if (planned.plan.operation.kind !== "recover") throw new Error("expected recover plan");
+    expect(planned.plan.operation).toMatchObject({
+      path: realpathSync(worktreePath),
+      removePath: realpathSync(worktreePath),
+      expectedHead: git(worktreePath, "rev-parse", "HEAD"),
+      dirtyEvidence: [],
+      dirtyPatch: { size: 0, sha256: sha256("") },
+    });
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: "0".repeat(64),
+    })).toThrow(/APPROVAL_MISMATCH/);
+    const receipt = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    expect(receipt).toMatchObject({ operation: "recover", status: "applied" });
+    expect(existsSync(worktreePath)).toBe(false);
+    expect(git(root, "for-each-ref", "--format=%(refname)%00%(objectname)")).toBe(refsBefore);
+    expect(rollbackWorkspaceChange({ projectRoot: root, changeId: receipt.id }).status)
+      .toBe("rolled-back");
+    expect(git(worktreePath, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
+  });
+
+  it("rejects unsafe recovery plans", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main", maxPersistentWorktrees: 3 });
+    expect(() => planWorkspaceRecover({ projectRoot: root, path: root }))
+      .toThrow(/PROTECTED_WORKTREE_PATH/);
+
+    const dirtyPath = `${root}-recover-dirty`;
+    repositories.push(dirtyPath);
+    git(root, "worktree", "add", "--detach", dirtyPath, "HEAD");
+    writeFileSync(join(dirtyPath, "dirty.txt"), "keep\n", "utf8");
+    expect(() => planWorkspaceRecover({ projectRoot: root, path: dirtyPath }))
+      .toThrow(/WORKTREE_DIRTY/);
+
+    const attachedPath = `${root}-recover-attached`;
+    repositories.push(attachedPath);
+    git(root, "worktree", "add", "-b", "issue-recover-attached", attachedPath, "HEAD");
+    expect(() => planWorkspaceRecover({ projectRoot: root, path: attachedPath }))
+      .toThrow(/WORKTREE_RECOVER_PRECONDITION_FAILED/);
+
+    const leasedPath = `${root}-recover-leased`;
+    repositories.push(leasedPath);
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#recover-leased",
+      branch: "issue-recover-leased",
+      path: leasedPath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    git(leasedPath, "checkout", "--detach");
+    expect(() => planWorkspaceRecover({ projectRoot: root, path: leasedPath }))
+      .toThrow(/WORKTREE_RECOVER_LEASED/);
+
+    const driftPath = `${root}-recover-drift`;
+    repositories.push(driftPath);
+    git(root, "worktree", "add", "--detach", driftPath, "HEAD");
+    const planned = planWorkspaceRecover({ projectRoot: root, path: driftPath });
+    writeFileSync(join(driftPath, "drift.txt"), "keep\n", "utf8");
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toThrow(/WORKSPACE_DRIFT/);
   });
 
   it("rejects lifecycle drift and unsafe close preconditions", () => {
