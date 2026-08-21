@@ -1,9 +1,13 @@
 import { spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import {
+  closeSync,
   existsSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
+  openSync,
+  readSync,
   readdirSync,
   readFileSync,
   readlinkSync,
@@ -63,6 +67,42 @@ function git(cwd: string, args: string[], allowFailure = false): string {
     throw new Error(`GIT_COMMAND_FAILED: git ${args.join(" ")}: ${detail}`);
   }
   return result.status === 0 ? result.stdout : "";
+}
+
+function gitDirtyPatch(cwd: string, args: string[], allowFailure = false): {
+  size: number;
+  sha256: string;
+} {
+  const path = join(tmpdir(), `harness-dirty-patch-${process.pid}-${randomUUID()}`);
+  const output = openSync(path, "wx+");
+  try {
+    const result = spawnSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", output, "pipe"],
+      timeout: 30_000,
+    });
+    if (result.error || (!allowFailure && result.status !== 0)) {
+      const detail = `${result.stderr ?? result.error ?? ""}`.trim();
+      throw new Error(`GIT_COMMAND_FAILED: git ${args.join(" ")}: ${detail}`);
+    }
+    if (result.status !== 0) return { size: 0, sha256: sha256("") };
+
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let size = 0;
+    let bytes = 0;
+    let position = 0;
+    while ((bytes = readSync(output, buffer, 0, buffer.length, position)) > 0) {
+      size += bytes;
+      position += bytes;
+      hash.update(buffer.subarray(0, bytes));
+    }
+    return { size, sha256: hash.digest("hex") };
+  } finally {
+    closeSync(output);
+    unlinkSync(path);
+  }
 }
 
 function repositoryRoot(projectRoot: string): string {
@@ -376,7 +416,7 @@ function collectDirtyEvidence(
         : Buffer.alloc(0);
     entries.push({ path, status, size: content.byteLength, sha256: sha256(content) });
   }
-  const patch = git(root, adoptionSafe
+  const dirtyPatch = gitDirtyPatch(root, adoptionSafe
     ? [
         "--no-optional-locks",
         "-C",
@@ -395,7 +435,7 @@ function collectDirtyEvidence(
       ? entries.sort((left, right) =>
           left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
       : entries,
-    dirtyPatch: { size: Buffer.byteLength(patch), sha256: sha256(patch) },
+    dirtyPatch,
   };
 }
 

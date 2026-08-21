@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -1210,6 +1211,36 @@ describe("hash-approved worktree adoption", () => {
     expect(workspaceStatus(root).leases).toHaveLength(0);
     expect(readFileSync(join(worktreePath, "nested", "valuable.txt"), "utf8"))
       .toBe("valuable v2\n");
+  });
+
+  it("streams large dirty binary patch evidence without lifecycle writes", () => {
+    const root = repository();
+    const worktreePath = `${root}-large-dirty`;
+    repositories.push(worktreePath);
+    git(root, "worktree", "add", "-b", "large-dirty", worktreePath, "HEAD");
+    writeFileSync(join(worktreePath, "payload.bin"), randomBytes(11 * 1024 * 1024));
+    git(worktreePath, "add", "payload.bin");
+    git(worktreePath, "commit", "-m", "test: add binary payload");
+    writeFileSync(join(worktreePath, "payload.bin"), randomBytes(11 * 1024 * 1024));
+    const worktreesBefore = git(root, "worktree", "list", "--porcelain");
+    const refsBefore = git(root, "for-each-ref", "--format=%(refname)%00%(objectname)");
+
+    const status = workspaceStatus(root);
+    const audit = auditWorkspace(root);
+    const retention = retentionAuditWorkspace({ projectRoot: root });
+    const dirty = status.worktrees.find((item) => item.branch === "large-dirty");
+
+    expect(dirty?.dirtyPatch).toMatchObject({
+      size: expect.any(Number),
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(dirty?.dirtyPatch?.size).toBeGreaterThan(10 * 1024 * 1024);
+    expect(audit.observedHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(retention.projectDir).toBe(realpathSync(root));
+    expect(worktreeCount(root)).toBe(2);
+    expect(workspaceStatus(root).leases).toEqual([]);
+    expect(git(root, "worktree", "list", "--porcelain")).toBe(worktreesBefore);
+    expect(git(root, "for-each-ref", "--format=%(refname)%00%(objectname)")).toBe(refsBefore);
   });
 
   it("never executes a configured textconv command while observing adoption", () => {
