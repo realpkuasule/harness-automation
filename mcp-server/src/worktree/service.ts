@@ -1122,6 +1122,19 @@ function requireHostBinding(status: WorkspaceStatus): void {
     : "WORKTREE_HOST_BINDING_REQUIRED");
 }
 
+function survivingManagementCheckout(status: WorkspaceStatus, removedPath: string): string {
+  const branch = status.config.managementBranch;
+  const matches = branch
+    ? status.worktrees.filter((worktree) =>
+      !worktree.bare && !worktree.prunable && !worktree.detached &&
+      worktree.branch === branch && !samePath(worktree.path, removedPath))
+    : [];
+  if (matches.length !== 1 || !existsSync(matches[0].path)) {
+    throw new Error("WORKTREE_CLOSE_MANAGEMENT_CHECKOUT_REQUIRED");
+  }
+  return matches[0].path;
+}
+
 function planDraft(args: {
   status: WorkspaceStatus;
   operation: WorkspacePlan["operation"];
@@ -3111,6 +3124,9 @@ export function applyWorkspacePlan(args: {
       : undefined,
   });
   validateWorkspacePlan(before, plan, args.approval);
+  const postCloseRoot = plan.operation.kind === "close" && samePath(root, plan.operation.lease.path)
+    ? survivingManagementCheckout(before, plan.operation.lease.path)
+    : root;
   const lock = acquireLock(plan.commonDir);
   if (authorization || plan.operation.kind === "renew" || plan.operation.kind === "recover") {
     before = workspaceStatus(root, {
@@ -3243,7 +3259,7 @@ export function applyWorkspacePlan(args: {
         beforeHash: operation.expectedLeaseHash,
         afterHash: null,
       }];
-      git(root, ["worktree", "remove", operation.lease.path]);
+      git(postCloseRoot, ["worktree", "remove", operation.lease.path]);
       worktreeRemoved = true;
       receipt.steps.push({ id: "remove-worktree", status: "applied", detail: operation.lease.path });
       if (args.testFailCloseAfterWorktreeRemove) {
@@ -3326,7 +3342,7 @@ export function applyWorkspacePlan(args: {
     }
     receipt.status = "applied";
     receipt.completedAt = (args.now ?? new Date()).toISOString();
-    receipt.after = workspaceStatus(root, {
+    receipt.after = workspaceStatus(postCloseRoot, {
       providerObservation: plan.operation.kind === "allocate" &&
           plan.operation.providerObservationBound
         ? before.provider
@@ -3382,7 +3398,7 @@ export function applyWorkspacePlan(args: {
         }
         receipt.steps.push({ id: "remove-allocation", status: "compensated", detail: plan.operation.lease.path });
       } else if (plan.operation.kind === "close" && worktreeRemoved) {
-        git(root, ["worktree", "add", plan.operation.lease.path, plan.operation.lease.branch]);
+        git(postCloseRoot, ["worktree", "add", plan.operation.lease.path, plan.operation.lease.branch]);
         atomicWrite(leaseFile(plan.commonDir, plan.operation.lease.workItem), prettyJson(plan.operation.lease));
         receipt.steps.push({ id: "restore-close", status: "compensated", detail: plan.operation.lease.path });
       } else if (plan.operation.kind === "rebind" &&

@@ -1238,6 +1238,49 @@ describe("hash-approved worktree lifecycle", () => {
     git(root, "worktree", "remove", worktreePath);
   });
 
+  it("writes an applied close receipt when invoked from the worktree being removed", () => {
+    const root = repositoryWithRemote();
+    const worktreePath = `${root}-close-from-target`;
+    repositories.push(worktreePath);
+    configure(root, { managementBranch: "main" });
+    git(root, "add", ".harness/worktree-delivery.json");
+    git(root, "commit", "-m", "test: share worktree policy");
+    writeFileSync(join(root, ".git", "info", "exclude"), ".harness/plans/\n", "utf8");
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#close-from-target",
+      branch: "issue-close-from-target",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    git(worktreePath, "push", "-u", "origin", "issue-close-from-target");
+    const closed = planWorkspaceClose({
+      projectRoot: worktreePath,
+      workItem: "github:example/project#close-from-target",
+      acceptedCommit: git(worktreePath, "rev-parse", "HEAD"),
+    });
+
+    const receipt = applyWorkspacePlan({
+      projectRoot: worktreePath,
+      planPath: closed.path,
+      approval: closed.plan.planHash,
+    });
+
+    expect(existsSync(worktreePath)).toBe(false);
+    expect(workspaceStatus(root).leases).toEqual([]);
+    expect(receipt).toMatchObject({
+      status: "applied",
+      operation: "close",
+      after: { projectDir: workspaceStatus(root).projectDir, leases: [] },
+    });
+    expect(auditWorkspace(root).passing).toBe(true);
+  });
+
   it("rebinds a planned lease to its observed branch without touching the worktree", () => {
     const root = repository();
     const worktreePath = `${root}-rebind`;
