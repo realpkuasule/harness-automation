@@ -258,12 +258,19 @@ export type WorkspaceOperation =
       kind: "migrate";
       topology: WorkspaceTopology;
       preflight: {
+        configHash: string;
         hostBindingHash: string | null;
+        afterHostBindingHash: string;
+        afterHostBindingContent: string;
         refsHash: string;
         worktreeRegistrationHash: string;
         leaseHashes: Array<{ path: string; sha256: string }>;
         referencePaths: string[];
         managementCheckout: string;
+        commonDir: string;
+        targetContainerState: "absent" | "empty";
+        targetMainState: "absent";
+        targetWorktreesState: "absent";
         leases: Array<{ workItem: string; path: string; branch: string }>;
         worktrees: Array<{
           path: string;
@@ -396,6 +403,13 @@ export interface WorkspaceReceipt {
   leaseChanges?: WorkspaceLeaseChange[];
   compensationStatus?: "not-required" | "completed" | "failed";
   createdDirectories?: string[];
+  migration?: {
+    sourceProjectDir: string;
+    targetProjectDir: string;
+    sourceCommonDir: string;
+    targetCommonDir: string;
+    recoveryState: "before-move" | "after-move" | "complete" | "failed";
+  };
   authorizationMode?: "manual" | "delegated-ai";
   authorizationDecisionHash?: string;
   authorizationPolicyHash?: string;

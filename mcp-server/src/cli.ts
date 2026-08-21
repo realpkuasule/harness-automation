@@ -38,6 +38,7 @@ import {
 } from "./v2/types.js";
 import {
   auditWorkspace,
+  applyWorkspaceMigration,
   parseWorkspaceAdoptionManifest,
   planWorkspaceAdoption,
   planWorkspaceAllocation,
@@ -421,6 +422,14 @@ function runWorktreeCommand(
       return;
     }
     case "migrate":
+      if (args.positionals[1] === "apply") {
+        printJson(applyWorkspaceMigration({
+          projectRoot: root,
+          planPath: required(args, "plan"),
+          approval: required(args, "approve"),
+        }));
+        return;
+      }
       printWorkspacePlan(planWorkspaceMigration({
         projectRoot: root,
         workspaceContainer: required(args, "workspace-container"),
@@ -528,6 +537,7 @@ Usage:
   harness-automation worktree status|audit|retention-audit [--project .]
   harness-automation worktree configure [--mode audit-only|enforced] [--management-branch <branch>] [--topology container-v1 --workspace-container <absolute-path>] [--allow-root <absolute-path>] [--approval-mode manual|delegated-ai] [--reviewer-model <model>] [--delegate-operation <kind>] [--project .]
   harness-automation worktree migrate --workspace-container <absolute-path> [--project .]
+  harness-automation worktree migrate apply --plan <relative-plan-path> --approve <sha256> [--project .]
   harness-automation worktree allocate --work-item <provider:id> --branch <name> --path <absolute-path> --owner <name> [--project .]
   harness-automation worktree adopt --manifest <json-path> [--project .]
   harness-automation worktree review [--commit <sha>] [--project .] -- <command> [args...]

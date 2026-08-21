@@ -91,9 +91,8 @@ command-checkout behavior until an approved configure plan adds the selector.
 
 ### Legacy migration preflight
 
-Existing flat layouts are never moved, renamed, deleted, or reconfigured into a
-container automatically. Generate an independently hash-bound, plan-only
-preflight instead:
+Existing flat layouts are never moved automatically. Generate an independently
+hash-bound preflight first:
 
 ```bash
 harness-automation worktree migrate \
@@ -103,9 +102,22 @@ harness-automation worktree migrate \
 
 It records management checkout, host binding and lease hashes, refs, registered
 worktrees, dirty/unique/unpushed evidence, and all referenced paths, together
-with the target `main/` and `worktrees/` mapping. `apply` deliberately rejects
-this operation: a future dedicated migration executor must receive a separate
-exact-hash approval. No GitHub Team plan or configuration is involved.
+with the target `main/` and `worktrees/` mapping. Only the explicit command
+below may execute that exact plan; generic `apply` rejects migration plans:
+
+```bash
+harness-automation worktree migrate apply \
+  --project /absolute/legacy-checkout \
+  --plan .harness/plans/<migration-plan>.json \
+  --approve <exact-sha256>
+```
+
+The first executor supports exactly one primary legacy checkout with no lease
+or persistent worktree. It never resets, cleans, prunes, removes, or pushes.
+An interrupted migration leaves a durable receipt; rerun the same explicit
+command from `<container>/main` with the same plan and hash to resume only when
+the recorded post-move state still matches. Rollback is deliberately refused.
+No GitHub Team plan or configuration is involved.
 
 ### Delegated AI authorization
 

@@ -51,9 +51,12 @@ node <skill目录>/scripts/run.mjs worktree configure \
   --workspace-container <container绝对路径>
 ```
 
-不要把 `--allow-root` 与容器拓扑混用。既有平铺 checkout 永不自动移动；只可
-生成 `worktree migrate --workspace-container <绝对路径>` 的只读预检计划，且
-当前 apply 会明确拒绝迁移执行。
+不要把 `--allow-root` 与容器拓扑混用。既有平铺 checkout 永不自动移动；先生成
+`worktree migrate --workspace-container <绝对路径>` 预检计划。仅当负责人明确
+批准完整 plan hash 后，才能使用 `worktree migrate apply --plan <相对路径>
+--approve <完整sha256>` 执行。普通 `apply` 会明确拒绝迁移。首版只支持唯一
+primary legacy checkout 且零 lease/worktree；中断后只能用同一计划/hash 从新
+`main/` 路径续行，不会自动回滚或删除内容。
 
 向项目负责人展示 `planPath`、完整 `planHash`、配置模式、management 分支选择器、主机绑定中的允许根/保护根、容量和 Provider 映射。仓库配置不得写入主机绝对路径；同一个哈希计划同时覆盖仓库策略和 Git common dir 下的主机绑定。缺失或歧义的 management checkout 在 enforced audit 中必须 fail closed。
 

@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmdirSync,
@@ -21,6 +22,7 @@ import { hashObject, prettyJson, sha256, withoutHash } from "../v2/fs.js";
 import type { WorktreeApprovalPolicy, WorktreeDelegatableOperation } from "./types.js";
 import {
   applyWorkspacePlan,
+  applyWorkspaceMigration,
   auditWorkspace,
   parseWorkspaceAdoptionManifest,
   parseWorktreePorcelain,
@@ -675,6 +677,181 @@ describe("hash-approved worktree lifecycle", () => {
       approval: migration.plan.planHash,
     })).toThrow(/WORKTREE_MIGRATION_APPLY_UNSUPPORTED/);
     expect(existsSync(targetContainer)).toBe(false);
+  });
+
+  it("moves one exactly approved legacy management checkout into a container topology", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main" });
+    const targetContainer = join(dirname(root), `harness-migration-apply-${randomBytes(4).toString("hex")}`);
+    repositories.push(targetContainer);
+    const planned = planWorkspaceMigration({ projectRoot: root, workspaceContainer: targetContainer });
+    const receipt = applyWorkspaceMigration({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    if (planned.plan.operation.kind !== "migrate") throw new Error("expected migration plan");
+    const topology = planned.plan.operation.topology;
+    expect(receipt).toMatchObject({
+      operation: "migrate",
+      status: "applied",
+      beforeObservedHash: planned.plan.observedHash,
+    });
+    expect(existsSync(root)).toBe(false);
+    expect(git(topology.managementCheckout, "rev-parse", "--show-toplevel")).toBe(topology.managementCheckout);
+    expect(existsSync(topology.persistentWorktreeRoot!)).toBe(true);
+    expect(readdirSync(topology.persistentWorktreeRoot!)).toEqual([]);
+    expect(workspaceStatus(topology.managementCheckout)).toMatchObject({
+      topology: {
+        kind: "container-v1",
+        workspaceContainer: topology.workspaceContainer,
+        managementCheckout: topology.managementCheckout,
+        persistentWorktreeRoot: topology.persistentWorktreeRoot,
+      },
+      capacity: { used: 0, available: 4 },
+      leases: [],
+      worktrees: [expect.objectContaining({
+        path: topology.managementCheckout,
+        gitTopLevel: topology.managementCheckout,
+        branch: "main",
+      })],
+    });
+    expect(applyWorkspaceMigration({
+      projectRoot: topology.managementCheckout,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toMatchObject({ status: "applied", operation: "migrate" });
+    expect(() => rollbackWorkspaceChange({
+      projectRoot: topology.managementCheckout,
+      changeId: planned.plan.id,
+    })).toThrow(/WORKTREE_MIGRATION_ROLLBACK_UNSUPPORTED/);
+  });
+
+  it("rejects migration hash and observed-state drift without creating the target", () => {
+    const prepare = () => {
+      const root = repository();
+      configure(root, { managementBranch: "main" });
+      const target = join(dirname(root), `harness-migration-drift-${randomBytes(4).toString("hex")}`);
+      return { root, target, planned: planWorkspaceMigration({ projectRoot: root, workspaceContainer: target }) };
+    };
+    const wrongHash = prepare();
+    expect(() => applyWorkspaceMigration({
+      projectRoot: wrongHash.root,
+      planPath: wrongHash.planned.path,
+      approval: "0".repeat(64),
+    })).toThrow(/APPROVAL_MISMATCH/);
+    expect(existsSync(wrongHash.target)).toBe(false);
+
+    const binding = prepare();
+    writeFileSync(workspaceStatus(binding.root).hostBinding.path, "{}", "utf8");
+    expect(() => applyWorkspaceMigration({
+      projectRoot: binding.root,
+      planPath: binding.planned.path,
+      approval: binding.planned.plan.planHash,
+    })).toThrow(/WORKSPACE_DRIFT|WORKTREE_HOST_BINDING_INVALID/);
+    expect(existsSync(binding.target)).toBe(false);
+
+    const dirty = prepare();
+    writeFileSync(join(dirty.root, "README.md"), "drift\n", "utf8");
+    expect(() => applyWorkspaceMigration({
+      projectRoot: dirty.root,
+      planPath: dirty.planned.path,
+      approval: dirty.planned.plan.planHash,
+    })).toThrow(/WORKSPACE_DRIFT/);
+    expect(existsSync(dirty.target)).toBe(false);
+
+    const refs = prepare();
+    git(refs.root, "commit", "--allow-empty", "-m", "test: ref drift");
+    expect(() => applyWorkspaceMigration({
+      projectRoot: refs.root,
+      planPath: refs.planned.path,
+      approval: refs.planned.plan.planHash,
+    })).toThrow(/WORKSPACE_DRIFT/);
+    expect(existsSync(refs.target)).toBe(false);
+
+    const registration = prepare();
+    const extra = `${registration.root}-registered`;
+    repositories.push(extra);
+    git(registration.root, "worktree", "add", "--detach", extra, "HEAD");
+    expect(() => applyWorkspaceMigration({
+      projectRoot: registration.root,
+      planPath: registration.planned.path,
+      approval: registration.planned.plan.planHash,
+    })).toThrow(/WORKSPACE_DRIFT/);
+    expect(existsSync(registration.target)).toBe(false);
+  });
+
+  it("rejects legacy migration targets and persistent lease or worktree drift", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main" });
+    const nonEmpty = mkdtempSync(join(dirname(root), "harness-migration-non-empty-"));
+    repositories.push(nonEmpty);
+    writeFileSync(join(nonEmpty, "keep"), "x", "utf8");
+    expect(() => planWorkspaceMigration({ projectRoot: root, workspaceContainer: nonEmpty }))
+      .toThrow(/WORKTREE_MIGRATION_CONTAINER_INVALID/);
+    const gitContainer = mkdtempSync(join(dirname(root), "harness-migration-git-"));
+    repositories.push(gitContainer);
+    git(gitContainer, "init");
+    expect(() => planWorkspaceMigration({ projectRoot: root, workspaceContainer: gitContainer }))
+      .toThrow(/WORKTREE_MIGRATION_CONTAINER_INVALID/);
+    expect(() => planWorkspaceMigration({ projectRoot: root, workspaceContainer: join(root, "inside") }))
+      .toThrow(/WORKTREE_MIGRATION_CONTAINER_INVALID/);
+    const link = `${root}-migration-link`;
+    repositories.push(link);
+    symlinkSync(dirname(root), link);
+    expect(() => planWorkspaceMigration({ projectRoot: root, workspaceContainer: link }))
+      .toThrow(/WORKTREE_MIGRATION_CONTAINER_INVALID/);
+
+    const target = join(dirname(root), `harness-migration-lease-${randomBytes(4).toString("hex")}`);
+    const planned = planWorkspaceMigration({ projectRoot: root, workspaceContainer: target });
+    const state = join(workspaceStatus(root).commonDir, "harness", "worktree-delivery", "leases");
+    mkdirSync(state, { recursive: true });
+    writeFileSync(join(state, "drift.json"), "{}", "utf8");
+    expect(() => applyWorkspaceMigration({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toThrow(/WORKSPACE_DRIFT|WORKTREE_MIGRATION_V1_PRECONDITION_FAILED/);
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it("keeps a durable failed receipt after an interrupted migration without rollback", () => {
+    const root = repository();
+    configure(root, { managementBranch: "main" });
+    const target = join(dirname(root), `harness-migration-failure-${randomBytes(4).toString("hex")}`);
+    repositories.push(target);
+    const planned = planWorkspaceMigration({ projectRoot: root, workspaceContainer: target });
+    if (planned.plan.operation.kind !== "migrate") throw new Error("expected migration plan");
+    expect(() => applyWorkspaceMigration({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+      testFailAfterMove: true,
+    })).toThrow(/TEST_MIGRATION_AFTER_MOVE_FAILURE/);
+    const targetRoot = planned.plan.operation.topology.managementCheckout;
+    const receiptPath = join(
+      planned.plan.operation.topology.commonDir,
+      "harness",
+      "worktree-delivery",
+      "receipts",
+      `${planned.plan.id}.json`,
+    );
+    expect(existsSync(root)).toBe(false);
+    expect(existsSync(targetRoot)).toBe(true);
+    expect(JSON.parse(readFileSync(receiptPath, "utf8"))).toMatchObject({
+      status: "failed",
+      operation: "migrate",
+      error: "TEST_MIGRATION_AFTER_MOVE_FAILURE",
+    });
+    expect(auditWorkspace(targetRoot).policies.find((policy) => policy.id === "workspace.cleanup-receipt"))
+      .toMatchObject({ passing: false, evidence: [expect.stringContaining(planned.plan.id)] });
+    expect(applyWorkspaceMigration({
+      projectRoot: targetRoot,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toMatchObject({ status: "applied", operation: "migrate" });
+    expect(() => rollbackWorkspaceChange({ projectRoot: targetRoot, changeId: planned.plan.id }))
+      .toThrow(/WORKTREE_MIGRATION_ROLLBACK_UNSUPPORTED/);
   });
 
   it("detects host-binding drift before applying an allocation", () => {

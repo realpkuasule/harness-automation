@@ -12,6 +12,7 @@ import {
   readFileSync,
   readlinkSync,
   realpathSync,
+  renameSync,
   rmdirSync,
   statSync,
   unlinkSync,
@@ -861,6 +862,16 @@ function blockedResult(
 
 export function auditWorkspace(projectRoot: string): WorkspaceAudit {
   const status = workspaceStatus(projectRoot);
+  const incompleteMigrations = stateJsonFiles(status.commonDir, "receipts").flatMap(({ path }) => {
+    try {
+      const receipt = readJson<WorkspaceReceipt>(path);
+      return receipt.operation === "migrate" && (receipt.status === "started" || receipt.status === "failed")
+        ? [`${receipt.id}: ${receipt.status}: ${path}`]
+        : [];
+    } catch {
+      return [`invalid receipt: ${path}`];
+    }
+  });
   const managementMatches = status.config.managementBranch
     ? status.worktrees.filter((worktree) =>
       !worktree.bare &&
@@ -1016,8 +1027,11 @@ export function auditWorkspace(projectRoot: string): WorkspaceAudit {
     "Status, audit, and cleanup planning execute no worktree creation command."));
   add(result(status, "workspace.cleanup-exact-hash", true,
     "Persistent lifecycle changes require a canonical SHA-256 plan."));
-  add(result(status, "workspace.cleanup-receipt", true,
-    "Persistent lifecycle changes require a durable receipt."));
+  add(result(status, "workspace.cleanup-receipt", incompleteMigrations.length === 0,
+    incompleteMigrations.length === 0
+      ? "Persistent lifecycle changes require a durable receipt."
+      : "An interrupted migration requires explicit recovery with its exact plan hash.",
+    incompleteMigrations));
   add(result(status, "workspace.remote-delete-disabled", status.config.remoteBranchDeletion === false,
     "Remote branch deletion is disabled."));
   const policies = WORKTREE_POLICY_IDS.map((id) => policyById.get(id)!);
@@ -1245,41 +1259,47 @@ export function planWorkspaceConfiguration(args: {
   return savePlan(status.projectDir, planDraft({ status, operation, now: args.now }));
 }
 
-function migrationTargetTopology(root: string, commonDir: string, workspaceContainer: string): WorkspaceTopology {
+function migrationTargetTopology(root: string, workspaceContainer: string): WorkspaceTopology {
   rejectTraversal(workspaceContainer);
   const container = canonicalPath(workspaceContainer);
   if (container === resolve("/") || isSameOrWithin(container, root) || isSameOrWithin(root, container)) {
     throw new Error(`WORKTREE_MIGRATION_CONTAINER_INVALID: ${container}`);
   }
-  if (existsSync(container)) {
+  const containerState = directoryState(container);
+  if (containerState !== "absent" && containerState !== "empty") {
+    throw new Error(`WORKTREE_MIGRATION_CONTAINER_INVALID: ${container}`);
+  }
+  if (containerState !== "absent") {
     if (!lstatSync(container).isDirectory() || lstatSync(container).isSymbolicLink() ||
-        directoryState(container) !== "empty") {
+        git(container, ["rev-parse", "--show-toplevel"], true).trim()) {
       throw new Error(`WORKTREE_MIGRATION_CONTAINER_INVALID: ${container}`);
     }
+  }
+  if (!existsSync(dirname(container)) || !lstatSync(dirname(container)).isDirectory()) {
+    throw new Error(`WORKTREE_MIGRATION_CONTAINER_INVALID: ${container}`);
+  }
+  if (git(dirname(container), ["rev-parse", "--show-toplevel"], true).trim()) {
+    throw new Error(`WORKTREE_MIGRATION_CONTAINER_GIT_PARENT: ${container}`);
   }
   const managementCheckout = canonicalPath(join(container, "main"));
   const persistentWorktreeRoot = canonicalPath(join(container, "worktrees"));
   if (existsSync(managementCheckout) || existsSync(persistentWorktreeRoot)) {
     throw new Error(`WORKTREE_MIGRATION_TARGET_EXISTS: ${container}`);
   }
+  const targetCommonDir = canonicalPath(join(managementCheckout, ".git"));
   return {
     kind: "container-v1",
     workspaceContainer: container,
     managementCheckout,
     persistentWorktreeRoot,
     allowedRoots: [persistentWorktreeRoot],
-    protectedRoots: [managementCheckout, commonDir, resolve("/")].map(canonicalPath),
-    commonDir,
+    protectedRoots: [managementCheckout, targetCommonDir, resolve("/")].map(canonicalPath),
+    commonDir: targetCommonDir,
     worktreeTopLevels: [],
   };
 }
 
-export function planWorkspaceMigration(args: {
-  projectRoot: string;
-  workspaceContainer: string;
-  now?: Date;
-}): { plan: WorkspacePlan; path: string } {
-  const status = workspaceStatus(args.projectRoot);
+function migrationOperation(status: WorkspaceStatus, workspaceContainer: string): Extract<WorkspacePlan["operation"], { kind: "migrate" }> {
   if (!status.configured || !status.hostBinding.configured) {
     throw new Error("WORKTREE_MIGRATION_CONFIGURATION_REQUIRED");
   }
@@ -1287,10 +1307,35 @@ export function planWorkspaceMigration(args: {
   if (!status.config.managementBranch) throw new Error("WORKTREE_MANAGEMENT_BRANCH_REQUIRED");
   const management = status.worktrees.filter((worktree) =>
     !worktree.bare && !worktree.prunable && worktree.branch === status.config.managementBranch);
-  if (management.length !== 1 || !samePath(management[0].path, status.projectDir)) {
-    throw new Error("WORKTREE_MIGRATION_MANAGEMENT_CHECKOUT_INVALID");
+  if (management.length !== 1 || status.worktrees.length !== 1 || !samePath(management[0].path, status.projectDir) ||
+      management[0].detached || !samePath(status.commonDir, join(status.projectDir, ".git"))) {
+    throw new Error("WORKTREE_MIGRATION_V1_PRECONDITION_FAILED: require one primary legacy management checkout and zero persistent worktrees");
   }
-  const topology = migrationTargetTopology(status.projectDir, status.commonDir, args.workspaceContainer);
+  const commonMetadata = lstatSync(status.commonDir);
+  if (!commonMetadata.isDirectory() || commonMetadata.isSymbolicLink()) {
+    throw new Error("WORKTREE_MIGRATION_V1_PRECONDITION_FAILED: management common-dir must be a real .git directory");
+  }
+  const leaseHashes = leaseStateObservation(status.commonDir);
+  if (status.leases.length !== 0 || leaseHashes.length !== 0 ||
+      status.errors.some((error) => error.startsWith("WORKTREE_LEASE_") || error.startsWith("WORKTREE_STATE_"))) {
+    throw new Error("WORKTREE_MIGRATION_V1_PRECONDITION_FAILED: persistent leases require a later migration capability");
+  }
+  const topology = migrationTargetTopology(status.projectDir, workspaceContainer);
+  if (statSync(status.projectDir).dev !== statSync(dirname(topology.workspaceContainer!)).dev) {
+    throw new Error("WORKTREE_MIGRATION_CROSS_DEVICE_UNSUPPORTED");
+  }
+  const afterBinding = validHostBinding({
+    schemaVersion: WORKTREE_SCHEMA_VERSION,
+    allowedRoots: [topology.persistentWorktreeRoot!],
+    protectedRoots: topology.protectedRoots,
+    topology: {
+      kind: "container-v1",
+      workspaceContainer: topology.workspaceContainer!,
+      managementCheckout: topology.managementCheckout,
+      persistentWorktreeRoot: topology.persistentWorktreeRoot!,
+    },
+    approval: status.hostBinding.approval,
+  });
   const worktreeRecords = status.worktrees.map((worktree) => ({
     path: canonicalPath(worktree.path),
     branch: worktree.branch,
@@ -1307,36 +1352,46 @@ export function planWorkspaceMigration(args: {
     ...status.leases.map((lease) => lease.path),
     ...worktreeRecords.map((worktree) => worktree.path),
   ].map(canonicalPath).sort();
+  return {
+    kind: "migrate",
+    topology,
+    preflight: {
+      configHash: fileHash(join(status.projectDir, ".harness", "worktree-delivery.json")) ?? "",
+      hostBindingHash: status.hostBinding.hash,
+      afterHostBindingHash: sha256(prettyJson(afterBinding)),
+      afterHostBindingContent: prettyJson(afterBinding),
+      refsHash: hashObject(refsObservation(status.projectDir)),
+      worktreeRegistrationHash: hashObject(worktreeRegistrationObservation(status.worktrees)),
+      leaseHashes: leaseHashes.map((lease) => ({ path: lease.leasePath, sha256: lease.sha256 })),
+      referencePaths,
+      managementCheckout: status.projectDir,
+      commonDir: status.commonDir,
+      targetContainerState: directoryState(topology.workspaceContainer!) as "absent" | "empty",
+      targetMainState: "absent",
+      targetWorktreesState: "absent",
+      leases: [],
+      worktrees: worktreeRecords,
+    },
+    manualSteps: [
+      `Run only \`worktree migrate apply\` with this plan's exact SHA-256 to move ${status.projectDir} to ${topology.managementCheckout}.`,
+      `The executor creates only ${topology.workspaceContainer} and ${topology.persistentWorktreeRoot}, then writes the container-v1 host binding.`,
+      "Rollback is deliberately unavailable after a directory migration; inspect the durable receipt if execution is interrupted.",
+    ],
+  };
+}
+
+export function planWorkspaceMigration(args: {
+  projectRoot: string;
+  workspaceContainer: string;
+  now?: Date;
+}): { plan: WorkspacePlan; path: string } {
+  const status = workspaceStatus(args.projectRoot);
+  const operation = migrationOperation(status, args.workspaceContainer);
   return savePlan(status.projectDir, planDraft({
     status,
-    operation: {
-      kind: "migrate",
-      topology,
-      preflight: {
-        hostBindingHash: status.hostBinding.hash,
-        refsHash: hashObject(refsObservation(status.projectDir)),
-        worktreeRegistrationHash: hashObject(worktreeRegistrationObservation(status.worktrees)),
-        leaseHashes: leaseStateObservation(status.commonDir).map((lease) => ({
-          path: lease.leasePath,
-          sha256: lease.sha256,
-        })),
-        referencePaths,
-        managementCheckout: status.projectDir,
-        leases: status.leases.map((lease) => ({
-          workItem: lease.workItem,
-          path: lease.path,
-          branch: lease.branch,
-        })).sort((left, right) => left.workItem < right.workItem ? -1 : 1),
-        worktrees: worktreeRecords,
-      },
-      manualSteps: [
-        `Create ${topology.workspaceContainer} as a non-Git container.`,
-        `Move the exact management checkout to ${topology.managementCheckout} only after a separate approved migration executor exists.`,
-        `Create ${topology.persistentWorktreeRoot} and re-register each persistent worktree only through a future migration receipt.`,
-      ],
-    },
+    operation,
     now: args.now,
-    warnings: ["Migration is plan-only. Applying this plan is deliberately unsupported and performs zero mutations."],
+    warnings: ["Migration planning is read-only. Only the explicit worktree migrate apply command can execute an exactly approved plan."],
   }));
 }
 
@@ -1937,13 +1992,66 @@ function loadWorkspacePlan(root: string, path: string): WorkspacePlan {
   if (plan.operation.kind === "migrate") {
     const operation = plan.operation;
     if (
+      typeof operation.preflight?.configHash !== "string" ||
+      typeof operation.preflight.afterHostBindingContent !== "string" ||
+      typeof operation.preflight.afterHostBindingHash !== "string" ||
+      operation.preflight.targetContainerState === undefined
+    ) {
+      throw new Error("WORKTREE_MIGRATION_REPLAN_REQUIRED");
+    }
+    if (
       operation.topology?.kind !== "container-v1" ||
+      !isAbsolute(operation.topology.workspaceContainer ?? "") ||
+      !isAbsolute(operation.topology.managementCheckout) ||
+      !isAbsolute(operation.topology.persistentWorktreeRoot ?? "") ||
+      !isAbsolute(operation.topology.commonDir) ||
+      typeof operation.preflight?.configHash !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(operation.preflight.configHash) ||
+      (operation.preflight.hostBindingHash !== null &&
+        !/^[a-f0-9]{64}$/u.test(operation.preflight.hostBindingHash)) ||
+      !/^[a-f0-9]{64}$/u.test(operation.preflight.afterHostBindingHash ?? "") ||
+      typeof operation.preflight.afterHostBindingContent !== "string" ||
+      sha256(operation.preflight.afterHostBindingContent) !== operation.preflight.afterHostBindingHash ||
+      !/^[a-f0-9]{64}$/u.test(operation.preflight.refsHash ?? "") ||
+      !/^[a-f0-9]{64}$/u.test(operation.preflight.worktreeRegistrationHash ?? "") ||
       !Array.isArray(operation.preflight?.leases) ||
+      operation.preflight.leases.length !== 0 ||
+      !Array.isArray(operation.preflight?.leaseHashes) ||
+      operation.preflight.leaseHashes.length !== 0 ||
       !Array.isArray(operation.preflight?.worktrees) ||
+      operation.preflight.worktrees.length !== 1 ||
       !Array.isArray(operation.preflight?.referencePaths) ||
+      operation.preflight.managementCheckout !== plan.projectDir ||
+      operation.preflight.commonDir !== plan.commonDir ||
+      !["absent", "empty"].includes(operation.preflight.targetContainerState) ||
+      operation.preflight.targetMainState !== "absent" ||
+      operation.preflight.targetWorktreesState !== "absent" ||
       !Array.isArray(operation.manualSteps) ||
       operation.manualSteps.length === 0
     ) {
+      throw new Error("WORKSPACE_PLAN_INVALID");
+    }
+    try {
+      const container = canonicalPath(operation.topology.workspaceContainer!);
+      const management = canonicalPath(join(container, "main"));
+      const worktreesRoot = canonicalPath(join(container, "worktrees"));
+      const targetCommonDir = canonicalPath(join(management, ".git"));
+      const afterBinding = validHostBinding(JSON.parse(operation.preflight.afterHostBindingContent));
+      if (
+        operation.topology.workspaceContainer !== container ||
+        operation.topology.managementCheckout !== management ||
+        operation.topology.persistentWorktreeRoot !== worktreesRoot ||
+        operation.topology.commonDir !== targetCommonDir ||
+        afterBinding.topology?.kind !== "container-v1" ||
+        afterBinding.topology.workspaceContainer !== container ||
+        afterBinding.topology.managementCheckout !== management ||
+        afterBinding.topology.persistentWorktreeRoot !== worktreesRoot ||
+        hashObject(afterBinding.allowedRoots) !== hashObject([worktreesRoot]) ||
+        hashObject(afterBinding.protectedRoots) !== hashObject([management, targetCommonDir, resolve("/")].map(canonicalPath))
+      ) {
+        throw new Error("invalid migration topology");
+      }
+    } catch {
       throw new Error("WORKSPACE_PLAN_INVALID");
     }
   }
@@ -2737,6 +2845,226 @@ function applyWorkspaceAdoptionPlan(
   }
 }
 
+function migratedPath(sourceRoot: string, targetRoot: string, sourcePath: string): string {
+  const suffix = relative(sourceRoot, sourcePath);
+  if (suffix === "" || suffix.startsWith("..") || isAbsolute(suffix)) {
+    throw new Error(`WORKTREE_MIGRATION_PATH_INVALID: ${sourcePath}`);
+  }
+  return join(targetRoot, suffix);
+}
+
+function assertMigrationPostconditions(
+  status: WorkspaceStatus,
+  operation: Extract<WorkspacePlan["operation"], { kind: "migrate" }>,
+): void {
+  const source = operation.preflight.worktrees[0];
+  const observed = status.worktrees[0];
+  const topology = operation.topology;
+  if (
+    status.projectDir !== topology.managementCheckout ||
+    status.commonDir !== topology.commonDir ||
+    existsSync(operation.preflight.managementCheckout) ||
+    status.topology.kind !== "container-v1" ||
+    status.topology.workspaceContainer !== topology.workspaceContainer ||
+    status.topology.managementCheckout !== topology.managementCheckout ||
+    status.topology.persistentWorktreeRoot !== topology.persistentWorktreeRoot ||
+    status.hostBinding.hash !== operation.preflight.afterHostBindingHash ||
+    hashObject(status.hostBinding.allowedRoots) !== hashObject([topology.persistentWorktreeRoot!]) ||
+    hashObject(status.hostBinding.protectedRoots) !== hashObject(topology.protectedRoots) ||
+    status.leases.length !== 0 ||
+    status.capacity.used !== 0 ||
+    status.worktrees.length !== 1 ||
+    !observed ||
+    observed.path !== topology.managementCheckout ||
+    observed.gitTopLevel !== topology.managementCheckout ||
+    observed.branch !== source.branch ||
+    observed.head !== source.head ||
+    Boolean(observed.dirty) !== source.dirty ||
+    hashObject(observed.dirtyEvidence ?? []) !== hashObject(source.dirtyEvidence) ||
+    hashObject(observed.dirtyPatch ?? { size: 0, sha256: sha256("") }) !== hashObject(source.dirtyPatch) ||
+    observed.uniqueCommits !== source.uniqueCommits ||
+    observed.unpushedCommits !== source.unpushedCommits ||
+    hashObject(refsObservation(status.projectDir)) !== operation.preflight.refsHash ||
+    fileHash(join(status.projectDir, ".harness", "worktree-delivery.json")) !== operation.preflight.configHash ||
+    directoryState(topology.persistentWorktreeRoot!) !== "empty"
+  ) {
+    throw new Error("WORKTREE_MIGRATION_POSTCONDITION_FAILED");
+  }
+}
+
+export function applyWorkspaceMigration(args: {
+  projectRoot: string;
+  planPath: string;
+  approval: string;
+  now?: Date;
+  testFailAfterMove?: boolean;
+}): WorkspaceReceipt {
+  const root = repositoryRoot(args.projectRoot);
+  const plan = loadWorkspacePlan(root, args.planPath);
+  if (plan.operation.kind !== "migrate") {
+    throw new Error("WORKTREE_MIGRATION_PLAN_REQUIRED");
+  }
+  if (hashObject(withoutHash(plan)) !== plan.planHash) {
+    throw new Error("PLAN_TAMPERED: workspace plan content does not match its embedded hash");
+  }
+  if (args.approval !== plan.planHash) {
+    throw new Error(`APPROVAL_MISMATCH: expected exact plan hash ${plan.planHash}`);
+  }
+  const operation = plan.operation;
+  const atSource = root === plan.projectDir && gitCommonDir(root) === plan.commonDir;
+  const atTarget = root === operation.topology.managementCheckout &&
+    gitCommonDir(root) === operation.topology.commonDir;
+  if (!atSource && !atTarget) throw new Error("PROJECT_MISMATCH: workspace plan belongs to another repository");
+  const sourceReceiptPath = receiptFile(plan.commonDir, plan.id);
+  const targetCommonDir = plan.operation.topology.commonDir;
+  const targetReceiptPath = receiptFile(targetCommonDir, plan.id);
+  const existingPath = atTarget ? targetReceiptPath : sourceReceiptPath;
+  const existing = existsSync(existingPath) ? readJson<WorkspaceReceipt>(existingPath) : undefined;
+  if (existing && existing.planHash !== plan.planHash) throw new Error(`CHANGE_ID_CONFLICT: ${plan.id}`);
+  if (existing?.status === "applied") {
+    if (!atTarget) throw new Error(`WORKTREE_MIGRATION_RECOVERY_REQUIRED: ${plan.id}`);
+    const after = workspaceStatus(root);
+    assertMigrationPostconditions(after, operation);
+    return existing;
+  }
+  if (atSource && existing) {
+    throw new Error(`WORKTREE_MIGRATION_RECOVERY_REQUIRED: ${plan.id}; inspect its durable receipt`);
+  }
+  let before: WorkspaceStatus;
+  if (atSource) {
+    before = workspaceStatus(root);
+    validateWorkspacePlan(before, plan, args.approval);
+  } else {
+    before = existing?.before ?? (() => { throw new Error("WORKTREE_MIGRATION_RECOVERY_REQUIRED: missing receipt"); })();
+  }
+  let lock = acquireLock(atSource ? plan.commonDir : targetCommonDir);
+  let moved = atTarget;
+  const receipt: WorkspaceReceipt = existing ?? {
+    schemaVersion: "worktree-delivery/1.0",
+    kind: "workspace-receipt",
+    id: plan.id,
+    planHash: plan.planHash,
+    operation: "migrate",
+    status: "started",
+    startedAt: (args.now ?? new Date()).toISOString(),
+    steps: [],
+    before,
+    beforeObservedHash: before.observedHash,
+    compensationStatus: "not-required",
+    migration: {
+      sourceProjectDir: plan.projectDir,
+      targetProjectDir: operation.topology.managementCheckout,
+      sourceCommonDir: plan.commonDir,
+      targetCommonDir,
+      recoveryState: "before-move",
+    },
+  };
+  const checkpoint = (): void => writeReceipt(moved ? targetReceiptPath : sourceReceiptPath, receipt);
+  try {
+    const topology = operation.topology;
+    if (!moved) {
+      const reobserved = migrationOperation(before, topology.workspaceContainer!);
+      if (hashObject(reobserved) !== hashObject(operation)) {
+        throw new Error("WORKSPACE_DRIFT: migration preconditions changed");
+      }
+      checkpoint();
+      if (
+        directoryState(topology.workspaceContainer!) !== operation.preflight.targetContainerState ||
+        directoryState(topology.managementCheckout) !== "absent" ||
+        directoryState(topology.persistentWorktreeRoot!) !== "absent"
+      ) {
+        throw new Error("WORKSPACE_DRIFT: migration target paths changed");
+      }
+      if (directoryState(topology.workspaceContainer!) === "absent") {
+        mkdirSync(topology.workspaceContainer!);
+        if (directoryState(topology.workspaceContainer!) !== "empty") {
+          throw new Error(`WORKTREE_MIGRATION_CONTAINER_CREATE_FAILED: ${topology.workspaceContainer}`);
+        }
+        receipt.createdDirectories = [topology.workspaceContainer!];
+        receipt.steps.push({ id: "create-container", status: "applied", detail: topology.workspaceContainer! });
+        checkpoint();
+      }
+      mkdirSync(topology.persistentWorktreeRoot!);
+      if (directoryState(topology.persistentWorktreeRoot!) !== "empty") {
+        throw new Error(`WORKTREE_MIGRATION_WORKTREES_CREATE_FAILED: ${topology.persistentWorktreeRoot}`);
+      }
+      receipt.createdDirectories = [...(receipt.createdDirectories ?? []), topology.persistentWorktreeRoot!];
+      receipt.steps.push({ id: "create-worktrees-root", status: "applied", detail: topology.persistentWorktreeRoot! });
+      checkpoint();
+      assertCurrentHash(join(root, ".harness", "worktree-delivery.json"), operation.preflight.configHash);
+      assertCurrentHash(hostBindingFile(plan.commonDir), operation.preflight.hostBindingHash);
+      renameSync(root, topology.managementCheckout);
+      moved = true;
+      lock = migratedPath(root, topology.managementCheckout, lock);
+      receipt.migration!.recoveryState = "after-move";
+      receipt.steps.push({ id: "move-management-checkout", status: "applied", detail: `${root} -> ${topology.managementCheckout}` });
+      checkpoint();
+      if (args.testFailAfterMove) throw new Error("TEST_MIGRATION_AFTER_MOVE_FAILURE");
+    } else {
+      const current = workspaceStatus(root);
+      const source = operation.preflight.worktrees[0];
+      const observed = current.worktrees[0];
+      if (
+        existsSync(plan.projectDir) ||
+        current.worktrees.length !== 1 ||
+        current.leases.length !== 0 ||
+        !observed || observed.path !== topology.managementCheckout || observed.gitTopLevel !== topology.managementCheckout ||
+        observed.branch !== source.branch || observed.head !== source.head || Boolean(observed.dirty) !== source.dirty ||
+        hashObject(observed.dirtyEvidence ?? []) !== hashObject(source.dirtyEvidence) ||
+        hashObject(observed.dirtyPatch ?? { size: 0, sha256: sha256("") }) !== hashObject(source.dirtyPatch) ||
+        observed.uniqueCommits !== source.uniqueCommits || observed.unpushedCommits !== source.unpushedCommits ||
+        hashObject(refsObservation(root)) !== operation.preflight.refsHash ||
+        fileHash(join(root, ".harness", "worktree-delivery.json")) !== operation.preflight.configHash ||
+        directoryState(topology.persistentWorktreeRoot!) !== "empty" ||
+        ![operation.preflight.hostBindingHash, operation.preflight.afterHostBindingHash].includes(current.hostBinding.hash)
+      ) {
+        throw new Error("WORKTREE_MIGRATION_RECOVERY_UNSAFE");
+      }
+      receipt.status = "started";
+      receipt.error = undefined;
+      receipt.migration!.recoveryState = "after-move";
+      receipt.steps.push({ id: "resume-migration", status: "applied", detail: topology.managementCheckout });
+      checkpoint();
+    }
+    const bindingHash = fileHash(hostBindingFile(targetCommonDir));
+    if (bindingHash === operation.preflight.hostBindingHash) {
+      atomicWrite(hostBindingFile(targetCommonDir), operation.preflight.afterHostBindingContent);
+      assertCurrentHash(hostBindingFile(targetCommonDir), operation.preflight.afterHostBindingHash);
+      receipt.steps.push({ id: "write-container-host-binding", status: "applied", detail: hostBindingFile(targetCommonDir) });
+      checkpoint();
+    } else if (bindingHash !== operation.preflight.afterHostBindingHash) {
+      throw new Error("WORKTREE_MIGRATION_RECOVERY_UNSAFE: host binding changed");
+    }
+    const after = workspaceStatus(topology.managementCheckout);
+    assertMigrationPostconditions(after, operation);
+    receipt.status = "applied";
+    receipt.completedAt = (args.now ?? new Date()).toISOString();
+    receipt.after = after;
+    receipt.afterObservedHash = after.observedHash;
+    receipt.migration!.recoveryState = "complete";
+    checkpoint();
+    return receipt;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    receipt.status = "failed";
+    receipt.error = message;
+    receipt.migration ??= {
+      sourceProjectDir: plan.projectDir,
+      targetProjectDir: operation.topology.managementCheckout,
+      sourceCommonDir: plan.commonDir,
+      targetCommonDir,
+      recoveryState: "failed",
+    };
+    receipt.migration.recoveryState = "failed";
+    receipt.steps.push({ id: "apply", status: "failed", detail: message });
+    receipt.completedAt = (args.now ?? new Date()).toISOString();
+    checkpoint();
+    throw error;
+  } finally {
+    releaseLock(lock);
+  }
+}
+
 export function applyWorkspacePlan(args: {
   projectRoot: string;
   planPath: string;
@@ -3226,7 +3554,7 @@ export function rollbackWorkspaceChange(args: {
   const planPathValue = planPath(root, receipt.id);
   const plan = loadWorkspacePlan(root, planPathValue);
   if (plan.operation.kind === "migrate") {
-    throw new Error("WORKTREE_MIGRATION_APPLY_UNSUPPORTED");
+    throw new Error("WORKTREE_MIGRATION_ROLLBACK_UNSUPPORTED: inspect the durable migration receipt and recover manually");
   }
   if (plan.operation.kind === "adopt") {
     return rollbackWorkspaceAdoption({

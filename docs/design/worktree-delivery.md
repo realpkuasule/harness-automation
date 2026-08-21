@@ -113,12 +113,15 @@ and only while it is still empty; otherwise rollback fails closed.
 
 ### Legacy migration
 
-`worktree migrate` is intentionally plan-only. It captures all lease, binding,
-management-checkout, ref, worktree, dirty, unique/unpushed, and path evidence
-for a requested container target, but it cannot be applied. Relocating an
-existing Git checkout and re-registering worktrees needs a separately designed
-transaction and exact-hash approval; configure must never masquerade as that
-migration.
+`worktree migrate` captures all lease, binding, management-checkout, ref,
+worktree, dirty, unique/unpushed, and path evidence for a requested container
+target. `worktree migrate apply` is the only executor: generic `apply` and AI
+approval reject migration plans. The v1 executor accepts only one primary
+legacy checkout with zero leases and persistent worktrees, atomically renames
+that checkout into `main/`, creates an empty `worktrees/` root, and writes a
+durable receipt. Each step is checkpointed. Failures are never auto-rolled
+back or deleted; an exact re-apply can resume only from the recorded safe
+post-move state. Configure must never masquerade as migration.
 
 ### Delegated AI authorization
 
