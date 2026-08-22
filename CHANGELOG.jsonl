@@ -238,3 +238,4 @@
 {"timestamp": "2026-08-22T17:05:09+08:00", "type": "fix", "phase": 37, "description": "Restore cross-platform CI path assertions and coverage", "issueRef": "realpkuasule/harness-automation#37"}
 {"timestamp": "2026-08-22T19:43:23+08:00", "type": "fix", "phase": 37, "description": "Reduce worktree fixture setup overhead on Windows CI", "issueRef": "realpkuasule/harness-automation#37"}
 {"timestamp": "2026-08-22T20:02:55+08:00", "type": "fix", "phase": 37, "description": "Split Windows worktree CI tests to avoid worker RPC timeouts", "issueRef": "realpkuasule/harness-automation#37"}
+{"timestamp": "2026-08-22T21:10:18+08:00", "type": "fix", "phase": 37, "description": "Use native canonical paths in Windows retention tests", "issueRef": "realpkuasule/harness-automation#37"}

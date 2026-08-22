@@ -2229,7 +2229,7 @@ describe("hash-approved worktree adoption", () => {
     });
     expect(dirty?.dirtyPatch?.size).toBeGreaterThan(10 * 1024 * 1024);
     expect(audit.observedHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(retention.projectDir).toBe(realpathSync(root));
+    expect(retention.projectDir).toBe(realpathSync.native(root));
     expect(worktreeCount(root)).toBe(2);
     expect(workspaceStatus(root).leases).toEqual([]);
     expect(git(root, "worktree", "list", "--porcelain")).toBe(worktreesBefore);
