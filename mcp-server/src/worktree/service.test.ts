@@ -118,6 +118,10 @@ function git(root: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
 }
 
+function samePath(left: string, right: string): boolean {
+  return realpathSync.native(left) === realpathSync.native(right);
+}
+
 function repository(): string {
   const root = mkdtempSync(join(tmpdir(), "harness-worktree-"));
   repositories.push(root);
@@ -617,7 +621,7 @@ describe("hash-approved worktree lifecycle", () => {
       approval: planned.plan.planHash,
     });
     expect(receipt.status).toBe("applied");
-    expect(git(target, "rev-parse", "--show-toplevel")).toBe(target);
+    expect(samePath(git(target, "rev-parse", "--show-toplevel"), target)).toBe(true);
     expect(workspaceStatus(main)).toMatchObject({
       capacity: { used: 1, available: 1 },
       leases: [expect.objectContaining({ path: target, branch: "codex/42-container-allocation" })],
@@ -844,7 +848,10 @@ describe("hash-approved worktree lifecycle", () => {
       beforeObservedHash: planned.plan.observedHash,
     });
     expect(existsSync(root)).toBe(false);
-    expect(git(topology.managementCheckout, "rev-parse", "--show-toplevel")).toBe(topology.managementCheckout);
+    expect(samePath(
+      git(topology.managementCheckout, "rev-parse", "--show-toplevel"),
+      topology.managementCheckout,
+    )).toBe(true);
     expect(existsSync(topology.persistentWorktreeRoot!)).toBe(true);
     expect(readdirSync(topology.persistentWorktreeRoot!)).toEqual([]);
     expect(workspaceStatus(topology.managementCheckout)).toMatchObject({
@@ -1471,7 +1478,7 @@ describe("hash-approved worktree lifecycle", () => {
       }),
     ]);
     expect(workspaceStatus(root).worktrees.some((worktree) =>
-      worktree.path === git(worktreePath, "rev-parse", "--show-toplevel"))).toBe(true);
+      samePath(worktree.path, git(worktreePath, "rev-parse", "--show-toplevel")))).toBe(true);
     expect(applyWorkspacePlan({
       projectRoot: root,
       planPath: planned.path,
@@ -1598,8 +1605,8 @@ describe("hash-approved worktree lifecycle", () => {
     const planned = planWorkspaceRecover({ projectRoot: root, path: worktreePath });
     if (planned.plan.operation.kind !== "recover") throw new Error("expected recover plan");
     expect(planned.plan.operation).toMatchObject({
-      path: realpathSync(worktreePath),
-      removePath: realpathSync(worktreePath),
+      path: realpathSync.native(worktreePath),
+      removePath: realpathSync.native(worktreePath),
       expectedHead: git(worktreePath, "rev-parse", "HEAD"),
       dirtyEvidence: [],
       dirtyPatch: { size: 0, sha256: sha256("") },
@@ -1728,7 +1735,7 @@ describe("hash-approved worktree lifecycle", () => {
     });
     writeFileSync(join(worktreePath, "dirty.txt"), "valuable work\n");
     expect(workspaceStatus(root).worktrees.find(
-      (worktree) => worktree.path === git(worktreePath, "rev-parse", "--show-toplevel"),
+      (worktree) => samePath(worktree.path, git(worktreePath, "rev-parse", "--show-toplevel")),
     )?.dirtyEvidence).toEqual([
       expect.objectContaining({
         path: "dirty.txt",

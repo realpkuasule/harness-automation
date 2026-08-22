@@ -235,3 +235,4 @@
 {"timestamp": "2026-08-21T21:33:28+08:00", "type": "feat", "phase": "2.5.0", "description": "Implement Worktree Governance 2.5.0 integration checks and safer allocation defaults", "issueRef": "realpkuasule/harness-automation#35", "relatedFiles": ["mcp-server/src/worktree/service.ts", "mcp-server/src/cli.ts", "mcp-server/src/index.ts"], "agent": "codex"}
 {"timestamp": "2026-08-22T14:22:32+08:00", "type": "feat", "phase": 36, "description": "Add read-only GitHub governance audit", "issueRef": "realpkuasule/harness-automation#36"}
 {"timestamp": "2026-08-22T16:11:38+08:00", "type": "fix", "phase": 37, "description": "Restore Linux retention-audit and Windows worktree CI coverage", "issueRef": "realpkuasule/harness-automation#37"}
+{"timestamp": "2026-08-22T17:05:09+08:00", "type": "fix", "phase": 37, "description": "Restore cross-platform CI path assertions and coverage", "issueRef": "realpkuasule/harness-automation#37"}

@@ -24,9 +24,38 @@ function root(): string {
 function installGh(directory: string): void {
   const script = `
 const endpoint = process.argv.at(-1) || "";
-const fail = process.env.HARNESS_GITHUB_AUDIT_MODE === "forbidden";
+const mode = process.env.HARNESS_GITHUB_AUDIT_MODE;
+const fail = mode === "forbidden";
 if (fail && endpoint.includes("orgs/example-org/repos")) {
   process.stderr.write("HTTP 403: Resource not accessible by integration");
+  process.exit(1);
+}
+if (mode === "repository-unavailable" && endpoint === "repos/example/repository") {
+  process.stderr.write("HTTP 403: token=secret");
+  process.exit(1);
+}
+if (mode === "ruleset-unavailable" && endpoint === "repos/example/repository/rulesets/8") {
+  process.stderr.write("HTTP 500: ruleset unavailable");
+  process.exit(1);
+}
+if (mode === "rulesets-unavailable" && endpoint === "repos/example/repository/rulesets") {
+  process.stderr.write("HTTP 500: rulesets unavailable");
+  process.exit(1);
+}
+if (mode === "branch-unavailable" && endpoint === "repos/example/repository/branches/main/protection") {
+  process.stderr.write("HTTP 500: branch protection unavailable");
+  process.exit(1);
+}
+if (mode === "project-unavailable" && process.argv.includes("project")) {
+  process.stderr.write("HTTP 403: project unavailable");
+  process.exit(1);
+}
+if (mode === "organization-edge" && endpoint === "orgs/example-org/rulesets") {
+  process.stderr.write("HTTP 500: organization rulesets unavailable");
+  process.exit(1);
+}
+if (mode === "api-unavailable" && /check-runs|actions\\/permissions|environments/u.test(endpoint)) {
+  process.stderr.write("HTTP 500: endpoint unavailable");
   process.exit(1);
 }
 const responses = {
@@ -41,6 +70,43 @@ const responses = {
   "orgs/example-org/repos?per_page=100": [[{ id: 22, full_name: "example-org/alpha", private: true, visibility: "private", default_branch: "main", owner: { login: "example-org", type: "Organization" } }]],
   "orgs/example-org/rulesets": [{ id: 4, name: "organization-main", target: "branch", enforcement: "active" }]
 };
+if (mode === "drift") {
+  responses["repos/example/repository/rulesets"] = [];
+  responses["repos/example/repository/branches/main/protection"] = undefined;
+  responses["repos/example/repository/commits/main/check-runs"] = { check_runs: [] };
+  responses["repos/example/repository/actions/permissions"] = { enabled: true, allowed_actions: "all", sha_pinned_required: false };
+}
+if (mode === "organization-success") {
+  responses["repos/example-org/alpha/rulesets"] = [];
+  responses["repos/example-org/alpha/branches/main/protection"] = { required_status_checks: null };
+}
+if (mode === "organization-pagination-invalid") responses["orgs/example-org/repos?per_page=100"] = [{}];
+if (mode === "complete-ruleset") {
+  responses["repos/example/repository/branches/main/protection"] = undefined;
+  responses["repos/example/repository/rulesets/8"] = { id: 8, name: "main", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["main"] } }, rules: [{ type: "pull_request" }, { type: "non_fast_forward" }, { type: "deletion" }, { type: "required_status_checks", parameters: { required_status_checks: [{ context: "build-and-test" }] } }] };
+}
+if (mode === "visibility-fallback") responses["repos/example/repository"] = { id: 12, private: false, default_branch: "main", owner: {} };
+if (mode === "edge") {
+  responses["repos/example/repository"] = { id: 12, private: true, owner: {} };
+  responses["repos/example/repository/rulesets"] = [
+    { id: "not-a-number" },
+    { id: 9, name: "inactive", target: "branch", enforcement: "disabled" },
+    { id: 10, name: "tag", target: "tag", enforcement: "active" },
+    { id: 11, name: "other", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["other"] } } },
+    { id: 12, name: "default", target: "branch", enforcement: "active", conditions: { ref_name: { include: [] } } }
+  ];
+  responses["repos/example/repository/rulesets/9"] = { id: 9, name: "inactive", target: "branch", enforcement: "disabled", rules: [] };
+  responses["repos/example/repository/rulesets/10"] = { id: 10, name: "tag", target: "tag", enforcement: "active", rules: [] };
+  responses["repos/example/repository/rulesets/11"] = { id: 11, name: "other", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["other"] } }, rules: [] };
+  responses["repos/example/repository/rulesets/12"] = { id: 12, name: "default", target: "branch", enforcement: "active", conditions: { ref_name: { include: [] } }, rules: [{ type: "pull_request" }, { type: "required_status_checks", parameters: { required_status_checks: [{}, { context: "edge-check" }] } }] };
+  responses["repos/example/repository/branches/main/protection"] = { required_status_checks: { contexts: [null, "edge-check"] } };
+  responses["repos/example/repository/commits/main/check-runs"] = { check_runs: [{ name: "edge-check", conclusion: "failure" }, {}] };
+  responses["repos/example/repository/environments"] = {};
+}
+if (mode === "organization-edge") responses["orgs/example-org/repos?per_page=100"] = [[
+  { id: 23, private: true },
+  { id: 24, full_name: "example-org/beta", private: false, owner: {} }
+]];
 if (process.argv.includes("project")) {
   process.stdout.write(JSON.stringify({ number: 2, owner: { login: "example" }, title: "Development" }));
   process.exit(0);
@@ -86,7 +152,7 @@ describe("GitHub governance audit", () => {
     expect(first.warnings).toContain("USER_OWNED_REPOSITORY: organization Team controls do not apply");
     expect(first.actions).toMatchObject({ shaPinnedRequired: true, unpinnedUses: [] });
     expect(execFileSync("git", ["status", "--porcelain=v1"], { cwd: projectRoot, encoding: "utf8" })).toBe(before);
-  });
+  }, 20_000);
 
   it("fails closed when an explicitly requested organization scope is unavailable", () => {
     const projectRoot = root();
@@ -115,5 +181,159 @@ describe("GitHub governance audit", () => {
 
     expect(report.status).toBe("blocked");
     expect(report.blockers).toEqual(expect.arrayContaining(["UNPINNED_ACTION: ci.yml:actions/checkout@v4"]));
+  });
+
+  it("fails closed for invalid input and unavailable repository evidence", () => {
+    const projectRoot = root();
+    expect(() => auditGitHubGovernance({ projectRoot, organization: "-invalid" })).toThrow(/INVALID_ORGANIZATION/);
+
+    const bin = mkdtempSync(join(tmpdir(), "harness-github-audit-bin-"));
+    roots.push(bin);
+    installGh(bin);
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "repository-unavailable";
+    const unscoped = auditGitHubGovernance({ projectRoot });
+    expect(unscoped.scope).toEqual({ repository: "example/repository" });
+    const report = auditGitHubGovernance({ projectRoot, organization: "example-org" });
+    expect(report).toMatchObject({ status: "blocked", repository: { available: false } });
+    expect(report.scope).toEqual({ repository: "example/repository", organization: "example-org" });
+    expect(report.unavailable).toEqual(expect.arrayContaining(["repository: HTTP 403: token=[redacted]"]));
+  });
+
+  it("reports deterministic repository drift without treating optional GitHub features as compliant", () => {
+    const projectRoot = root();
+    const bin = mkdtempSync(join(tmpdir(), "harness-github-audit-bin-"));
+    roots.push(bin);
+    installGh(bin);
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "drift";
+    mkdirSync(join(projectRoot, ".github", "workflows"), { recursive: true });
+    writeFileSync(join(projectRoot, ".github", "workflows", "ci.yml"), "steps:\n  - uses: actions/checkout@v4\n", "utf8");
+    writeFileSync(join(projectRoot, ".github", "project-workflow.json"), "{not json", "utf8");
+
+    const report = auditGitHubGovernance({ projectRoot });
+
+    expect(report.status).toBe("blocked");
+    expect(report.blockers).toEqual(expect.arrayContaining([
+      "DEFAULT_BRANCH_UNPROTECTED: main",
+      "PULL_REQUEST_RULE_MISSING: main",
+      "REQUIRED_CHECK_RULE_MISSING: main",
+    ]));
+    expect(report.warnings).toContain("UNPINNED_ACTION_OBSERVED: ci.yml:actions/checkout@v4");
+    expect(report.unavailable).toContain("project mapping: invalid .github/project-workflow.json");
+  });
+
+  it("observes complete and incomplete organization pagination without writes", () => {
+    const projectRoot = root();
+    const bin = mkdtempSync(join(tmpdir(), "harness-github-audit-bin-"));
+    roots.push(bin);
+    installGh(bin);
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "organization-success";
+    const complete = auditGitHubGovernance({ projectRoot, organization: "example-org" });
+    expect(complete.organization).toMatchObject({ login: "example-org", available: true, repositories: [
+      expect.objectContaining({ name: "example-org/alpha", defaultBranchProtected: true }),
+    ] });
+
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "organization-pagination-invalid";
+    const incomplete = auditGitHubGovernance({ projectRoot, organization: "example-org" });
+    expect(incomplete.organization).toMatchObject({ login: "example-org", available: false, repositories: [] });
+    expect(incomplete.unavailable).toContain("organization repositories: pagination response was incomplete");
+  });
+
+  it("records unavailable rule details without assuming their rules", () => {
+    const projectRoot = root();
+    const bin = mkdtempSync(join(tmpdir(), "harness-github-audit-bin-"));
+    roots.push(bin);
+    installGh(bin);
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "ruleset-unavailable";
+
+    const report = auditGitHubGovernance({ projectRoot });
+
+    expect(report.unavailable).toEqual(expect.arrayContaining(["ruleset 8: HTTP 500: ruleset unavailable"]));
+    expect(report.rulesets).toEqual([expect.objectContaining({ id: 8, rules: [] })]);
+  });
+
+  it("covers default-branch fallbacks, ruleset filtering, local configuration, and project drift", () => {
+    const projectRoot = root();
+    const bin = mkdtempSync(join(tmpdir(), "harness-github-audit-bin-"));
+    roots.push(bin);
+    installGh(bin);
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "edge";
+    mkdirSync(join(projectRoot, ".github", "workflows"), { recursive: true });
+    mkdirSync(join(projectRoot, "docs"));
+    writeFileSync(join(projectRoot, ".github", "workflows", "edge.yml"), "steps:\n  - uses: ./local\n  - uses: docker://alpine\n  - uses: owner/action\n", "utf8");
+    writeFileSync(join(projectRoot, "docs", "CODEOWNERS"), "# comment\n* @owner\nno-owner\n", "utf8");
+    writeFileSync(join(projectRoot, ".github", "project-workflow.json"), JSON.stringify({ repo: "other/repository", project: { owner: "", number: "2" } }), "utf8");
+
+    const report = auditGitHubGovernance({ projectRoot });
+
+    expect(report.repository).toMatchObject({ defaultBranch: "main", visibility: "private" });
+    expect(report.rulesets).toEqual(expect.arrayContaining([expect.objectContaining({ id: "not-a-number", rules: [] })]));
+    expect(report.checks).toMatchObject({ required: ["edge-check"], latest: expect.arrayContaining([expect.objectContaining({ name: "edge-check", conclusion: "failure" })]) });
+    expect(report.codeowners).toMatchObject({ path: "docs/CODEOWNERS", owners: ["@owner"] });
+    expect(report.actions).toMatchObject({ leastPrivilegeDeclared: false, unpinnedUses: ["edge.yml:owner/action"] });
+    expect(report.project).toMatchObject({ configured: true, mapping: "incomplete" });
+    expect(report.blockers).toEqual(expect.arrayContaining(["PROJECT_MAPPING_DRIFT: configured other/repository, observed example/repository"]));
+    expect(report.warnings).toContain("REQUIRED_CHECK_NOT_PASSING: edge-check");
+  });
+
+  it("fails closed when optional repository settings, project reads, or organization evidence are unavailable", () => {
+    const projectRoot = root();
+    const bin = mkdtempSync(join(tmpdir(), "harness-github-audit-bin-"));
+    roots.push(bin);
+    installGh(bin);
+    mkdirSync(join(projectRoot, ".github"));
+    writeFileSync(join(projectRoot, ".github", "project-workflow.json"), JSON.stringify({ project: { owner: "example", number: 2 } }), "utf8");
+
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "api-unavailable";
+    const repository = auditGitHubGovernance({ projectRoot });
+    expect(repository.unavailable).toEqual(expect.arrayContaining([
+      "latest checks: HTTP 500: endpoint unavailable",
+      "Actions settings: HTTP 500: endpoint unavailable",
+      "Actions workflow permissions: HTTP 500: endpoint unavailable",
+      "environments: HTTP 500: endpoint unavailable",
+    ]));
+
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "project-unavailable";
+    const project = auditGitHubGovernance({ projectRoot });
+    expect(project.project).toMatchObject({ mapping: "unavailable" });
+
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "organization-edge";
+    const organization = auditGitHubGovernance({ projectRoot, organization: "example-org" });
+    expect(organization.organization).toMatchObject({ available: false, repositories: [
+      expect.objectContaining({ name: "example-org/beta", visibility: "public", defaultBranchProtected: false }),
+      expect.objectContaining({ name: undefined, visibility: "private", defaultBranchProtected: false }),
+    ] });
+    expect(organization.unavailable).toEqual(expect.arrayContaining([
+      "organization rulesets: HTTP 500: organization rulesets unavailable",
+      "organization repository rulesets unknown: repository name unavailable",
+      "organization branch protection unknown: default branch unavailable",
+      "organization repository rulesets example-org/beta: HTTP 404: Not Found",
+    ]));
+  });
+
+  it("does not assume that failed Git metadata, rulesets, or branch protection are safe", () => {
+    const projectRoot = root();
+    expect(() => auditGitHubGovernance({ projectRoot: join(projectRoot, "missing") })).toThrow(/git failed/);
+    execFileSync("git", ["remote", "remove", "origin"], { cwd: projectRoot });
+    expect(() => auditGitHubGovernance({ projectRoot })).toThrow(/git failed/);
+    execFileSync("git", ["remote", "add", "origin", "https://github.com/example/repository.git"], { cwd: projectRoot });
+    execFileSync("git", ["remote", "set-url", "origin", "https://gitlab.com/example/repository.git"], { cwd: projectRoot });
+    expect(() => auditGitHubGovernance({ projectRoot })).toThrow(/GITHUB_REMOTE_REQUIRED/);
+    execFileSync("git", ["remote", "set-url", "origin", "https://github.com/example/repository.git"], { cwd: projectRoot });
+
+    const bin = mkdtempSync(join(tmpdir(), "harness-github-audit-bin-"));
+    roots.push(bin);
+    installGh(bin);
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "rulesets-unavailable";
+    expect(auditGitHubGovernance({ projectRoot }).unavailable).toContain("repository rulesets: HTTP 500: rulesets unavailable");
+
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "branch-unavailable";
+    expect(auditGitHubGovernance({ projectRoot }).unavailable).toContain("branch protection: HTTP 500: branch protection unavailable");
+
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "complete-ruleset";
+    const complete = auditGitHubGovernance({ projectRoot });
+    expect(complete.blockers).not.toContain("DEFAULT_BRANCH_UNPROTECTED: main");
+
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "visibility-fallback";
+    expect(auditGitHubGovernance({ projectRoot }).repository).toMatchObject({ visibility: "public" });
   });
 });

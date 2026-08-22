@@ -529,17 +529,18 @@ describe("v2 plan/apply/check/rollback", () => {
       approval: workspacePlan.plan.planHash,
     });
 
-    const local = runTrustedChecks({ projectRoot: root, mode: "session" });
-    expect(local.ok).toBe(true);
-    expect(local.workspace).toMatchObject({
-      configured: true,
-      available: true,
-      status: "verified",
-    });
-
     const previousCi = process.env.CI;
-    process.env.CI = "1";
     try {
+      delete process.env.CI;
+      const local = runTrustedChecks({ projectRoot: root, mode: "session" });
+      expect(local.ok).toBe(true);
+      expect(local.workspace).toMatchObject({
+        configured: true,
+        available: true,
+        status: "verified",
+      });
+
+      process.env.CI = "1";
       const ci = runTrustedChecks({ projectRoot: root, mode: "session" });
       expect(ci.ok).toBe(true);
       expect(ci.workspace).toMatchObject({
