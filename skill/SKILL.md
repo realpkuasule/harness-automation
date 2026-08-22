@@ -142,6 +142,18 @@ node <skill目录>/scripts/run.mjs context --project <项目绝对路径> --agen
 
 普通 Git 仓库的 `worktree status|audit|review|retention-audit` 不要求 PRD intake。正式启用 worktree policy 仍必须先生成计划，并由负责人批准完整哈希。
 
+## GitHub 治理观察边界
+
+仓库需要观察 GitHub 原生规则、检查、Actions、环境或 Issue/Project 映射时，可运行：
+
+```bash
+node <skill目录>/scripts/run.mjs github audit --project <项目绝对路径> [--organization <组织>]
+```
+
+它是只读审计：不 fetch、不改 checkout、不写 GitHub 设置、不刷新 token scope。显式请求的组织范围因 403、404 或分页不完整而无法证明时，必须报告 `unavailable` 并返回 2，不得把它当作空配置。GitHub Actions 不是 Harness 前提；`check --mode ci` 只表示运行发现的项目 test/build/eval argv，可在本机或任意 CI provider 运行。v2 `plan/apply` 不得创建或编辑 CI 配置。
+
+legacy v1 MCP 工具仅在服务启动时设置 `HARNESS_ENABLE_LEGACY_V1=1` 才可发现或直接调用；当前 Skill 不使用其可能生成 provider-specific CI 的路径。
+
 ## 会话交接协议
 
 长会话该切就切，恢复成本靠交接物落盘趋近于零。会话切换的交接、校验、回执与 issue 流转全部由 CLI `session` 命令组确定性执行（无 AI 参与），完整协议见 [session-workflow.md](references/session-workflow.md)。要点：

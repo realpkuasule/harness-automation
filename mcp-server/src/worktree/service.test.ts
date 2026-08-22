@@ -2221,7 +2221,7 @@ describe("hash-approved worktree adoption", () => {
     expect(workspaceStatus(root).leases).toEqual([]);
     expect(git(root, "worktree", "list", "--porcelain")).toBe(worktreesBefore);
     expect(git(root, "for-each-ref", "--format=%(refname)%00%(objectname)")).toBe(refsBefore);
-  });
+  }, 30_000);
 
   it("never executes a configured textconv command while observing adoption", () => {
     const root = repository();

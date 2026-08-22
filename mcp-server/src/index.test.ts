@@ -17,7 +17,11 @@ interface TestHarness {
 }
 
 async function createTestHarness(): Promise<TestHarness> {
+  const originalLegacyV1 = process.env.HARNESS_ENABLE_LEGACY_V1;
+  process.env.HARNESS_ENABLE_LEGACY_V1 = "1";
   const server = await createServer();
+  if (originalLegacyV1 === undefined) delete process.env.HARNESS_ENABLE_LEGACY_V1;
+  else process.env.HARNESS_ENABLE_LEGACY_V1 = originalLegacyV1;
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client(
     { name: "test-client", version: "1.0.0" },

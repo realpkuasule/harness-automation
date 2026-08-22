@@ -233,3 +233,4 @@
 {"timestamp": "2026-08-21T15:24:28+08:00", "type": "feat", "phase": 33, "description": "Add safe container topology plans for managed worktrees", "issueRef": "realpkuasule/harness-automation#33"}
 {"timestamp": "2026-08-21T16:16:35+08:00", "type": "feat", "phase": 34, "description": "Execute hash-approved legacy worktree topology migrations", "issueRef": "realpkuasule/harness-automation#34"}
 {"timestamp": "2026-08-21T21:33:28+08:00", "type": "feat", "phase": "2.5.0", "description": "Implement Worktree Governance 2.5.0 integration checks and safer allocation defaults", "issueRef": "realpkuasule/harness-automation#35", "relatedFiles": ["mcp-server/src/worktree/service.ts", "mcp-server/src/cli.ts", "mcp-server/src/index.ts"], "agent": "codex"}
+{"timestamp": "2026-08-22T14:22:32+08:00", "type": "feat", "phase": 36, "description": "Add read-only GitHub governance audit", "issueRef": "realpkuasule/harness-automation#36"}

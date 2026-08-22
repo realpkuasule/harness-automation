@@ -23,6 +23,8 @@ node <skill目录>/scripts/run.mjs worktree audit --project <项目绝对路径>
 
 这两个命令必须创建零个 worktree，也不要求 `docs/PRD.md`、远端 Provider 或正式 Harness intake。
 
+仓库级 GitHub ruleset、Actions、环境和 Project 治理不属于本 Skill 的 worktree 生命周期职责；需要只读观察时使用共享 CLI 的 `github audit`。GitHub Actions 也不是 worktree 或 Harness 使用前提。
+
 分别报告 `configured`、`loaded`、`enforced`、`passing`。Provider 不可用、租约重复或映射漂移时，不得把 `blocked` 解释为通过。
 
 ## 正式启用

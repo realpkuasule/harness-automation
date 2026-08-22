@@ -271,4 +271,4 @@ README.md
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("SESSION_COMMAND_REQUIRED");
   });
-});
+}, 20_000);

@@ -62,6 +62,7 @@ import {
   type WorkspacePlan,
 } from "./worktree/types.js";
 import { runSessionCommand } from "./session/cli.js";
+import { auditGitHubGovernance } from "./github/governance.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -547,6 +548,7 @@ Usage:
   harness-automation rollback [--project .] [--change <id>]
   harness-automation worktree status|audit|retention-audit [--project .]
   harness-automation worktree integration-check --work-item <provider:id> [--target <local-ref>] [--project .]
+  harness-automation github audit --project <absolute-repository> [--organization <github-organization>]
   harness-automation worktree configure [--mode audit-only|enforced] [--management-branch <branch>] [--topology container-v1 --workspace-container <absolute-path>] [--allow-root <absolute-path>] [--approval-mode manual|delegated-ai] [--reviewer-model <model>] [--delegate-operation <kind>] [--project .]
   harness-automation worktree migrate --workspace-container <absolute-path> [--project .]
   harness-automation worktree migrate apply --plan <relative-plan-path> --approve <sha256> [--project .]
@@ -643,6 +645,13 @@ function runWorkflow(argv: string[]): void {
     case "worktree":
       runWorktreeCommand(root, args, trailingCommand);
       return;
+    case "github": {
+      if (args.positionals[0] !== "audit") throw new Error("GITHUB_COMMAND_REQUIRED: choose audit");
+      const report = auditGitHubGovernance({ projectRoot: root, organization: value(args, "organization") });
+      printJson(report);
+      if (report.status === "blocked") process.exitCode = 2;
+      return;
+    }
     case "session":
       runSessionCommand(root, args);
       return;

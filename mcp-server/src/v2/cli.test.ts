@@ -1,6 +1,6 @@
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
@@ -27,11 +27,11 @@ function run(root: string, args: string[]): Record<string, unknown> {
   return JSON.parse(result.stdout) as Record<string, unknown>;
 }
 
-function runResult(root: string, args: string[]) {
+function runResult(root: string, args: string[], env: NodeJS.ProcessEnv = {}) {
   return spawnSync(process.execPath, ["--import", "tsx", cli, ...args, "--project", root], {
     cwd: packageRoot,
     encoding: "utf8",
-    env: { ...process.env, HOME: join(root, ".test-home") },
+    env: { ...process.env, ...env, HOME: join(root, ".test-home") },
     timeout: 30_000,
   });
 }
@@ -228,6 +228,47 @@ describe("v2 CLI forward flow", () => {
     expect(result.status).toBe(2);
     expect(JSON.parse(result.stdout).errors).toHaveLength(1);
     expect(execFileSync("git", ["for-each-ref", "--format=%(refname)%00%(objectname)"], { cwd: root, encoding: "utf8" })).toBe(refsBefore);
+  });
+
+  it("runs the read-only GitHub governance audit and maps blockers to exit 2", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-cli-github-audit-"));
+    const bin = mkdtempSync(join(tmpdir(), "harness-cli-github-bin-"));
+    projects.push(root, bin);
+    execFileSync("git", ["init", "-b", "main"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "harness@example.test"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Harness Test"], { cwd: root });
+    write(root, "README.md", "# fixture\n");
+    execFileSync("git", ["add", "README.md"], { cwd: root });
+    execFileSync("git", ["commit", "-m", "test: initialize fixture"], { cwd: root });
+    execFileSync("git", ["remote", "add", "origin", "https://github.com/example/repository.git"], { cwd: root });
+    const gh = `#!/usr/bin/env node
+const endpoint = process.argv.at(-1) || "";
+const values = {
+  "repos/example/repository": { id: 1, private: false, visibility: "public", default_branch: "main", owner: { login: "example", type: "User" } },
+  "repos/example/repository/rulesets": [],
+  "repos/example/repository/branches/main/protection": null,
+  "repos/example/repository/actions/permissions": { enabled: true, sha_pinned_required: false },
+  "repos/example/repository/actions/permissions/workflow": {},
+  "repos/example/repository/environments": { environments: [] },
+  "repos/example/repository/commits/main/check-runs": { check_runs: [] }
+};
+if (values[endpoint] === null) { process.stderr.write("HTTP 404: Not Found"); process.exit(1); }
+if (values[endpoint] === undefined) { process.stderr.write("unexpected command"); process.exit(1); }
+process.stdout.write(JSON.stringify(values[endpoint]));
+`;
+    const ghPath = join(bin, process.platform === "win32" ? "gh.cmd" : "gh");
+    if (process.platform === "win32") {
+      writeFileSync(join(bin, "gh.js"), gh.replace("#!/usr/bin/env node\n", ""), "utf8");
+      writeFileSync(ghPath, "@node \"%~dp0gh.js\" %*\r\n", "utf8");
+    } else {
+      writeFileSync(ghPath, gh, "utf8");
+      chmodSync(ghPath, 0o755);
+    }
+
+    const result = runResult(root, ["github", "audit"], { PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` });
+
+    expect(result.status).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({ status: "blocked", blockers: expect.arrayContaining(["DEFAULT_BRANCH_UNPROTECTED: main"]) });
   });
 
   it("plans, applies, and rolls back a batch adoption from one strict manifest", () => {

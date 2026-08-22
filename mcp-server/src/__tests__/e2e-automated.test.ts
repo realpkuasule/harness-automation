@@ -19,7 +19,7 @@ interface TestHarness {
 }
 
 async function createTestHarness(): Promise<TestHarness> {
-  const server = await createServer();
+  const server = await createLegacyServer();
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client(
     { name: "test-client", version: "1.0.0" },
@@ -29,6 +29,17 @@ async function createTestHarness(): Promise<TestHarness> {
   await client.connect(clientTransport);
   harnessCount++;
   return { client, tmpDir: mkdtempSync(join(tmpdir(), "ht-e2e-")), id: harnessCount };
+}
+
+async function createLegacyServer() {
+  const originalLegacyV1 = process.env.HARNESS_ENABLE_LEGACY_V1;
+  process.env.HARNESS_ENABLE_LEGACY_V1 = "1";
+  try {
+    return await createServer();
+  } finally {
+    if (originalLegacyV1 === undefined) delete process.env.HARNESS_ENABLE_LEGACY_V1;
+    else process.env.HARNESS_ENABLE_LEGACY_V1 = originalLegacyV1;
+  }
 }
 
 function parseResult(result: { content: Array<{ type: string; text: string }> }): unknown {
@@ -188,7 +199,7 @@ describe("TC04 — query_state: no state", () => {
   it("returns default state for empty directory", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ht-e2e-ns-"));
     try {
-      const server = await createServer();
+      const server = await createLegacyServer();
       const [ct, st] = InMemoryTransport.createLinkedPair();
       const client = new Client({ name: "tc", version: "1.0.0" }, { capabilities: {} });
       await server.connect(st);
@@ -244,7 +255,7 @@ describe("TC06 — confirm_decisions: reject without evaluate", () => {
   it("rejects with error when no prior evaluate", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ht-e2e-nc-"));
     try {
-      const server = await createServer();
+      const server = await createLegacyServer();
       const [ct, st] = InMemoryTransport.createLinkedPair();
       const client = new Client({ name: "tc", version: "1.0.0" }, { capabilities: {} });
       await server.connect(st);
@@ -396,7 +407,7 @@ describe("TC10 — generate_config: reject without decisions", () => {
   it("rejects with error when no decisions available", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ht-e2e-ng-"));
     try {
-      const server = await createServer();
+      const server = await createLegacyServer();
       const [ct, st] = InMemoryTransport.createLinkedPair();
       const client = new Client({ name: "tc", version: "1.0.0" }, { capabilities: {} });
       await server.connect(st);
@@ -629,7 +640,7 @@ describe("TC17 — rollback: reject with no backups", () => {
   it("returns error when no backups exist", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ht-e2e-rbe-"));
     try {
-      const server = await createServer();
+      const server = await createLegacyServer();
       const [ct, st] = InMemoryTransport.createLinkedPair();
       const client = new Client({ name: "tc", version: "1.0.0" }, { capabilities: {} });
       await server.connect(st);
@@ -902,7 +913,7 @@ describe("TC23 — get_rule_stats: reject without state", () => {
   it("returns error when no engine output exists", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ht-e2e-st-"));
     try {
-      const server = await createServer();
+      const server = await createLegacyServer();
       const [ct, st] = InMemoryTransport.createLinkedPair();
       const client = new Client({ name: "tc", version: "1.0.0" }, { capabilities: {} });
       await server.connect(st);
@@ -1106,7 +1117,7 @@ describe("TC29 — import_rules: from JSON", () => {
     // Create a fresh harness for importing
     const dir = mkdtempSync(join(tmpdir(), "ht-e2e-imp-"));
     try {
-      const server = await createServer();
+      const server = await createLegacyServer();
       const [ct, st] = InMemoryTransport.createLinkedPair();
       const client = new Client({ name: "tc", version: "1.0.0" }, { capabilities: {} });
       await server.connect(st);
@@ -1131,7 +1142,7 @@ describe("TC30 — import_rules: invalid preset", () => {
   it("returns error for non-existent preset", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ht-e2e-ip-"));
     try {
-      const server = await createServer();
+      const server = await createLegacyServer();
       const [ct, st] = InMemoryTransport.createLinkedPair();
       const client = new Client({ name: "tc", version: "1.0.0" }, { capabilities: {} });
       await server.connect(st);
@@ -1154,7 +1165,7 @@ describe("TC31 — list_rule_presets", () => {
   it("lists all 5 presets and supports filtering", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ht-e2e-lp-"));
     try {
-      const server = await createServer();
+      const server = await createLegacyServer();
       const [ct, st] = InMemoryTransport.createLinkedPair();
       const client = new Client({ name: "tc", version: "1.0.0" }, { capabilities: {} });
       await server.connect(st);

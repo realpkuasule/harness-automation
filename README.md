@@ -278,6 +278,16 @@ harness-automation context --project . --agent codex
 - Commands appearing in the PRD are never auto-executed; dependencies, migrations, repo settings, and existing CI are never auto-installed, auto-run, or overwritten.
 - Rollback refuses to overwrite files modified by humans or agents after the apply, and only deletes files created by the change.
 
+## GitHub governance audit
+
+```bash
+harness-automation github audit --project /absolute/repository [--organization xiaozhiaixue]
+```
+
+This is a read-only observation of the checkout's GitHub repository. It reports branch/ruleset and check evidence, CODEOWNERS, Actions and environment facts, the configured Issue/Project mapping, deterministic blockers, warnings, unavailable evidence, and a stable `observedHash`. Exit `0` permits warnings; exit `2` means a blocker or an explicitly requested scope could not be read; exit `1` means invalid input or a runtime error.
+
+The command never fetches, writes GitHub settings, changes token scopes, or modifies the checkout. It does not require target repositories to use GitHub Actions: `check --mode ci` remains a provider-neutral local command depth. See [GitHub governance audit reference](docs/reference/github-governance.md).
+
 ## Repository state
 
 ```text
@@ -310,11 +320,11 @@ harness-automation context --project . --agent codex
 
 ## CLI and MCP
 
-v2 CLI commands: `doctor`, `research github`, `intake`, `discover`, `plan`, `apply`, `context`, `check`, `drift`, `explain`, `rollback`, plus `worktree configure|allocate|adopt|review|status|audit|close|retention-audit|integration-check` and `session handoff|status|seed`. `plan` supports orthogonal `deliveryProfile`, `domainProfile`, and `qualityProfile`. `check --mode commit|ci` runs the trusted project gates visible in the plan; EDD runners execute only in CI mode and report `blocked` when a runtime is missing. When CI cannot observe host-local worktrees, workspace enforcement is reported honestly as unavailable.
+v2 CLI commands: `doctor`, `research github`, `github audit`, `intake`, `discover`, `plan`, `apply`, `context`, `check`, `drift`, `explain`, `rollback`, plus `worktree configure|allocate|adopt|review|status|audit|close|retention-audit|integration-check` and `session handoff|status|seed`. `plan` supports orthogonal `deliveryProfile`, `domainProfile`, and `qualityProfile`. `check --mode commit|ci` runs the trusted project gates visible in the plan; EDD runners execute only in CI mode and report `blocked` when a runtime is missing. When CI cannot observe host-local worktrees, workspace enforcement is reported honestly as unavailable.
 
 The MCP server exposes the same service layer, including the core `harness_*` tools and the matching `harness_worktree_*` tools. The CLI remains the portable baseline for Claude Code, Codex, and DeepSeek/GLM agents.
 
-Legacy v1 handlers are kept for migrating existing callers but are not exposed to agents by default; they appear in the MCP tool list only with `HARNESS_ENABLE_LEGACY_V1=1`. The current Skill never uses `init_harness`, `generate_config`, placeholder AI review, or pseudo A/B paths.
+Legacy v1 handlers are kept for migrating existing callers but are not exposed to agents by default. Both discovery and direct invocation require the process-start opt-in `HARNESS_ENABLE_LEGACY_V1=1`; otherwise they fail closed. The current Skill never uses `init_harness`, `generate_config`, placeholder AI review, or pseudo A/B paths.
 
 ## Development
 

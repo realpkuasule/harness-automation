@@ -82,6 +82,18 @@ describe("v2 MCP transport", () => {
 
     const projectDir = mkdtempSync(join(tmpdir(), "harness-mcp-v2-"));
     directories.push(projectDir);
+    const legacy = await client.callTool({
+      name: "init_harness",
+      arguments: {
+        projectDir,
+        projectPhase: "early",
+        teamSize: "solo",
+        techStack: ["typescript"],
+        dryRun: true,
+      },
+    });
+    expect(legacy.isError).toBe(true);
+    expect((legacy.content[0] as { type: "text"; text: string }).text).toContain("LEGACY_V1_DISABLED");
     const result = await client.callTool({ name: "harness_doctor", arguments: { projectDir } });
     const content = result.content[0] as { type: "text"; text: string };
     expect(JSON.parse(content.text).projectDir).toBe(projectDir);

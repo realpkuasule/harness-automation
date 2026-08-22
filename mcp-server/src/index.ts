@@ -123,6 +123,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // ============================================================
 
 export async function createServer(): Promise<Server> {
+  const legacyV1Enabled = process.env.HARNESS_ENABLE_LEGACY_V1 === "1";
   const server = new Server(
     {
       name: "harness-automation",
@@ -538,7 +539,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         description: "生成优化后的错误信息。根据规则 ID、场景或代码上下文返回包含 why/whatInstead/reference 三要素的结构化错误信息",
         inputSchema: z(OptimizeErrorMessageInputSchema),
       },
-    ].filter((tool) => process.env.HARNESS_ENABLE_LEGACY_V1 === "1" || tool.name.startsWith("harness_")),
+    ].filter((tool) => legacyV1Enabled || tool.name.startsWith("harness_")),
   }));
 
   // ============================================================
@@ -547,6 +548,12 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+  if (!legacyV1Enabled && !name.startsWith("harness_")) {
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify({ code: "LEGACY_V1_DISABLED", message: "Legacy v1 MCP tools require HARNESS_ENABLE_LEGACY_V1=1; use the harness_* v2 tools instead." }, null, 2) }],
+      isError: true,
+    };
+  }
   const v2Args = (args ?? {}) as Record<string, unknown>;
   const v2String = (key: string): string => {
     const value = v2Args[key];
