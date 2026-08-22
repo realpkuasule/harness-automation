@@ -115,7 +115,17 @@ else process.stdout.write(JSON.stringify({ structured_output: {
 }
 
 function git(root: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  return execFileSync("git", args, {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_EMAIL: "harness@example.test",
+      GIT_AUTHOR_NAME: "Harness Test",
+      GIT_COMMITTER_EMAIL: "harness@example.test",
+      GIT_COMMITTER_NAME: "Harness Test",
+    },
+  }).trim();
 }
 
 function samePath(left: string, right: string): boolean {
@@ -126,8 +136,6 @@ function repository(): string {
   const root = mkdtempSync(join(tmpdir(), "harness-worktree-"));
   repositories.push(root);
   git(root, "init", "-b", "main");
-  git(root, "config", "user.email", "harness@example.test");
-  git(root, "config", "user.name", "Harness Test");
   writeFileSync(join(root, "README.md"), "# fixture\n", "utf8");
   git(root, "add", "README.md");
   git(root, "commit", "-m", "test: initialize fixture");
@@ -150,8 +158,6 @@ function containerRepository(): { container: string; main: string; worktrees: st
   const main = join(container, "main");
   mkdirSync(main);
   git(main, "init", "-b", "main");
-  git(main, "config", "user.email", "harness@example.test");
-  git(main, "config", "user.name", "Harness Test");
   writeFileSync(join(main, "README.md"), "# fixture\n", "utf8");
   git(main, "add", "README.md");
   git(main, "commit", "-m", "test: initialize container fixture");

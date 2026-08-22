@@ -236,3 +236,5 @@
 {"timestamp": "2026-08-22T14:22:32+08:00", "type": "feat", "phase": 36, "description": "Add read-only GitHub governance audit", "issueRef": "realpkuasule/harness-automation#36"}
 {"timestamp": "2026-08-22T16:11:38+08:00", "type": "fix", "phase": 37, "description": "Restore Linux retention-audit and Windows worktree CI coverage", "issueRef": "realpkuasule/harness-automation#37"}
 {"timestamp": "2026-08-22T17:05:09+08:00", "type": "fix", "phase": 37, "description": "Restore cross-platform CI path assertions and coverage", "issueRef": "realpkuasule/harness-automation#37"}
+{"timestamp": "2026-08-22T19:43:23+08:00", "type": "fix", "phase": 37, "description": "Reduce worktree fixture setup overhead on Windows CI", "issueRef": "realpkuasule/harness-automation#37"}
+{"timestamp": "2026-08-22T20:02:55+08:00", "type": "fix", "phase": 37, "description": "Split Windows worktree CI tests to avoid worker RPC timeouts", "issueRef": "realpkuasule/harness-automation#37"}
