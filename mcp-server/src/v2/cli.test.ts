@@ -31,7 +31,12 @@ function runResult(root: string, args: string[], env: NodeJS.ProcessEnv = {}) {
   return spawnSync(process.execPath, ["--import", "tsx", cli, ...args, "--project", root], {
     cwd: packageRoot,
     encoding: "utf8",
-    env: { ...process.env, ...env, HOME: join(root, ".test-home") },
+    env: {
+      ...process.env,
+      ...env,
+      HOME: join(root, ".test-home"),
+      XDG_STATE_HOME: join(root, ".test-state"),
+    },
     timeout: 30_000,
   });
 }
@@ -220,7 +225,7 @@ describe("v2 CLI forward flow", () => {
     write(root, "README.md", "# fixture\n");
     execFileSync("git", ["add", "README.md"], { cwd: root });
     execFileSync("git", ["commit", "-m", "test: initialize fixture"], { cwd: root });
-    write(root, ".test-home/Library/Application Support/harness-automation/reviews/bad.json", "{not json");
+    write(root, ".test-state/harness-automation/reviews/bad.json", "{not json");
     const refsBefore = execFileSync("git", ["for-each-ref", "--format=%(refname)%00%(objectname)"], { cwd: root, encoding: "utf8" });
 
     const result = runResult(root, ["worktree", "retention-audit"]);

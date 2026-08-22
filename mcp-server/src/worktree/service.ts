@@ -148,7 +148,7 @@ function repositoryRoot(projectRoot: string): string {
   const requested = resolve(projectRoot);
   const root = git(requested, ["rev-parse", "--show-toplevel"]).trim();
   if (!isAbsolute(root)) throw new Error(`GIT_ROOT_INVALID: ${root}`);
-  return resolve(root);
+  return canonicalPath(root);
 }
 
 function canonicalPath(path: string): string {
@@ -233,7 +233,7 @@ function gitCommonDir(root: string): string {
     "--git-common-dir",
   ]).trim();
   if (!isAbsolute(commonDir)) throw new Error(`GIT_COMMON_DIR_INVALID: ${commonDir}`);
-  return resolve(commonDir);
+  return canonicalPath(commonDir);
 }
 
 function defaultConfig(): WorktreeDeliveryConfig {
@@ -614,7 +614,8 @@ function enrichWorktree(
   adoptionSafe = false,
 ): WorktreeRecord {
   if (record.bare || record.prunable || !existsSync(record.path)) return record;
-  const gitTopLevel = git(root, ["-C", record.path, "rev-parse", "--show-toplevel"]).trim();
+  const path = canonicalPath(record.path);
+  const gitTopLevel = canonicalPath(git(root, ["-C", record.path, "rev-parse", "--show-toplevel"]).trim());
   if (!samePath(record.path, gitTopLevel)) {
     throw new Error(`WORKTREE_TOPLEVEL_MISMATCH: ${record.path}`);
   }
@@ -625,6 +626,7 @@ function enrichWorktree(
     : refs;
   return {
     ...record,
+    path,
     gitTopLevel,
     dirty,
     ...(dirty ? collectDirtyEvidence(root, record.path, tokens, adoptionSafe) : {}),
@@ -2561,6 +2563,7 @@ function runClaudeReviewer(args: {
       timeout: args.policy.reviewerTimeoutSeconds * 1_000,
       maxBuffer: 1024 * 1024,
       env: { ...process.env, CI: "1" },
+      shell: process.platform === "win32",
     });
     if (result.error || result.status !== 0) {
       const detail = `${result.stderr ?? result.stdout ?? result.error ?? ""}`.trim().slice(-2_000);
