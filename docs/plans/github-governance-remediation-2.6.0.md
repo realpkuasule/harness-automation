@@ -202,7 +202,7 @@ It must stop unless all required label combinations are online and not busy.
 
 No workflow may be changed to require a label that has no online runner.
 
-## Phase R2 — workflow migration
+## Phase R2a — CI workflow migration
 
 Migration occurs in a normal owner branch and pull request while no required
 ruleset is active.
@@ -237,7 +237,13 @@ build as currently configured.
 The workflow must continue using `pull_request`, never `pull_request_target`,
 for code execution.
 
-### Publish workflow
+### Publish workflow — deferred R2b
+
+Do not modify `.github/workflows/publish.yml` in R2a. Referencing a missing
+environment would cause GitHub to create it implicitly, bypassing the separate
+G3 environment approval. After R3 has proven the CI workflow and G3 has
+explicitly approved and created `npm-release`, perform the following R2b
+publish-workflow migration in a separate normal owner branch and pull request.
 
 Change the publish job to
 `[self-hosted, Linux, X64, harness-release]` only after the release runner and
@@ -257,13 +263,16 @@ evidence.
 
 ### Required repository changes
 
-The minimum expected tracked diff is:
+The R2a tracked diff is:
 
 - `.github/workflows/ci.yml`;
-- `.github/workflows/publish.yml`;
 - the directly relevant CLI/README/design references if they name the old
   hosted check contexts;
 - `CHANGELOG.jsonl` through `scripts/changelog.py`, referencing Issue #38.
+
+The deferred R2b tracked diff is `.github/workflows/publish.yml`, plus only
+directly relevant references and a separate Issue #38 changelog entry if they
+are needed.
 
 Do not add dependencies, a runner manager, generated runner configuration, host
 credentials, or machine-specific paths to the repository.
@@ -382,6 +391,13 @@ Repository secrets cannot be read and migrated automatically. If the owner
 later chooses to move `NPM_TOKEN` from repository scope to environment scope,
 the owner must enter it manually at a separate credential gate.
 
+### Phase R2b — publish workflow migration
+
+Only after the separately approved `npm-release` environment readback succeeds,
+apply the deferred publish-workflow change defined in R2a. Do not tag, publish,
+or use the publish workflow as migration evidence; the next separately approved
+release provides the first end-to-end publish evidence.
+
 ### Dependabot
 
 1. enable Dependabot alerts after separate approval;
@@ -460,7 +476,7 @@ No version bump, tag, push, npm publish, or skill-sync is implied by closeout.
 |---|---|---|
 | H0 — plan implementation | Approve implementation of Issue #38 | Planning approval alone does not authorize remote writes |
 | H1 — runner registration | Approve tokens and register three repository-specific runner instances | Agent does not expose tokens or configure personal hosts without approval |
-| H2 — workflow push | Approve pushing the workflow migration branch | No automatic push or PR |
+| H2 — workflow push | Approve each CI or deferred publish workflow-migration branch push | No automatic push or PR |
 | H3 — remote hardening | Approve Actions, environment, and Dependabot setting groups separately | No bundled GitHub mutation approval |
 | H4 — ruleset creation | Approve creation in Disabled state | Disabled creation is not activation |
 | H5 — ruleset activation | Name both ruleset IDs and approve Active enforcement | Agent stops before activation |
