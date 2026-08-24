@@ -11,11 +11,31 @@ permissions:
 
 jobs:
   build-and-test:
+    name: build-and-test (${{ matrix.platform }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - platform: linux-x64
+            hosted_runner: '["ubuntu-latest"]'
+            trusted_runner: '["self-hosted","Linux","X64","harness-ci"]'
+          - platform: windows-x64
+            hosted_runner: '["windows-latest"]'
+            trusted_runner: '["self-hosted","Windows","X64","harness-ci"]'
+    runs-on: >-
+      ${{ fromJSON(
+        (
+          (
+            github.event_name == 'push' &&
+            github.ref == 'refs/heads/main' &&
+            github.actor == github.repository_owner
+          ) || (
+            github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository &&
+            github.event.pull_request.user.login == github.repository_owner
+          )
+        ) && matrix.trusted_runner || matrix.hosted_runner
+      ) }}
 
     defaults:
       run:
