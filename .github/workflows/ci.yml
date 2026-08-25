@@ -19,11 +19,9 @@ jobs:
           - platform: linux-x64
             hosted_runner: '["ubuntu-latest"]'
             trusted_runner: '["self-hosted","Linux","X64","harness-ci"]'
-            run_shell: bash
           - platform: windows-x64
             hosted_runner: '["windows-latest"]'
             trusted_runner: '["self-hosted","Windows","X64","harness-ci"]'
-            run_shell: 'powershell -NoProfile -ExecutionPolicy Bypass -command ". ''{0}''"'
     runs-on: >-
       ${{ fromJSON(
         (
@@ -61,25 +59,39 @@ jobs:
           cache: false
 
       - name: Install dependencies
-        shell: ${{ matrix.run_shell }}
+        if: runner.os != 'Windows'
+        run: npm ci
+
+      - name: Install dependencies on Windows
+        if: runner.os == 'Windows'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
         run: npm ci
 
       - name: Type check
-        shell: ${{ matrix.run_shell }}
+        if: runner.os != 'Windows'
+        run: npx tsc --noEmit
+
+      - name: Type check on Windows
+        if: runner.os == 'Windows'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
         run: npx tsc --noEmit
 
       - name: Lint
-        shell: ${{ matrix.run_shell }}
+        if: runner.os != 'Windows'
+        run: npm run lint
+
+      - name: Lint on Windows
+        if: runner.os == 'Windows'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
         run: npm run lint
 
       - name: Test
         if: runner.os != 'Windows'
-        shell: ${{ matrix.run_shell }}
-        run: npx vitest run --coverage
+        run: npx vitest run --coverage --pool=threads --maxWorkers=1
 
       - name: Test portable worktree governance on Windows
         if: runner.os == 'Windows'
-        shell: ${{ matrix.run_shell }}
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
         run: |
           npx vitest run src/worktree/service.test.ts --testTimeout=20000 -t "portable worktree inventory"
           npx vitest run src/worktree/service.test.ts --testTimeout=20000 -t "(separates portable policy|configures a parameterized|allocates only|derives container|reports isolated|blocks predicted|fails closed and retains|rejects nested|keeps legacy flat|moves one exactly|rejects migration hash|rejects legacy migration|keeps a durable|detects host-binding|delegates an allocation|fails closed for denied)"
@@ -90,5 +102,4 @@ jobs:
 
       - name: Build
         if: runner.os != 'Windows'
-        shell: ${{ matrix.run_shell }}
         run: npm run build
