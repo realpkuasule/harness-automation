@@ -63,7 +63,7 @@ const responses = {
   "repos/example/repository/rulesets": [{ id: 8, name: "main", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } } }],
   "repos/example/repository/rulesets/8": { id: 8, name: "main", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } }, rules: [{ type: "pull_request", parameters: { required_approving_review_count: 0 } }, { type: "required_status_checks", parameters: { required_status_checks: [{ context: "build-and-test" }] } }, { type: "non_fast_forward" }, { type: "deletion" }] },
   "repos/example/repository/branches/main/protection": { required_status_checks: { contexts: ["build-and-test"] }, required_pull_request_reviews: { required_approving_review_count: 0 }, allow_force_pushes: { enabled: false }, allow_deletions: { enabled: false } },
-  "repos/example/repository/actions/permissions": { enabled: true, allowed_actions: "selected", sha_pinned_required: true },
+  "repos/example/repository/actions/permissions": { enabled: true, allowed_actions: "selected", sha_pinning_required: true },
   "repos/example/repository/actions/permissions/workflow": { default_workflow_permissions: "read", can_approve_pull_request_reviews: false },
   "repos/example/repository/environments": { environments: [] },
   "repos/example/repository/commits/main/check-runs": { check_runs: [{ name: "build-and-test", conclusion: "success" }] },

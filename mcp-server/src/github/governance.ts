@@ -258,7 +258,7 @@ export function auditGitHubGovernance(input: { projectRoot: string; organization
   if (!workflowPermissions.ok) unavailable.push(`Actions workflow permissions: ${sanitized(workflowPermissions.error)}`);
   const workflows = localWorkflows(projectRoot);
   const actions = record(actionsResult.value);
-  const shaPinnedRequired = bool(actions.sha_pinned_required) === true;
+  const shaPinnedRequired = bool(actions.sha_pinning_required) === true;
   if (shaPinnedRequired && workflows.unpinnedUses.length > 0) blockers.push(...workflows.unpinnedUses.map((entry) => `UNPINNED_ACTION: ${entry}`));
   else if (workflows.unpinnedUses.length > 0) warnings.push(...workflows.unpinnedUses.map((entry) => `UNPINNED_ACTION_OBSERVED: ${entry}`));
   const environmentsResult = commandJson(projectRoot, "gh", ["api", "--method", "GET", `repos/${local.slug}/environments`]);

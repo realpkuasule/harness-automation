@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -33,6 +34,9 @@ jobs:
             github.event_name == 'pull_request' &&
             github.event.pull_request.head.repo.full_name == github.repository &&
             github.event.pull_request.user.login == github.repository_owner
+          ) || (
+            github.event_name == 'workflow_dispatch' &&
+            github.actor == github.repository_owner
           )
         ) && matrix.trusted_runner || matrix.hosted_runner
       ) }}
