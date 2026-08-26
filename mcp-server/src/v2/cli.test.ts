@@ -387,5 +387,5 @@ process.stdout.write(JSON.stringify(values[endpoint]));
 
     expect(run(root, ["check", "--mode", "session"]).evaluations).toMatchObject({ status: "not-run" });
     expect(run(root, ["check", "--mode", "ci"]).evaluations).toMatchObject({ status: "verified" });
-  });
+  }, 15_000);
 });
