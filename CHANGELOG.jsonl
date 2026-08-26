@@ -246,3 +246,4 @@
 {"timestamp": "2026-08-25T11:38:43+08:00", "type": "fix", "phase": "2.6.0", "description": "Serialize self-hosted Linux Vitest workers without changing coverage or test scope", "issueRef": "realpkuasule/harness-automation#38", "relatedFiles": [".github/workflows/ci.yml"]}
 {"timestamp": "2026-08-26T21:40:06+08:00", "type": "fix", "phase": "2.6.0", "description": "Run Husky prepare portably on native Windows CI", "issueRef": "realpkuasule/harness-automation#38", "relatedFiles": ["mcp-server/package.json"]}
 {"timestamp": "2026-08-26T23:43:07+08:00", "type": "fix", "phase": 38, "description": "Report GitHub Actions SHA-pinning enforcement", "issueRef": "realpkuasule/harness-automation#38"}
+{"timestamp": "2026-08-26T23:58:39+08:00", "type": "fix", "phase": 38, "description": "Allow owner-dispatched self-hosted CI recovery", "issueRef": "realpkuasule/harness-automation#38"}
