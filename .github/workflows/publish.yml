@@ -10,7 +10,8 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, harness-release]
+    environment: npm-release
 
     defaults:
       run:

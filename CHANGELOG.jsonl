@@ -247,3 +247,4 @@
 {"timestamp": "2026-08-26T21:40:06+08:00", "type": "fix", "phase": "2.6.0", "description": "Run Husky prepare portably on native Windows CI", "issueRef": "realpkuasule/harness-automation#38", "relatedFiles": ["mcp-server/package.json"]}
 {"timestamp": "2026-08-26T23:43:07+08:00", "type": "fix", "phase": 38, "description": "Report GitHub Actions SHA-pinning enforcement", "issueRef": "realpkuasule/harness-automation#38"}
 {"timestamp": "2026-08-26T23:58:39+08:00", "type": "fix", "phase": 38, "description": "Allow owner-dispatched self-hosted CI recovery", "issueRef": "realpkuasule/harness-automation#38"}
+{"timestamp": "2026-08-27T01:19:41+08:00", "type": "chore", "phase": "governance", "description": "Route npm publishing through the isolated self-hosted release runner and npm-release environment", "issueRef": "realpkuasule/harness-automation#38", "relatedFiles": [".github/workflows/publish.yml", "CHANGELOG.jsonl"], "agent": "Codex"}
