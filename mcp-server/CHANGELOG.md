@@ -1,3 +1,29 @@
+## [2.6.0] - 2026-08-27
+
+### Changed
+
+- route release to self-hosted runner (97d4524)
+- route trusted checks to self-hosted runners (#39) (
+b6bba7)
+- normalize Windows retention paths (
+7279be)
+- repair cross-platform coverage regression (
+108ac4)
+
+### Fixed
+
+- report Actions SHA pinning (#40) (
+a0442a)
+- split Windows worktree test groups (
+0895d5)
+- restore cross-platform worktree checks (
+bb2ce2)
+
+### Added
+
+- add read-only governance audit (
+c23916)
+
 ## [2.5.0] - 2026-08-21
 
 ### Changed
