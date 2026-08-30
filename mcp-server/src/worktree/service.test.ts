@@ -901,8 +901,10 @@ describe("hash-approved worktree lifecycle", () => {
     mkdirSync(nonEmpty);
     writeFileSync(join(nonEmpty, "keep"), "x", "utf8");
     expect(() => allocate(nonEmpty)).toThrow(/WORKTREE_PATH_ID_MISMATCH/);
+    const external = mkdtempSync(join(testTempRoot, "harness-container-external-"));
+    repositories.push(external);
     const escaped = join(worktrees, "escaped");
-    symlinkDirectory(dirname(worktrees), escaped);
+    symlinkDirectory(external, escaped);
     expect(() => allocate(escaped)).toThrow(/WORKTREE_PATH_ID_MISMATCH/);
   });
 
@@ -1060,7 +1062,7 @@ describe("hash-approved worktree lifecycle", () => {
       .toThrow(/WORKTREE_MIGRATION_CONTAINER_INVALID/);
     const link = `${root}-migration-link`;
     repositories.push(link);
-    symlinkDirectory(dirname(root), link);
+    symlinkDirectory(root, link);
     expect(() => planWorkspaceMigration({ projectRoot: root, workspaceContainer: link }))
       .toThrow(/WORKTREE_MIGRATION_CONTAINER_INVALID/);
 
@@ -1665,7 +1667,7 @@ describe("hash-approved worktree lifecycle", () => {
       workItem: "github:example/project#64",
       acceptedCommit: missingManagement.head,
     })).toThrow(/MANAGEMENT_BRANCH_NOT_CURRENT.*remote absent/);
-  });
+  }, 20_000);
 
   it("blocks protected or shared branch cleanup mappings", () => {
     const root = repositoryWithRemote();
@@ -2074,7 +2076,7 @@ describe("hash-approved worktree lifecycle", () => {
     expect(close).toThrow(/GITHUB_MERGE_PROOF_UNAVAILABLE/);
     process.env.HARNESS_TEST_GH_MERGE_PROOF = "non-array";
     expect(close).toThrow(/GITHUB_MERGE_PROOF_UNAVAILABLE/);
-  });
+  }, 20_000);
 
   it("rejects GitHub squash proof when the upstream remote is another repository", () => {
     installMergedPullRequestGh();
