@@ -92,17 +92,31 @@ if (graphql) {
 function installMergedPullRequestGh(): void {
   const bin = mkdtempSync(join(tmpdir(), "harness-close-gh-"));
   repositories.push(bin);
-  const script = `const endpoint = process.argv[process.argv.length - 1];
+const script = `const endpoint = process.argv[process.argv.length - 1];
 if (endpoint.includes("/issues/")) {
   process.stdout.write(JSON.stringify({ state: "open", html_url: "https://github.com/example/project/issues/52" }));
 } else if (endpoint.includes("/pulls?")) {
-  process.stdout.write(JSON.stringify([{
-    number: 99,
-    merged_at: "2026-01-01T00:00:00Z",
-    head: { ref: process.env.HARNESS_TEST_GH_HEAD_REF, sha: process.env.HARNESS_TEST_GH_HEAD_SHA,
-      repo: { full_name: "example/project" } },
-    base: { ref: "main", repo: { full_name: "example/project" } }
-  }]));
+  if (process.env.HARNESS_TEST_GH_MERGE_PROOF === "unavailable") process.exit(3);
+  const mismatch = process.env.HARNESS_TEST_GH_MERGE_PROOF_FIELD;
+  const pull = {
+    number: process.env.HARNESS_TEST_GH_MERGE_PROOF === "invalid" ? "invalid" : 99,
+    merged_at: mismatch === "merged-at" ? null : "2026-01-01T00:00:00Z",
+    head: {
+      ref: mismatch === "head-ref" ? "other" : process.env.HARNESS_TEST_GH_HEAD_REF,
+      sha: mismatch === "head-sha" ? "0".repeat(40) : process.env.HARNESS_TEST_GH_HEAD_SHA,
+      repo: { full_name: mismatch === "head-repo" ? "example/other" : "example/project" }
+    },
+    base: {
+      ref: mismatch === "base-ref" ? "other" : "main",
+      repo: { full_name: mismatch === "base-repo" ? "example/other" : "example/project" }
+    }
+  };
+  const pulls = process.env.HARNESS_TEST_GH_MERGE_PROOF === "missing" ? [] :
+    process.env.HARNESS_TEST_GH_MERGE_PROOF === "null-candidate" ? [null] :
+    process.env.HARNESS_TEST_GH_MERGE_PROOF === "ambiguous" ? [pull, pull] : [pull];
+  process.stdout.write(JSON.stringify(
+    process.env.HARNESS_TEST_GH_MERGE_PROOF === "non-array" ? {} : pulls
+  ));
 } else {
   process.exit(2);
 }
@@ -159,6 +173,10 @@ function git(root: string, ...args: string[]): string {
 
 function samePath(left: string, right: string): boolean {
   return realpathSync.native(left) === realpathSync.native(right);
+}
+
+function symlinkDirectory(target: string, path: string): void {
+  symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
 }
 
 function repository(): string {
@@ -267,6 +285,8 @@ afterEach(async () => {
   delete process.env.HARNESS_TEST_GH_FAIL_AFTER;
   delete process.env.HARNESS_TEST_GH_HEAD_REF;
   delete process.env.HARNESS_TEST_GH_HEAD_SHA;
+  delete process.env.HARNESS_TEST_GH_MERGE_PROOF;
+  delete process.env.HARNESS_TEST_GH_MERGE_PROOF_FIELD;
   delete process.env.HARNESS_TEST_GITHUB_REMOTE;
   delete process.env.GIT_SSH_COMMAND;
   delete process.env.GIT_SSH_VARIANT;
@@ -881,7 +901,7 @@ describe("hash-approved worktree lifecycle", () => {
     writeFileSync(join(nonEmpty, "keep"), "x", "utf8");
     expect(() => allocate(nonEmpty)).toThrow(/WORKTREE_PATH_ID_MISMATCH/);
     const escaped = join(worktrees, "escaped");
-    symlinkSync(dirname(worktrees), escaped);
+    symlinkDirectory(dirname(worktrees), escaped);
     expect(() => allocate(escaped)).toThrow(/WORKTREE_PATH_ID_MISMATCH/);
   });
 
@@ -1039,7 +1059,7 @@ describe("hash-approved worktree lifecycle", () => {
       .toThrow(/WORKTREE_MIGRATION_CONTAINER_INVALID/);
     const link = `${root}-migration-link`;
     repositories.push(link);
-    symlinkSync(dirname(root), link);
+    symlinkDirectory(dirname(root), link);
     expect(() => planWorkspaceMigration({ projectRoot: root, workspaceContainer: link }))
       .toThrow(/WORKTREE_MIGRATION_CONTAINER_INVALID/);
 
@@ -1530,6 +1550,169 @@ describe("hash-approved worktree lifecycle", () => {
     })).toThrow(/WORKSPACE_ROLLBACK_UNAVAILABLE.*branch cleanup/i);
   });
 
+  it("closes a merged branch when its exact remote upstream is already absent", () => {
+    const root = repositoryWithRemote();
+    const worktreePath = `${root}-absent-upstream`;
+    repositories.push(worktreePath);
+    configure(root, { managementBranch: "main", remoteBranchDeletion: true });
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#60",
+      branch: "issue-60-absent",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    writeFileSync(join(worktreePath, "absent.txt"), "merged\n", "utf8");
+    git(worktreePath, "add", "absent.txt");
+    git(worktreePath, "commit", "-m", "feat: absent upstream fixture");
+    git(worktreePath, "push", "-u", "origin", "issue-60-absent");
+    const head = git(worktreePath, "rev-parse", "HEAD");
+    git(root, "merge", "--no-ff", "issue-60-absent", "-m", "merge: absent upstream fixture");
+    git(root, "push", "origin", "main");
+    const remote = git(root, "remote", "get-url", "origin");
+    git(remote, "update-ref", "-d", "refs/heads/issue-60-absent");
+
+    const closed = planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#60",
+      acceptedCommit: head,
+    });
+    expect(closed.plan.operation).toMatchObject({
+      kind: "close",
+      branchCleanup: { remote: { expectedHead: null } },
+    });
+    const receipt = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: closed.path,
+      approval: closed.plan.planHash,
+    });
+
+    expect(git(root, "branch", "--list", "issue-60-absent")).toBe("");
+    expect(receipt.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "delete-local-branch", status: "applied" }),
+    ]));
+    expect(receipt.steps).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "delete-remote-branch" }),
+    ]));
+  });
+
+  it("fails closed on incomplete or ambiguous branch cleanup evidence", () => {
+    const prepare = (id: number) => {
+      const root = repositoryWithRemote();
+      const branch = `issue-${id}-evidence`;
+      const worktreePath = `${root}-${branch}`;
+      repositories.push(worktreePath);
+      configure(root, { managementBranch: "main", remoteBranchDeletion: true });
+      const allocated = planWorkspaceAllocation({
+        projectRoot: root,
+        workItem: `github:example/project#${id}`,
+        branch,
+        path: worktreePath,
+        owner: "owner",
+      });
+      applyWorkspacePlan({
+        projectRoot: root,
+        planPath: allocated.path,
+        approval: allocated.plan.planHash,
+      });
+      writeFileSync(join(worktreePath, "evidence.txt"), `${id}\n`, "utf8");
+      git(worktreePath, "add", "evidence.txt");
+      git(worktreePath, "commit", "-m", `feat: evidence fixture ${id}`);
+      git(worktreePath, "push", "-u", "origin", branch);
+      const head = git(worktreePath, "rev-parse", "HEAD");
+      git(root, "merge", "--no-ff", branch, "-m", `merge: evidence fixture ${id}`);
+      git(root, "push", "origin", "main");
+      return { root, branch, head };
+    };
+
+    const missingUpstream = prepare(61);
+    git(missingUpstream.root, "config", "--unset-all", `branch.${missingUpstream.branch}.remote`);
+    expect(() => planWorkspaceClose({
+      projectRoot: missingUpstream.root,
+      workItem: "github:example/project#61",
+      acceptedCommit: missingUpstream.head,
+    })).toThrow(/BRANCH_UPSTREAM_REQUIRED/);
+
+    const missingRemote = prepare(62);
+    git(missingRemote.root, "config", `branch.${missingRemote.branch}.remote`, "missing");
+    expect(() => planWorkspaceClose({
+      projectRoot: missingRemote.root,
+      workItem: "github:example/project#62",
+      acceptedCommit: missingRemote.head,
+    })).toThrow(/REMOTE_PUSH_ENDPOINT_UNAVAILABLE/);
+
+    const ambiguousPush = prepare(63);
+    git(ambiguousPush.root, "remote", "set-url", "--add", "--push", "origin",
+      git(ambiguousPush.root, "remote", "get-url", "origin"));
+    git(ambiguousPush.root, "remote", "set-url", "--add", "--push", "origin", "unused-secondary");
+    expect(() => planWorkspaceClose({
+      projectRoot: ambiguousPush.root,
+      workItem: "github:example/project#63",
+      acceptedCommit: ambiguousPush.head,
+    })).toThrow(/REMOTE_PUSH_ENDPOINT_AMBIGUOUS/);
+
+    const missingManagement = prepare(64);
+    const remote = git(missingManagement.root, "remote", "get-url", "origin");
+    git(remote, "update-ref", "-d", "refs/heads/main");
+    expect(() => planWorkspaceClose({
+      projectRoot: missingManagement.root,
+      workItem: "github:example/project#64",
+      acceptedCommit: missingManagement.head,
+    })).toThrow(/MANAGEMENT_BRANCH_NOT_CURRENT.*remote absent/);
+  });
+
+  it("blocks protected or shared branch cleanup mappings", () => {
+    const root = repositoryWithRemote();
+    const worktreePath = `${root}-mapping-guard`;
+    repositories.push(worktreePath);
+    configure(root, { managementBranch: "main", remoteBranchDeletion: true });
+    const workItem = "github:example/project#66";
+    const branch = "issue-66-mapping";
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem,
+      branch,
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    const status = workspaceStatus(root);
+    const lease = status.leases[0];
+    const leaseDirectory = join(status.commonDir, "harness", "worktree-delivery", "leases");
+    const leasePath = join(leaseDirectory, `${sha256(workItem)}.json`);
+    writeFileSync(leasePath, prettyJson({ ...lease, branch: "main" }), "utf8");
+    const close = () => planWorkspaceClose({
+      projectRoot: root,
+      workItem,
+      acceptedCommit: git(worktreePath, "rev-parse", "HEAD"),
+    });
+    expect(close).toThrow(/PROTECTED_BRANCH_CLEANUP/);
+
+    writeFileSync(leasePath, prettyJson(lease), "utf8");
+    const duplicateWorkItem = "github:example/project#67";
+    writeFileSync(join(leaseDirectory, `${sha256(duplicateWorkItem)}.json`), prettyJson({
+      ...lease,
+      workItem: duplicateWorkItem,
+      path: `${worktreePath}-duplicate`,
+    }), "utf8");
+    expect(close).toThrow(/BRANCH_CLEANUP_IN_USE/);
+
+    rmSync(join(leaseDirectory, `${sha256(duplicateWorkItem)}.json`));
+    git(worktreePath, "checkout", "--detach");
+    git(root, "commit", "--allow-empty", "-m", "test: advance management branch");
+    git(root, "branch", "-f", branch, "main");
+    expect(close).toThrow(/LOCAL_BRANCH_DRIFT/);
+  });
+
   it("blocks cleanup for an unmerged branch instead of accumulating a closed branch", () => {
     const root = repositoryWithRemote();
     const worktreePath = `${root}-unmerged-cleanup`;
@@ -1832,6 +2015,66 @@ describe("hash-approved worktree lifecycle", () => {
     expect(git(root, "ls-remote", "--heads", "origin", "refs/heads/issue-52-squash-upstream")).toBe("");
   });
 
+  it("fails closed for missing, ambiguous, invalid, and unavailable GitHub merge proof", () => {
+    installMergedPullRequestGh();
+    const root = repositoryWithRemote();
+    useFakeGitHubSshRemote(root, "example/project");
+    const worktreePath = `${root}-invalid-merge-proof`;
+    repositories.push(worktreePath);
+    configure(root, {
+      managementBranch: "main",
+      remoteBranchDeletion: true,
+      provider: { kind: "github", repository: "example/project" },
+    });
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#65",
+      branch: "issue-65-proof",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    writeFileSync(join(worktreePath, "proof.txt"), "squashed\n", "utf8");
+    git(worktreePath, "add", "proof.txt");
+    git(worktreePath, "commit", "-m", "feat: invalid merge proof fixture");
+    git(worktreePath, "push", "-u", "origin", "issue-65-proof");
+    const head = git(worktreePath, "rev-parse", "HEAD");
+    process.env.HARNESS_TEST_GH_HEAD_REF = "issue-65-proof";
+    process.env.HARNESS_TEST_GH_HEAD_SHA = head;
+    writeFileSync(join(root, "proof.txt"), "squashed\n", "utf8");
+    git(root, "add", "proof.txt");
+    git(root, "commit", "-m", "feat: squash proof fixture");
+    git(root, "push", "origin", "main");
+    const close = () => planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#65",
+      acceptedCommit: head,
+    });
+
+    process.env.HARNESS_TEST_GH_MERGE_PROOF = "missing";
+    expect(close).toThrow(/BRANCH_NOT_MERGED/);
+    process.env.HARNESS_TEST_GH_MERGE_PROOF = "null-candidate";
+    expect(close).toThrow(/BRANCH_NOT_MERGED/);
+    process.env.HARNESS_TEST_GH_MERGE_PROOF = "near-miss";
+    for (const field of ["merged-at", "head-ref", "head-sha", "head-repo", "base-ref", "base-repo"]) {
+      process.env.HARNESS_TEST_GH_MERGE_PROOF_FIELD = field;
+      expect(close).toThrow(/BRANCH_NOT_MERGED/);
+    }
+    delete process.env.HARNESS_TEST_GH_MERGE_PROOF_FIELD;
+    process.env.HARNESS_TEST_GH_MERGE_PROOF = "ambiguous";
+    expect(close).toThrow(/GITHUB_MERGE_PROOF_AMBIGUOUS/);
+    process.env.HARNESS_TEST_GH_MERGE_PROOF = "invalid";
+    expect(close).toThrow(/GITHUB_MERGE_PROOF_INVALID/);
+    process.env.HARNESS_TEST_GH_MERGE_PROOF = "unavailable";
+    expect(close).toThrow(/GITHUB_MERGE_PROOF_UNAVAILABLE/);
+    process.env.HARNESS_TEST_GH_MERGE_PROOF = "non-array";
+    expect(close).toThrow(/GITHUB_MERGE_PROOF_UNAVAILABLE/);
+  });
+
   it("rejects GitHub squash proof when the upstream remote is another repository", () => {
     installMergedPullRequestGh();
     const root = repositoryWithRemote();
@@ -1894,6 +2137,16 @@ describe("hash-approved worktree lifecycle", () => {
       workItem: "github:example/project#59",
       acceptedCommit: head,
     })).toThrow(/REMOTE_PUSH_ENDPOINT_UNSTABLE/);
+
+    git(root, "config", "--unset-all", `url.${transport}.insteadOf`);
+    git(root, "config", "--unset-all", "url.git@github.com:.insteadOf");
+    git(root, "config", "remote.origin.url", transport);
+    useFakeGitHubSshRemote(root, "example/other");
+    expect(() => planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#59",
+      acceptedCommit: head,
+    })).toThrow(/GITHUB_REMOTE_REPOSITORY_MISMATCH/);
   });
 
   it("writes an applied close receipt when invoked from the worktree being removed", () => {
