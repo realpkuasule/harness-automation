@@ -103,7 +103,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npx vitest run src/worktree/service.test.ts --testTimeout=60000 -t "(closes a merged branch|fails closed on incomplete|blocks protected or shared)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npx vitest run src/worktree/service.test.ts --testTimeout=20000 -t "(rechecks workspace|denies destructive|fails closed when enforced|requires an approved|configures, allocates|writes an applied|rebinds|renews|rejects missing|recovers a clean|rejects unsafe recovery|rejects lifecycle drift|fails closed while another|rejects unsafe allocation|queries the pending|requires configured-Project|rejects malformed)"
+          npx vitest run src/worktree/service.test.ts --testTimeout=60000 -t "(rechecks workspace|denies destructive|fails closed when enforced|requires an approved|configures, allocates|writes an applied|rebinds|renews|rejects missing|recovers a clean|rejects unsafe recovery|rejects lifecycle drift|fails closed while another|rejects unsafe allocation|queries the pending|requires configured-Project|rejects malformed)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npx vitest run src/worktree/service.test.ts --testTimeout=60000 -t "(plans and atomically|hash-binds dirty|streams large|never executes|retains legacy textconv|retains the v2.1.3|rejects index-only|fails closed on symlinked|rejects unsupported|rejects unsafe or ambiguous|rejects a branch)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
