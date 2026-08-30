@@ -242,7 +242,7 @@ harness-automation worktree close \
   --accepted-commit <sha>
 ```
 
-这些命令输出的计划都通过统一 `apply --plan ... --approve <sha256>` 执行。`adopt` 只为 manifest 中已经注册的 worktree 批量创建租约；它接受并哈希锁定 dirty 内容，但不 add/remove worktree、不切换 branch、不改 HEAD/index/工作区文件。任一项漂移或失败都会在写入前停止，或只补偿本次新建租约。`status`、`audit`、保留期审计和 planning 创建零个 worktree。仓库中的 `.harness/worktree-delivery.json` 只保存可移植策略，包括唯一 management checkout 的分支选择器；允许根和保护根写入 Git common dir 的本机绑定。配置计划哈希同时覆盖两者，新机器必须批准自己的本机绑定。
+这些命令输出的计划都通过统一 `apply --plan ... --approve <sha256>` 执行。新项目默认 2 个持久 worktree、72 小时租约和短生命周期分支：`close` 必须先得到确定性合并证据，再用 SHA compare-and-swap 删除精确的本地与 upstream 功能分支。1 天只读审计会捕捉因任何原因残留的陈旧功能分支并排除 management branch，它不是正常保留期；存量显式配置保持不变。`adopt` 只为 manifest 中已经注册的 worktree 批量创建租约；它接受并哈希锁定 dirty 内容，但不 add/remove worktree、不切换 branch、不改 HEAD/index/工作区文件。任一项漂移或失败都会在写入前停止，或只补偿本次新建租约。`status`、`audit`、保留期审计和 planning 创建零个 worktree。仓库中的 `.harness/worktree-delivery.json` 只保存可移植策略，包括唯一 management checkout 的分支选择器；允许根和保护根写入 Git common dir 的本机绑定。配置计划哈希同时覆盖两者，新机器必须批准自己的本机绑定。
 
 临时 Review 使用 detached HEAD、OS 临时目录且不创建本地 branch：
 
@@ -250,7 +250,7 @@ harness-automation worktree close \
 harness-automation worktree review --project . --commit <sha> -- npm test
 ```
 
-clean checkout 会立即回收；产生未提交内容时返回 `blocked`，保留精确路径、文件大小、SHA-256、binary patch 摘要和耐久回执。远端 branch 默认只审计，永不自动删除。
+clean Review checkout 会立即回收；产生未提交内容时返回 `blocked`，保留精确路径、文件大小、SHA-256、binary patch 摘要和耐久回执。Harness 不会自动 merge；外部完成 merge 后，普通 merge 使用 ancestry 证明，GitHub squash merge 使用精确的 merged PR head/base/SHA 证明，再清理分支。
 
 ## 新会话接力
 

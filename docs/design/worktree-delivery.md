@@ -180,11 +180,20 @@ Close planning requires:
 - a matching path and branch;
 - a clean worktree;
 - an Accepted Commit equal to current HEAD;
-- at least one remote ref containing that commit.
+- for compatibility mode, at least one remote ref containing that commit;
+- for the new default, a current management branch, an exact feature ref, and
+  deterministic merge proof.
 
 Apply rechecks every precondition, removes the exact worktree without force,
-and removes its lease. Local and remote branches remain. Rollback can recreate
-the worktree only while its branch still points to the recorded commit.
+and removes its lease. New configurations then delete the exact local ref by
+old-SHA compare-and-swap and the exact remote ref by `--force-with-lease`.
+Ordinary merge proof is ancestry; GitHub squash merge proof binds one merged PR
+to the configured repository, feature branch/head SHA, and management base.
+Harness does not merge, rebase, or push content. Existing explicit
+`remoteBranchDeletion: false` configurations preserve both refs and retain the
+legacy rollback behavior. A successful close that deleted refs is not
+automatically rollbackable because remote restoration would be a new external
+mutation.
 
 ### Review
 
@@ -261,7 +270,8 @@ real local audit and fail when it does not pass.
   worktrees;
 - Review is detached, temporary, branchless, and serialized;
 - all mutation targets are canonical absolute paths;
-- remote branch deletion is always disabled;
+- new projects delete only exactly proved merged feature branches; existing
+  explicit branch-preservation settings remain unchanged;
 - no operation uses `rm -rf`, `reset --hard`, worktree force removal,
   `branch -D`, or `git clean -f/-x`;
 - apply is locked, drift-checked, and idempotent;
@@ -289,7 +299,8 @@ configure plan before relying on detached Review audit.
 
 - a hosted control plane or background daemon;
 - embedded credentials;
-- automatic remote branch deletion;
+- automatic merge, rebase, or deletion without deterministic merge evidence
+  and exact-SHA approval;
 - force cleanup;
 - automatic legal or asset disposition;
 - hard-coding one repository, Project, game engine, or coding agent;

@@ -89,6 +89,35 @@ if (graphql) {
   process.env.PATH = `${bin}${delimiter}${originalPath ?? ""}`;
 }
 
+function installMergedPullRequestGh(): void {
+  const bin = mkdtempSync(join(tmpdir(), "harness-close-gh-"));
+  repositories.push(bin);
+  const script = `const endpoint = process.argv[process.argv.length - 1];
+if (endpoint.includes("/issues/")) {
+  process.stdout.write(JSON.stringify({ state: "open", html_url: "https://github.com/example/project/issues/52" }));
+} else if (endpoint.includes("/pulls?")) {
+  process.stdout.write(JSON.stringify([{
+    number: 99,
+    merged_at: "2026-01-01T00:00:00Z",
+    head: { ref: process.env.HARNESS_TEST_GH_HEAD_REF, sha: process.env.HARNESS_TEST_GH_HEAD_SHA,
+      repo: { full_name: "example/project" } },
+    base: { ref: "main", repo: { full_name: "example/project" } }
+  }]));
+} else {
+  process.exit(2);
+}
+`;
+  if (process.platform === "win32") {
+    writeFileSync(join(bin, "gh.js"), script, "utf8");
+    writeFileSync(join(bin, "gh.cmd"), "@node \"%~dp0gh.js\" %*\r\n", "utf8");
+  } else {
+    const executable = join(bin, "gh");
+    writeFileSync(executable, `#!/usr/bin/env node\n${script}`, "utf8");
+    chmodSync(executable, 0o755);
+  }
+  process.env.PATH = `${bin}${delimiter}${originalPath ?? ""}`;
+}
+
 function installAiReviewer(): void {
   const bin = mkdtempSync(join(tmpdir(), "harness-ai-reviewer-"));
   repositories.push(bin);
@@ -152,6 +181,25 @@ function repositoryWithRemote(): string {
   return root;
 }
 
+function useFakeGitHubSshRemote(root: string, repository: string): void {
+  const transport = git(root, "config", "--get", "remote.origin.url");
+  const directory = mkdtempSync(join(tmpdir(), "harness-github-ssh-"));
+  repositories.push(directory);
+  const script = join(directory, "ssh.cjs");
+  writeFileSync(script, `const { spawnSync } = require("node:child_process");
+const command = process.argv[process.argv.length - 1] || "";
+const program = command.startsWith("git-upload-pack") ? "git-upload-pack" :
+  command.startsWith("git-receive-pack") ? "git-receive-pack" : null;
+if (!program) process.exit(2);
+const result = spawnSync(program, [process.env.HARNESS_TEST_GITHUB_REMOTE], { stdio: "inherit" });
+process.exit(result.status ?? 2);
+`, "utf8");
+  process.env.HARNESS_TEST_GITHUB_REMOTE = transport;
+  process.env.GIT_SSH_VARIANT = "ssh";
+  process.env.GIT_SSH_COMMAND = `"${process.execPath.replaceAll("\\", "/")}" "${script.replaceAll("\\", "/")}"`;
+  git(root, "config", "remote.origin.url", `git@github.com:${repository}.git`);
+}
+
 function containerRepository(): { container: string; main: string; worktrees: string } {
   const container = mkdtempSync(join(tmpdir(), "harness-container-"));
   repositories.push(container);
@@ -187,6 +235,7 @@ function configure(
     projectRoot: root,
     mode: "enforced",
     allowedRoots: [join(root, "..")],
+    remoteBranchDeletion: false,
     ...overrides,
   });
   return applyWorkspacePlan({
@@ -209,13 +258,18 @@ function delegatedApproval(
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
   process.env.PATH = originalPath;
   delete process.env.HARNESS_TEST_GH_STATUS;
   delete process.env.HARNESS_TEST_GH_PROJECT_MISSING;
   delete process.env.HARNESS_TEST_GH_ISSUE_STATE;
   delete process.env.HARNESS_TEST_GH_COUNT_FILE;
   delete process.env.HARNESS_TEST_GH_FAIL_AFTER;
+  delete process.env.HARNESS_TEST_GH_HEAD_REF;
+  delete process.env.HARNESS_TEST_GH_HEAD_SHA;
+  delete process.env.HARNESS_TEST_GITHUB_REMOTE;
+  delete process.env.GIT_SSH_COMMAND;
+  delete process.env.GIT_SSH_VARIANT;
   delete process.env.HARNESS_TEST_AI_INPUT_FILE;
   delete process.env.HARNESS_TEST_AI_DRIFT_PATH;
   delete process.env.HARNESS_TEST_AI_INVALID;
@@ -223,6 +277,7 @@ afterEach(() => {
   delete process.env.HARNESS_TEST_AI_REASON;
   delete process.env.HARNESS_TEST_AI_SUMMARY;
   for (const root of repositories.splice(0)) rmSync(root, { recursive: true, force: true });
+  await new Promise<void>((resolve) => setImmediate(resolve));
 });
 
 describe("portable worktree inventory", () => {
@@ -416,7 +471,7 @@ describe("portable worktree inventory", () => {
       ["remoteBranchRetentionDays", { remoteBranchRetentionDays: 0 }],
       ["allowedRoots", { allowedRoots: "not-an-array" }],
       ["protectedRoots", { protectedRoots: [1] }],
-      ["remoteBranchDeletion", { remoteBranchDeletion: true }],
+      ["remoteBranchDeletion", { remoteBranchDeletion: "yes" }],
       ["provider", { provider: undefined }],
       ["provider.kind", { provider: { kind: "unknown" } }],
     ];
@@ -435,12 +490,37 @@ describe("portable worktree inventory", () => {
     })).toThrow(/WORKTREE_CONFIG_INVALID/);
     expect(() => planWorkspaceConfiguration({
       projectRoot: root,
+      remoteBranchDeletion: false,
       allowedRoots: [],
     })).toThrow(/WORKTREE_HOST_BINDING_INVALID/);
     expect(() => planWorkspaceConfiguration({
       projectRoot: root,
       provider: { kind: "github" },
     })).toThrow(/WORKTREE_CONFIG_INVALID/);
+  });
+
+  it("defaults new projects to immediate merged-branch cleanup while preserving explicit legacy settings", () => {
+    const root = repository();
+    expect(workspaceStatus(root).config).toMatchObject({
+      remoteBranchRetentionDays: 1,
+      remoteBranchDeletion: true,
+    });
+
+    configure(root, {
+      remoteBranchRetentionDays: 14,
+      remoteBranchDeletion: false,
+    });
+    expect(workspaceStatus(root).config).toMatchObject({
+      remoteBranchRetentionDays: 14,
+      remoteBranchDeletion: false,
+    });
+
+    const unconfigured = repository();
+    expect(() => planWorkspaceConfiguration({
+      projectRoot: unconfigured,
+      mode: "enforced",
+      allowedRoots: [join(unconfigured, "..")],
+    })).toThrow(/WORKTREE_MANAGEMENT_BRANCH_REQUIRED/);
   });
 
   it("reports mapping, protected-root, capacity, dirty, and unique-commit findings", () => {
@@ -502,12 +582,14 @@ describe("hash-approved worktree lifecycle", () => {
     const configured = planWorkspaceConfiguration({
       projectRoot: root,
       mode: "enforced",
+      managementBranch: "main",
       allowedRoots: [allowedRoot],
       now: new Date("2026-01-01T00:00:00.000Z"),
     });
     const otherHost = planWorkspaceConfiguration({
       projectRoot: root,
       mode: "enforced",
+      managementBranch: "main",
       allowedRoots: [join(allowedRoot, "other-host")],
       now: new Date("2026-01-01T00:00:00.000Z"),
     });
@@ -1018,6 +1100,7 @@ describe("hash-approved worktree lifecycle", () => {
     const configured = planWorkspaceConfiguration({
       projectRoot: root,
       mode: "enforced",
+      managementBranch: "main",
       allowedRoots: [join(root, "..")],
     });
     applyWorkspacePlan({
@@ -1245,6 +1328,7 @@ describe("hash-approved worktree lifecycle", () => {
     const configured = planWorkspaceConfiguration({
       projectRoot: root,
       mode: "enforced",
+      managementBranch: "main",
       allowedRoots: [join(root, "..")],
     });
     applyWorkspacePlan({
@@ -1326,6 +1410,7 @@ describe("hash-approved worktree lifecycle", () => {
       projectRoot: root,
       mode: "enforced",
       allowedRoots: [parent],
+      remoteBranchDeletion: false,
       now: new Date("2026-01-01T00:00:00.000Z"),
     });
     expect(() => applyWorkspacePlan({
@@ -1395,6 +1480,420 @@ describe("hash-approved worktree lifecycle", () => {
     })).toEqual(rolledBack);
 
     git(root, "worktree", "remove", worktreePath);
+  });
+
+  it("deletes merged local and remote branches with exact-SHA close cleanup", () => {
+    const root = repositoryWithRemote();
+    const worktreePath = `${root}-merged-cleanup`;
+    repositories.push(worktreePath);
+    configure(root, { managementBranch: "main", remoteBranchDeletion: true });
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#52",
+      branch: "issue-52-cleanup",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    writeFileSync(join(worktreePath, "cleanup.txt"), "merged\n", "utf8");
+    git(worktreePath, "add", "cleanup.txt");
+    git(worktreePath, "commit", "-m", "feat: merged cleanup fixture");
+    git(worktreePath, "push", "-u", "origin", "issue-52-cleanup");
+    const head = git(worktreePath, "rev-parse", "HEAD");
+    git(root, "merge", "--no-ff", "issue-52-cleanup", "-m", "merge: cleanup fixture");
+    git(root, "push", "origin", "main");
+
+    const closed = planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#52",
+      acceptedCommit: head,
+    });
+    const receipt = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: closed.path,
+      approval: closed.plan.planHash,
+    });
+
+    expect(git(root, "branch", "--list", "issue-52-cleanup")).toBe("");
+    expect(git(root, "ls-remote", "--heads", "origin", "refs/heads/issue-52-cleanup")).toBe("");
+    expect(receipt.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "delete-local-branch", status: "applied" }),
+      expect.objectContaining({ id: "delete-remote-branch", status: "applied" }),
+    ]));
+    expect(() => rollbackWorkspaceChange({
+      projectRoot: root,
+      changeId: receipt.id,
+    })).toThrow(/WORKSPACE_ROLLBACK_UNAVAILABLE.*branch cleanup/i);
+  });
+
+  it("blocks cleanup for an unmerged branch instead of accumulating a closed branch", () => {
+    const root = repositoryWithRemote();
+    const worktreePath = `${root}-unmerged-cleanup`;
+    repositories.push(worktreePath);
+    configure(root, { managementBranch: "main", remoteBranchDeletion: true });
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#53",
+      branch: "issue-53-unmerged",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    writeFileSync(join(worktreePath, "unmerged.txt"), "unmerged\n", "utf8");
+    git(worktreePath, "add", "unmerged.txt");
+    git(worktreePath, "commit", "-m", "feat: unmerged fixture");
+    git(worktreePath, "push", "-u", "origin", "issue-53-unmerged");
+
+    expect(() => planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#53",
+      acceptedCommit: git(worktreePath, "rev-parse", "HEAD"),
+    })).toThrow(/BRANCH_NOT_MERGED/);
+    expect(git(root, "branch", "--list", "issue-53-unmerged")).not.toBe("");
+    expect(git(root, "ls-remote", "--heads", "origin", "refs/heads/issue-53-unmerged")).not.toBe("");
+  });
+
+  it("fails closed when the remote feature ref moves after close planning", () => {
+    const root = repositoryWithRemote();
+    const worktreePath = `${root}-cleanup-race`;
+    repositories.push(worktreePath);
+    configure(root, { managementBranch: "main", remoteBranchDeletion: true });
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#54",
+      branch: "issue-54-race",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    writeFileSync(join(worktreePath, "race.txt"), "merged\n", "utf8");
+    git(worktreePath, "add", "race.txt");
+    git(worktreePath, "commit", "-m", "feat: cleanup race fixture");
+    git(worktreePath, "push", "-u", "origin", "issue-54-race");
+    const head = git(worktreePath, "rev-parse", "HEAD");
+    git(root, "merge", "--no-ff", "issue-54-race", "-m", "merge: cleanup race fixture");
+    git(root, "push", "origin", "main");
+    const closed = planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#54",
+      acceptedCommit: head,
+    });
+    const remote = git(root, "remote", "get-url", "origin");
+    git(remote, "update-ref", "refs/heads/issue-54-race", git(root, "rev-parse", "main"));
+
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: closed.path,
+      approval: closed.plan.planHash,
+    })).toThrow(/REMOTE_BRANCH_DRIFT|branch cleanup evidence changed/);
+    expect(existsSync(worktreePath)).toBe(true);
+    expect(git(root, "branch", "--list", "issue-54-race")).not.toBe("");
+    expect(git(root, "ls-remote", "--heads", "origin", "refs/heads/issue-54-race"))
+      .toContain(git(root, "rev-parse", "main"));
+  });
+
+  it("restores the local worktree and lease when the remote rejects branch deletion", () => {
+    const root = repositoryWithRemote();
+    const worktreePath = `${root}-cleanup-compensation`;
+    repositories.push(worktreePath);
+    configure(root, { managementBranch: "main", remoteBranchDeletion: true });
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#55",
+      branch: "issue-55-compensate",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    writeFileSync(join(worktreePath, "compensate.txt"), "merged\n", "utf8");
+    git(worktreePath, "add", "compensate.txt");
+    git(worktreePath, "commit", "-m", "feat: cleanup compensation fixture");
+    git(worktreePath, "push", "-u", "origin", "issue-55-compensate");
+    const head = git(worktreePath, "rev-parse", "HEAD");
+    git(root, "merge", "--no-ff", "issue-55-compensate", "-m", "merge: compensation fixture");
+    git(root, "push", "origin", "main");
+    const closed = planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#55",
+      acceptedCommit: head,
+    });
+    const remote = git(root, "remote", "get-url", "origin");
+    git(remote, "config", "receive.denyDeletes", "true");
+
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: closed.path,
+      approval: closed.plan.planHash,
+    })).toThrow(/REMOTE_BRANCH_DELETE_FAILED/);
+    expect(existsSync(worktreePath)).toBe(true);
+    expect(git(root, "branch", "--list", "issue-55-compensate")).not.toBe("");
+    expect(workspaceStatus(root).leases).toEqual([
+      expect.objectContaining({ workItem: "github:example/project#55", acceptedCommit: head }),
+    ]);
+    expect(git(root, "ls-remote", "--heads", "origin", "refs/heads/issue-55-compensate"))
+      .toContain(head);
+  });
+
+  it("does not fake compensation when the remote delete succeeds but the client reports failure", () => {
+    const root = repositoryWithRemote();
+    const worktreePath = `${root}-cleanup-uncertain`;
+    repositories.push(worktreePath);
+    configure(root, { managementBranch: "main", remoteBranchDeletion: true });
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#58",
+      branch: "issue-58-uncertain",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    writeFileSync(join(worktreePath, "uncertain.txt"), "merged\n", "utf8");
+    git(worktreePath, "add", "uncertain.txt");
+    git(worktreePath, "commit", "-m", "feat: uncertain cleanup fixture");
+    git(worktreePath, "push", "-u", "origin", "issue-58-uncertain");
+    const head = git(worktreePath, "rev-parse", "HEAD");
+    git(root, "merge", "--no-ff", "issue-58-uncertain", "-m", "merge: uncertain cleanup fixture");
+    git(root, "push", "origin", "main");
+    const closed = planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#58",
+      acceptedCommit: head,
+    });
+
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: closed.path,
+      approval: closed.plan.planHash,
+      testFailRemoteDeleteAfterPush: true,
+    })).toThrow(/WORKTREE_CLOSE_RECOVERY_REQUIRED/);
+    expect(existsSync(worktreePath)).toBe(false);
+    expect(git(root, "branch", "--list", "issue-58-uncertain")).toBe("");
+    expect(workspaceStatus(root).leases).toEqual([]);
+    expect(git(root, "ls-remote", "--heads", "origin", "refs/heads/issue-58-uncertain")).toBe("");
+  });
+
+  it("deletes only the exact upstream ref when local and remote branch names differ", () => {
+    const root = repositoryWithRemote();
+    const worktreePath = `${root}-exact-upstream`;
+    repositories.push(worktreePath);
+    configure(root, { managementBranch: "main", remoteBranchDeletion: true });
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#56",
+      branch: "issue-56-local",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    writeFileSync(join(worktreePath, "upstream.txt"), "merged\n", "utf8");
+    git(worktreePath, "add", "upstream.txt");
+    git(worktreePath, "commit", "-m", "feat: exact upstream fixture");
+    git(worktreePath, "push", "-u", "origin", "HEAD:refs/heads/issue-56-upstream");
+    git(worktreePath, "push", "origin", "HEAD:refs/heads/issue-56-local");
+    const head = git(worktreePath, "rev-parse", "HEAD");
+    git(root, "merge", "--no-ff", "issue-56-local", "-m", "merge: exact upstream fixture");
+    git(root, "push", "origin", "main");
+    const closed = planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#56",
+      acceptedCommit: head,
+    });
+    expect(closed.plan.operation).toMatchObject({
+      kind: "close",
+      branchCleanup: { remote: { name: "origin", ref: "refs/heads/issue-56-upstream" } },
+    });
+
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: closed.path,
+      approval: closed.plan.planHash,
+    });
+    expect(git(root, "ls-remote", "--heads", "origin", "refs/heads/issue-56-upstream")).toBe("");
+    expect(git(root, "ls-remote", "--heads", "origin", "refs/heads/issue-56-local"))
+      .toContain(head);
+  });
+
+  it("blocks every close when ignored content would be removed with the worktree", () => {
+    const root = repositoryWithRemote();
+    const worktreePath = `${root}-ignored-close`;
+    repositories.push(worktreePath);
+    configure(root, { managementBranch: "main" });
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#57",
+      branch: "issue-57-ignored",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    git(worktreePath, "push", "-u", "origin", "issue-57-ignored");
+    writeFileSync(join(root, ".git", "info", "exclude"), "valuable.cache\n", "utf8");
+    writeFileSync(join(worktreePath, "valuable.cache"), "keep me\n", "utf8");
+
+    expect(() => planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#57",
+      acceptedCommit: git(worktreePath, "rev-parse", "HEAD"),
+    })).toThrow(/WORKTREE_IGNORED_CONTENT.*valuable\.cache/);
+    expect(existsSync(join(worktreePath, "valuable.cache"))).toBe(true);
+  });
+
+  it("accepts exact GitHub squash-merge evidence before deleting the feature branch", () => {
+    installMergedPullRequestGh();
+    const root = repositoryWithRemote();
+    useFakeGitHubSshRemote(root, "example/project");
+    git(root, "config", "url.git@github.com:.insteadOf", "harness-github:");
+    git(root, "config", "remote.origin.url", "harness-github:example/project.git");
+    const worktreePath = `${root}-squash-cleanup`;
+    repositories.push(worktreePath);
+    configure(root, {
+      managementBranch: "main",
+      remoteBranchDeletion: true,
+      provider: { kind: "github", repository: "example/project" },
+    });
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#52",
+      branch: "issue-52-squash-local",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    writeFileSync(join(worktreePath, "squash.txt"), "squashed\n", "utf8");
+    git(worktreePath, "add", "squash.txt");
+    git(worktreePath, "commit", "-m", "feat: squash fixture");
+    git(worktreePath, "push", "-u", "origin", "HEAD:refs/heads/issue-52-squash-upstream");
+    const head = git(worktreePath, "rev-parse", "HEAD");
+    process.env.HARNESS_TEST_GH_HEAD_REF = "issue-52-squash-upstream";
+    process.env.HARNESS_TEST_GH_HEAD_SHA = head;
+    writeFileSync(join(root, "squash.txt"), "squashed\n", "utf8");
+    git(root, "add", "squash.txt");
+    git(root, "commit", "-m", "feat: squash merged result");
+    git(root, "push", "origin", "main");
+
+    const closed = planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#52",
+      acceptedCommit: head,
+    });
+    const transport = process.env.HARNESS_TEST_GITHUB_REMOTE!;
+    git(root, "config", `url.${transport}.insteadOf`, "git@github.com:");
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: closed.path,
+      approval: closed.plan.planHash,
+    })).toThrow(/REMOTE_PUSH_ENDPOINT_UNSTABLE/);
+    git(root, "config", "--unset-all", `url.${transport}.insteadOf`);
+    const retry = planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#52",
+      acceptedCommit: head,
+      now: new Date(Date.now() + 1_000),
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: retry.path,
+      approval: retry.plan.planHash,
+    });
+
+    expect(git(root, "branch", "--list", "issue-52-squash-local")).toBe("");
+    expect(git(root, "ls-remote", "--heads", "origin", "refs/heads/issue-52-squash-upstream")).toBe("");
+  });
+
+  it("rejects GitHub squash proof when the upstream remote is another repository", () => {
+    installMergedPullRequestGh();
+    const root = repositoryWithRemote();
+    const worktreePath = `${root}-squash-repository-mismatch`;
+    repositories.push(worktreePath);
+    configure(root, {
+      managementBranch: "main",
+      remoteBranchDeletion: true,
+      provider: { kind: "github", repository: "example/project" },
+    });
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#59",
+      branch: "issue-59-squash",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    writeFileSync(join(worktreePath, "mismatch.txt"), "squashed\n", "utf8");
+    git(worktreePath, "add", "mismatch.txt");
+    git(worktreePath, "commit", "-m", "feat: mismatched squash fixture");
+    git(worktreePath, "push", "-u", "origin", "issue-59-squash");
+    const head = git(worktreePath, "rev-parse", "HEAD");
+    process.env.HARNESS_TEST_GH_HEAD_REF = "issue-59-squash";
+    process.env.HARNESS_TEST_GH_HEAD_SHA = head;
+    writeFileSync(join(root, "mismatch.txt"), "squashed\n", "utf8");
+    git(root, "add", "mismatch.txt");
+    git(root, "commit", "-m", "feat: mismatched squash result");
+    git(root, "push", "origin", "main");
+
+    const transport = git(root, "config", "--get", "remote.origin.url");
+    const githubUrl = "https://github.com/example/project.git";
+    git(root, "config", "remote.origin.url", githubUrl);
+    git(root, "config", "remote.origin.pushurl", transport);
+
+    expect(() => planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#59",
+      acceptedCommit: head,
+    })).toThrow(/GITHUB_REMOTE_REPOSITORY_MISMATCH/);
+
+    git(root, "config", "--unset-all", "remote.origin.pushurl");
+    git(root, "config", `url.${transport}.insteadOf`, githubUrl);
+    expect(() => planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#59",
+      acceptedCommit: head,
+    })).toThrow(/GITHUB_REMOTE_REPOSITORY_MISMATCH/);
+
+    git(root, "config", "--unset-all", `url.${transport}.insteadOf`);
+    git(root, "config", "remote.origin.url", "harness-chain:example/project.git");
+    git(root, "config", "url.git@github.com:.insteadOf", "harness-chain:");
+    git(root, "config", `url.${transport}.insteadOf`, "git@github.com:");
+    expect(() => planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#59",
+      acceptedCommit: head,
+    })).toThrow(/REMOTE_PUSH_ENDPOINT_UNSTABLE/);
   });
 
   it("writes an applied close receipt when invoked from the worktree being removed", () => {
@@ -1691,7 +2190,9 @@ describe("hash-approved worktree lifecycle", () => {
     const configured = planWorkspaceConfiguration({
       projectRoot: root,
       mode: "enforced",
+      managementBranch: "main",
       allowedRoots: [join(root, "..")],
+      remoteBranchDeletion: false,
     });
     applyWorkspacePlan({
       projectRoot: root,
@@ -1785,6 +2286,7 @@ describe("hash-approved worktree lifecycle", () => {
     const configured = planWorkspaceConfiguration({
       projectRoot: root,
       mode: "enforced",
+      managementBranch: "main",
       allowedRoots: [join(root, "..")],
     });
     const commonDir = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir");
@@ -1985,6 +2487,7 @@ describe("hash-approved worktree lifecycle", () => {
     const configured = planWorkspaceConfiguration({
       projectRoot: root,
       mode: "enforced",
+      managementBranch: "main",
       allowedRoots: [join(root, "..")],
     });
     const planFile = join(root, configured.path);
@@ -3034,6 +3537,27 @@ process.stdout.write(fs.readFileSync(process.argv[2]));
 });
 
 describe("temporary review and retention", () => {
+  it("audits stale feature branches after one day while excluding the management branch", () => {
+    const root = repositoryWithRemote();
+    configure(root, {
+      managementBranch: "main",
+      remoteBranchDeletion: true,
+      remoteBranchRetentionDays: 1,
+    });
+    git(root, "push", "origin", "main:refs/heads/stale-feature");
+    git(root, "update-ref", "refs/remotes/origin/stale-feature", git(root, "rev-parse", "main"));
+    git(root, "update-ref", "refs/remotes/origin/releases/main", git(root, "rev-parse", "main"));
+
+    const audit = retentionAuditWorkspace({
+      projectRoot: root,
+      now: new Date("2030-01-01T00:00:00.000Z"),
+    });
+
+    expect(audit.remoteBranches.map((branch) => branch.ref)).toContain("refs/remotes/origin/stale-feature");
+    expect(audit.remoteBranches.map((branch) => branch.ref)).toContain("refs/remotes/origin/releases/main");
+    expect(audit.remoteBranches.map((branch) => branch.ref)).not.toContain("refs/remotes/origin/main");
+  });
+
   it("does not query the configured provider", () => {
     if (process.platform === "win32") return;
     const root = repository();
@@ -3154,7 +3678,7 @@ describe("temporary review and retention", () => {
     expect(audit.staleReviews).toEqual([
       expect.objectContaining({ id: receipt.id, path: receipt.path, status: "blocked" }),
     ]);
-    expect(audit.remoteDeletionEnabled).toBe(false);
+    expect(audit.remoteDeletionEnabled).toBe(true);
 
     rmSync(join(receipt.path, "valuable.txt"));
     git(root, "worktree", "remove", receipt.path);
@@ -3214,6 +3738,7 @@ describe("temporary review and retention", () => {
     const configured = planWorkspaceConfiguration({
       projectRoot: root,
       mode: "enforced",
+      managementBranch: "main",
       allowedRoots: [join(root, "..")],
       provider: { kind: "gitlab", repository: "example/project" },
     });

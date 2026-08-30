@@ -27,7 +27,7 @@
 - `workspace.zero-new-worktree-management`
 - `workspace.cleanup-exact-hash`
 - `workspace.cleanup-receipt`
-- `workspace.remote-delete-disabled`
+- `workspace.remote-delete-disabled`（兼容保留的旧 ID；detail 报告当前 cleanup 模式）
 
 交付前的 `worktree integration-check` 是只读证据：它以工具自建临时
 `GIT_OBJECT_DIRECTORY` 和项目 common object directory 的 alternates 运行原生
@@ -41,7 +41,15 @@ unresolved conflict、unpushed、预测 conflict 和映射漂移均不得由 AI 
 - 是否继续保留长期调试环境；
 - Accepted Commit 的业务验收含义；
 - 内容许可证和 AI 生成资产的最终法律判断；
-- 远端 branch 是否应在保留期后删除。
+- 无法得到确定性合并证据时是否人工保留或恢复 branch。
+
+## 短生命周期分支
+
+- 新配置默认 `remoteBranchDeletion: true`、陈旧功能分支审计为 1 天；存量显式值不变。
+- close 不执行 merge/rebase，只接受已经发生的 merge。普通 merge 以 Accepted SHA 是当前本地/远端 management head 的祖先为证据；GitHub squash merge 绑定 exact repository、head branch/SHA、base branch 和 merged PR。实际 resolved push endpoint 必须唯一、哈希绑定且属于同一 repository，禁止 `pushurl` 或 URL rewrite 改写删除目标。
+- 本地删除使用 `git update-ref -d <ref> <old-sha>`；远端观察和删除使用同一个 resolved endpoint 与 exact `--force-with-lease=<ref>:<old-sha>`。任一 ref/endpoint 漂移、远端歧义或证据不可用都在删除前 fail closed；删除结果不确定时返回 `WORKTREE_CLOSE_RECOVERY_REQUIRED`，不得伪补偿。
+- `retention-audit` 永远只读并排除 management branch；1 天用于捕捉任何残留功能分支，不是合并后保留期。
+- 已删除 ref 的 close 不自动 rollback，避免把未恢复远端的状态伪装成完整回滚。
 
 ## Provider
 

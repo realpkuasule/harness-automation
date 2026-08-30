@@ -66,7 +66,7 @@ export interface WorktreeDeliveryConfig {
   leaseTtlHours: number;
   reviewTtlMinutes: number;
   remoteBranchRetentionDays: number;
-  remoteBranchDeletion: false;
+  remoteBranchDeletion: boolean;
   provider: {
     kind: "none" | "github" | "gitlab" | "jira";
     repository?: string;
@@ -107,6 +107,24 @@ export interface WorkspaceLease {
   createdAt: string;
   heartbeatAt: string;
   status: "active" | "review" | "done";
+}
+
+export interface WorkspaceBranchCleanup {
+  branch: string;
+  localRef: string;
+  expectedHead: string;
+  branchConfig: Array<{ key: string; value: string }>;
+  managementBranch: string;
+  managementHead: string;
+  proof:
+    | { kind: "ancestry" }
+    | { kind: "github-pr"; number: number; mergedAt: string };
+  remote: {
+    name: string;
+    ref: string;
+    expectedHead: string | null;
+    endpointHash: string;
+  };
 }
 
 export interface WorkspaceAdoptionInput {
@@ -341,6 +359,9 @@ export type WorkspaceOperation =
       lease: WorkspaceLease;
       expectedHead: string;
       expectedLeaseHash: string;
+      ignoredPathCount?: number;
+      ignoredPathsHash?: string;
+      branchCleanup?: WorkspaceBranchCleanup;
     }
   | {
       kind: "rebind";
@@ -470,7 +491,7 @@ export interface RetentionAudit {
   checkedAt: string;
   reviewTtlMinutes: number;
   remoteBranchRetentionDays: number;
-  remoteDeletionEnabled: false;
+  remoteDeletionEnabled: boolean;
   staleReviews: ReviewReceipt[];
   staleLeases: Array<WorkspaceLease & { ageHours: number }>;
   staleLocks: Array<{ path: string; ageMinutes: number }>;
