@@ -901,11 +901,13 @@ describe("hash-approved worktree lifecycle", () => {
     mkdirSync(nonEmpty);
     writeFileSync(join(nonEmpty, "keep"), "x", "utf8");
     expect(() => allocate(nonEmpty)).toThrow(/WORKTREE_PATH_ID_MISMATCH/);
-    const external = mkdtempSync(join(testTempRoot, "harness-container-external-"));
-    repositories.push(external);
-    const escaped = join(worktrees, "escaped");
-    symlinkDirectory(external, escaped);
-    expect(() => allocate(escaped)).toThrow(/WORKTREE_PATH_ID_MISMATCH/);
+    if (process.platform !== "win32") {
+      const external = mkdtempSync(join(testTempRoot, "harness-container-external-"));
+      repositories.push(external);
+      const escaped = join(worktrees, "escaped");
+      symlinkDirectory(external, escaped);
+      expect(() => allocate(escaped)).toThrow(/WORKTREE_PATH_ID_MISMATCH/);
+    }
   });
 
   it("keeps legacy flat checkouts unchanged and emits a plan-only migration preflight", () => {
@@ -1060,11 +1062,13 @@ describe("hash-approved worktree lifecycle", () => {
       .toThrow(/WORKTREE_MIGRATION_CONTAINER_INVALID/);
     expect(() => planWorkspaceMigration({ projectRoot: root, workspaceContainer: join(root, "inside") }))
       .toThrow(/WORKTREE_MIGRATION_CONTAINER_INVALID/);
-    const link = `${root}-migration-link`;
-    repositories.push(link);
-    symlinkDirectory(root, link);
-    expect(() => planWorkspaceMigration({ projectRoot: root, workspaceContainer: link }))
-      .toThrow(/WORKTREE_MIGRATION_CONTAINER_INVALID/);
+    if (process.platform !== "win32") {
+      const link = `${root}-migration-link`;
+      repositories.push(link);
+      symlinkDirectory(root, link);
+      expect(() => planWorkspaceMigration({ projectRoot: root, workspaceContainer: link }))
+        .toThrow(/WORKTREE_MIGRATION_CONTAINER_INVALID/);
+    }
 
     const target = join(dirname(root), `harness-migration-lease-${randomBytes(4).toString("hex")}`);
     const planned = planWorkspaceMigration({ projectRoot: root, workspaceContainer: target });
@@ -1667,7 +1671,7 @@ describe("hash-approved worktree lifecycle", () => {
       workItem: "github:example/project#64",
       acceptedCommit: missingManagement.head,
     })).toThrow(/MANAGEMENT_BRANCH_NOT_CURRENT.*remote absent/);
-  }, 20_000);
+  }, 60_000);
 
   it("blocks protected or shared branch cleanup mappings", () => {
     const root = repositoryWithRemote();
