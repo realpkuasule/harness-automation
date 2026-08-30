@@ -99,7 +99,7 @@ jobs:
         run: |
           npx vitest run src/worktree/service.test.ts --testTimeout=20000 -t "portable worktree inventory"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npx vitest run src/worktree/service.test.ts --testTimeout=60000 -t "(separates portable policy|configures a parameterized|allocates only|derives container|reports isolated|blocks predicted|fails closed and retains|rejects nested|keeps legacy flat|moves one exactly|rejects migration hash|rejects legacy migration|keeps a durable|detects host-binding|delegates an allocation|fails closed for denied|closes a merged branch|fails closed on incomplete|blocks protected or shared|fails closed for missing)"
+          npx vitest run src/worktree/service.test.ts --testTimeout=60000 -t "(separates portable policy|configures a parameterized|allocates only|derives container|reports isolated|blocks predicted|fails closed and retains|rejects nested|keeps legacy flat|moves one exactly|rejects migration hash|rejects legacy migration|keeps a durable|detects host-binding|delegates an allocation|fails closed for denied|closes a merged branch|fails closed on incomplete|blocks protected or shared)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npx vitest run src/worktree/service.test.ts --testTimeout=20000 -t "(rechecks workspace|denies destructive|fails closed when enforced|requires an approved|configures, allocates|writes an applied|rebinds|renews|rejects missing|recovers a clean|rejects unsafe recovery|rejects lifecycle drift|fails closed while another|rejects unsafe allocation|queries the pending|requires configured-Project|rejects malformed)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

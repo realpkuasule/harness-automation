@@ -44,9 +44,10 @@ import {
 
 const repositories: string[] = [];
 const originalPath = process.env.PATH;
+const testTempRoot = process.env.RUNNER_TEMP ?? tmpdir();
 
 function installAdoptionGh(): void {
-  const bin = mkdtempSync(join(tmpdir(), "harness-adopt-gh-"));
+  const bin = mkdtempSync(join(testTempRoot, "harness-adopt-gh-"));
   repositories.push(bin);
   const script = `const fs = require("node:fs");
 const graphql = process.argv.includes("graphql");
@@ -90,7 +91,7 @@ if (graphql) {
 }
 
 function installMergedPullRequestGh(): void {
-  const bin = mkdtempSync(join(tmpdir(), "harness-close-gh-"));
+  const bin = mkdtempSync(join(testTempRoot, "harness-close-gh-"));
   repositories.push(bin);
 const script = `const endpoint = process.argv[process.argv.length - 1];
 if (endpoint.includes("/issues/")) {
@@ -133,7 +134,7 @@ if (endpoint.includes("/issues/")) {
 }
 
 function installAiReviewer(): void {
-  const bin = mkdtempSync(join(tmpdir(), "harness-ai-reviewer-"));
+  const bin = mkdtempSync(join(testTempRoot, "harness-ai-reviewer-"));
   repositories.push(bin);
   const script = `const fs = require("node:fs");
 const input = fs.readFileSync(0, "utf8");
@@ -180,7 +181,7 @@ function symlinkDirectory(target: string, path: string): void {
 }
 
 function repository(): string {
-  const root = mkdtempSync(join(tmpdir(), "harness-worktree-"));
+  const root = mkdtempSync(join(testTempRoot, "harness-worktree-"));
   repositories.push(root);
   git(root, "init", "-b", "main");
   writeFileSync(join(root, "README.md"), "# fixture\n", "utf8");
@@ -191,7 +192,7 @@ function repository(): string {
 
 function repositoryWithRemote(): string {
   const root = repository();
-  const remote = mkdtempSync(join(tmpdir(), "harness-worktree-remote-"));
+  const remote = mkdtempSync(join(testTempRoot, "harness-worktree-remote-"));
   repositories.push(remote);
   git(remote, "init", "--bare");
   git(root, "remote", "add", "origin", remote);
@@ -201,7 +202,7 @@ function repositoryWithRemote(): string {
 
 function useFakeGitHubSshRemote(root: string, repository: string): void {
   const transport = git(root, "config", "--get", "remote.origin.url");
-  const directory = mkdtempSync(join(tmpdir(), "harness-github-ssh-"));
+  const directory = mkdtempSync(join(testTempRoot, "harness-github-ssh-"));
   repositories.push(directory);
   const script = join(directory, "ssh.cjs");
   writeFileSync(script, `const { spawnSync } = require("node:child_process");
@@ -219,7 +220,7 @@ process.exit(result.status ?? 2);
 }
 
 function containerRepository(): { container: string; main: string; worktrees: string } {
-  const container = mkdtempSync(join(tmpdir(), "harness-container-"));
+  const container = mkdtempSync(join(testTempRoot, "harness-container-"));
   repositories.push(container);
   const main = join(container, "main");
   mkdirSync(main);
@@ -779,7 +780,7 @@ describe("hash-approved worktree lifecycle", () => {
       owner: "owner",
     });
     applyWorkspacePlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
-    const temporaryRootParent = mkdtempSync(join(tmpdir(), "harness-integration-parent-"));
+    const temporaryRootParent = mkdtempSync(join(testTempRoot, "harness-integration-parent-"));
     repositories.push(temporaryRootParent);
     const before = {
       refs: git(root, "for-each-ref", "--format=%(refname)%00%(objectname)"),
@@ -861,7 +862,7 @@ describe("hash-approved worktree lifecycle", () => {
       owner: "owner",
     });
     applyWorkspacePlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
-    const temporaryRootParent = mkdtempSync(join(tmpdir(), "harness-integration-cleanup-"));
+    const temporaryRootParent = mkdtempSync(join(testTempRoot, "harness-integration-cleanup-"));
     repositories.push(temporaryRootParent);
 
     expect(() => integrationCheckWorkspace({
@@ -3829,7 +3830,7 @@ describe("temporary review and retention", () => {
     });
     const calls = join(root, "provider-count");
     process.env.HARNESS_TEST_GH_COUNT_FILE = calls;
-    const hostStateRoot = mkdtempSync(join(tmpdir(), "harness-host-state-"));
+    const hostStateRoot = mkdtempSync(join(testTempRoot, "harness-host-state-"));
     repositories.push(hostStateRoot);
 
     reviewWorkspace({
@@ -3844,7 +3845,7 @@ describe("temporary review and retention", () => {
 
   it("uses a detached temporary worktree and leaves zero worktrees after a clean review", () => {
     const root = repository();
-    const hostStateRoot = mkdtempSync(join(tmpdir(), "harness-host-state-"));
+    const hostStateRoot = mkdtempSync(join(testTempRoot, "harness-host-state-"));
     repositories.push(hostStateRoot);
     const before = worktreeCount(root);
 
@@ -3869,7 +3870,7 @@ describe("temporary review and retention", () => {
 
   it("rejects an empty review command and records clean command failures", () => {
     const root = repository();
-    const hostStateRoot = mkdtempSync(join(tmpdir(), "harness-host-state-"));
+    const hostStateRoot = mkdtempSync(join(testTempRoot, "harness-host-state-"));
     repositories.push(hostStateRoot);
 
     expect(() => reviewWorkspace({
@@ -3900,7 +3901,7 @@ describe("temporary review and retention", () => {
 
   it("preserves a dirty review checkout and reports it as a stale TTL candidate", () => {
     const root = repository();
-    const hostStateRoot = mkdtempSync(join(tmpdir(), "harness-host-state-"));
+    const hostStateRoot = mkdtempSync(join(testTempRoot, "harness-host-state-"));
     repositories.push(hostStateRoot);
     const receipt = reviewWorkspace({
       projectRoot: root,
@@ -3941,7 +3942,7 @@ describe("temporary review and retention", () => {
   it("audits malformed receipts and expired lifecycle locks without mutating them", () => {
     const root = repository();
     configure(root, { leaseTtlHours: 1, reviewTtlMinutes: 1 });
-    const hostStateRoot = mkdtempSync(join(tmpdir(), "harness-host-state-"));
+    const hostStateRoot = mkdtempSync(join(testTempRoot, "harness-host-state-"));
     repositories.push(hostStateRoot);
     const reviewDirectory = join(hostStateRoot, "reviews");
     mkdirSync(reviewDirectory, { recursive: true });
