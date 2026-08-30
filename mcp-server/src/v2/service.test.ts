@@ -521,6 +521,7 @@ describe("v2 plan/apply/check/rollback", () => {
     const workspacePlan = planWorkspaceConfiguration({
       projectRoot: root,
       mode: "enforced",
+      managementBranch: "main",
       allowedRoots: [join(root, "..")],
     });
     applyPlan({

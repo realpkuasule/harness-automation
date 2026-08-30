@@ -60,7 +60,8 @@ harness-automation worktree configure \
   [--max-persistent 2] \
   [--lease-ttl-hours 72] \
   [--review-ttl-minutes 120] \
-  [--remote-retention-days 14]
+  [--remote-retention-days 1] \
+  [--remote-branch-deletion true|false]
 ```
 
 GitHub Provider example:
@@ -97,7 +98,9 @@ The approved plan writes portable policy to
 `<git-common-dir>/harness/worktree-delivery/host-binding.json`. The plan hash
 covers both. On a new host, run configure again to approve that host's roots;
 omitted portable options preserve the existing repository policy. For a new
-configuration the defaults are 2 persistent worktrees and a 72-hour lease.
+configuration the defaults are 2 persistent worktrees, a 72-hour lease,
+one-day stale feature-branch audit, and merged branch deletion enabled.
+Omitted options preserve explicit existing settings.
 Existing v1 configurations without `managementBranch` retain the legacy
 command-checkout behavior until an approved configure plan adds the selector.
 
@@ -262,8 +265,23 @@ harness-automation worktree close \
   --accepted-commit <sha>
 ```
 
-Close planning fails if HEAD is dirty, differs from Accepted Commit, or has no
-remote reference. Applying the plan preserves local and remote branches.
+Close planning fails if HEAD is dirty or differs from Accepted Commit. With the
+new default enabled, it also requires the local management branch to match its
+remote, the exact feature ref to be unchanged, and deterministic merge proof.
+Ordinary merges use ancestry; GitHub squash merges require one exact merged PR
+whose repository, head branch/SHA, base repository, and base branch all match.
+The resolved push endpoint must be unique, is hash-bound into the plan, and must
+identify that same GitHub repository; `pushurl` and URL rewrites cannot redirect
+observation or deletion to another repository.
+Apply removes the worktree and lease, then deletes the local ref with
+`git update-ref` compare-and-swap and the remote ref with an exact
+`--force-with-lease`. It never performs the merge itself. A missing, ambiguous,
+unmerged, or drifted observation blocks cleanup without deleting either ref.
+If the client cannot determine whether a remote deletion succeeded, the durable
+receipt reports `WORKTREE_CLOSE_RECOVERY_REQUIRED` and automatic compensation
+stops rather than recreating only the local state.
+Explicit existing `remoteBranchDeletion: false` configurations keep the legacy
+branch-preserving close behavior.
 
 ## Drift and check
 
@@ -285,6 +303,8 @@ harness-automation rollback --project . --change <receipt-id>
 
 Configuration rollback restores both the repository policy and host binding;
 configuration and close rollback are refused after observed-state drift.
+Close receipts that deleted branch refs are not automatically rollbackable;
+the receipt retains the accepted SHA for a separate owner-approved recovery.
 Allocation rollback does not remove a potentially valuable worktree; generate
 a new close plan instead.
 

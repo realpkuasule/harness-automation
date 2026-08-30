@@ -2,7 +2,7 @@
 name: manage-worktree-delivery
 description: >
   审计和治理 AI coding 项目的 Git worktree 交付生命周期。用户要求分配或接管 Issue worktree、创建临时 Review
-  环境、检查重复或残留 worktree、关闭已完成 worktree、检查租约/容量/漂移、审计远端分支保留期，或处理
+  环境、检查重复或残留 worktree、关闭已完成 worktree、执行合并后短生命周期分支清理、检查租约/容量/漂移，或处理
   跨 Agent/跨会话 worktree 失控时使用。普通 Git 仓库无需 PRD 即可运行只读 status、audit 和临时 review。
 ---
 
@@ -161,9 +161,9 @@ node <skill目录>/scripts/run.mjs worktree close \
   --accepted-commit <sha>
 ```
 
-关闭计划必须拒绝 dirty worktree、Accepted Commit 不匹配、无远端引用、租约重复和任何计划后漂移。批准后仍使用统一 `apply`。
+关闭计划必须拒绝 dirty worktree、Accepted Commit 不匹配、租约重复和任何计划后漂移。启用默认分支清理时必须配置 management branch。新项目默认要求 management branch 与远端一致，并确定性证明功能 branch 已合并：普通 merge 使用 ancestry；GitHub squash merge 必须精确匹配 configured repository、head branch/SHA 与 base branch 的 merged PR。唯一的 resolved push endpoint 必须哈希绑定到计划并指向同一 repository；`pushurl`、`insteadOf` 或 `pushInsteadOf` 不得把观测和删除重定向到别处。Harness 不得自行 merge 或 rebase。
 
-关闭只移除精确 worktree 和本机租约；保留本地 branch 和远端 branch。
+批准后仍使用统一 `apply`。close 移除精确 worktree 和本机租约，并用 old-SHA compare-and-swap 删除精确本地 ref、用 `--force-with-lease` 删除精确远端 ref。未知、歧义、未合并、branch 移动或 Provider 不可用时必须在删除前停止；远端删除结果无法确认时必须保留 durable receipt、返回 `WORKTREE_CLOSE_RECOVERY_REQUIRED` 且不得伪补偿本地状态。禁止 `branch -D`。存量显式 `remoteBranchDeletion: false` 保持原有保留行为。
 
 ## 保留期与恢复
 
@@ -173,7 +173,7 @@ node <skill目录>/scripts/run.mjs worktree close \
 node <skill目录>/scripts/run.mjs worktree retention-audit --project <项目绝对路径>
 ```
 
-报告超时 Review、陈旧锁和超过保留期的远端 branch。默认永不删除远端 branch。
+报告超时 Review、陈旧锁和超过阈值的远端功能 branch，并排除 management branch。新项目阈值为 1 天，用于捕捉任何原因造成的残留，不是正常分支保留期；`retention-audit` 本身永不删除 branch。
 陈旧 lease、Review、锁或解析错误使 CLI 返回 2；只有旧 remote branch 仍返回 0。不得借此生成/apply plan、续期或删除内容。
 
 需要撤销已应用 change 时使用：
@@ -186,6 +186,7 @@ node <skill目录>/scripts/run.mjs rollback \
 
 rollback 必须验证当前状态仍等于回执记录。已分配并可能承载新工作的 worktree 不通过 rollback 删除，应走新的 `close` 计划。
 接管 rollback 只删除该接管新建且此后未被 close/heartbeat/transfer 等生命周期使用的 lease；它永不删除或重建既有 worktree。
+已成功删除本地或远端 ref 的 close 不支持自动 rollback；根据回执中的 Accepted SHA 恢复 ref 必须另走负责人明确批准的恢复流程。
 
 ## 禁止事项
 
@@ -193,5 +194,5 @@ rollback 必须验证当前状态仍等于回执记录。已分配并可能承�
 - 不运行 `rm -rf`、`git reset --hard`、`git worktree remove --force`、`git branch -D` 或 `git clean -f/-x`。
 - 不用 glob、相对路径或 shell 拼接表达删除目标。
 - 不自动清理 dirty、独有提交或未推送提交。
-- 不自动删除远端 branch。
+- 不删除未被确定性证明已合并的 branch，不猜测 remote 或使用 force delete。
 - 不把资产价值、法律权利或长期调试保留判断伪装成确定性检查。

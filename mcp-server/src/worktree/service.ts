@@ -48,6 +48,7 @@ import {
   type WorkspaceIntegrationCheck,
   type WorkspaceAiDecision,
   type WorkspaceAiReviewResult,
+  type WorkspaceBranchCleanup,
   type WorktreeApprovalPolicy,
   type WorktreeContainerTopology,
   type WorktreeDelegatableOperation,
@@ -62,7 +63,7 @@ import {
   type WorkspaceTopology,
   WORKTREE_DELEGATABLE_OPERATIONS,
 } from "./types.js";
-import { observeProvider } from "./provider.js";
+import { commandJson, observeProvider } from "./provider.js";
 
 function git(cwd: string, args: string[], allowFailure = false): string {
   const result = spawnSync("git", args, {
@@ -243,8 +244,8 @@ function defaultConfig(): WorktreeDeliveryConfig {
     maxPersistentWorktrees: 2,
     leaseTtlHours: 72,
     reviewTtlMinutes: 120,
-    remoteBranchRetentionDays: 14,
-    remoteBranchDeletion: false,
+    remoteBranchRetentionDays: 1,
+    remoteBranchDeletion: true,
     provider: { kind: "none" },
   };
 }
@@ -281,7 +282,7 @@ const worktreeConfigShape = {
   leaseTtlHours: z.number().int().positive(),
   reviewTtlMinutes: z.number().int().positive(),
   remoteBranchRetentionDays: z.number().int().positive(),
-  remoteBranchDeletion: z.literal(false),
+  remoteBranchDeletion: z.boolean(),
   provider: providerSchema,
 };
 
@@ -1063,8 +1064,10 @@ export function auditWorkspace(projectRoot: string): WorkspaceAudit {
       ? "Persistent lifecycle changes require a durable receipt."
       : "An interrupted migration requires explicit recovery with its exact plan hash.",
     incompleteMigrations));
-  add(result(status, "workspace.remote-delete-disabled", status.config.remoteBranchDeletion === false,
-    "Remote branch deletion is disabled."));
+  add(result(status, "workspace.remote-delete-disabled", true,
+    status.config.remoteBranchDeletion
+      ? "Merged branch cleanup is enabled; the legacy policy ID is retained for API compatibility."
+      : "Merged branch cleanup is disabled by explicit compatibility configuration."));
   const policies = WORKTREE_POLICY_IDS.map((id) => policyById.get(id)!);
   return {
     schemaVersion: WORKTREE_SCHEMA_VERSION,
@@ -1213,6 +1216,7 @@ export function planWorkspaceConfiguration(args: {
   leaseTtlHours?: number;
   reviewTtlMinutes?: number;
   remoteBranchRetentionDays?: number;
+  remoteBranchDeletion?: boolean;
   allowedRoots?: string[];
   protectedRoots?: string[];
   topology?: "container-v1";
@@ -1238,8 +1242,12 @@ export function planWorkspaceConfiguration(args: {
     reviewTtlMinutes: args.reviewTtlMinutes ?? status.config.reviewTtlMinutes,
     remoteBranchRetentionDays:
       args.remoteBranchRetentionDays ?? status.config.remoteBranchRetentionDays,
+    remoteBranchDeletion: args.remoteBranchDeletion ?? status.config.remoteBranchDeletion,
     provider: args.provider ?? status.config.provider,
   });
+  if (config.remoteBranchDeletion && !config.managementBranch) {
+    throw new Error("WORKTREE_MANAGEMENT_BRANCH_REQUIRED");
+  }
   let hostBinding: WorktreeHostBinding;
   let topology: WorkspaceTopology;
   let allowedRoot: Extract<WorkspacePlan["operation"], { kind: "configure" }>["allowedRoot"];
@@ -1996,6 +2004,299 @@ function remoteRefsContaining(root: string, commit: string): string[] {
   ], true).split(/\r?\n/u).filter(Boolean);
 }
 
+function ignoredPaths(root: string, target: string, excludedPath?: string): string[] {
+  return git(root, [
+    "-C",
+    target,
+    "ls-files",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "-z",
+  ]).split("\0").filter(Boolean).filter((path) =>
+    !excludedPath || !samePath(join(target, path), excludedPath)
+  ).sort();
+}
+
+function gitIsAncestor(root: string, ancestor: string, target: string): boolean {
+  const result = gitCommand(root, ["merge-base", "--is-ancestor", ancestor, target], process.env);
+  if (result.status === 0) return true;
+  if (result.status === 1) return false;
+  throw new Error(`GIT_COMMAND_FAILED: git merge-base --is-ancestor: ${result.stderr || result.error || "unknown error"}`);
+}
+
+function branchConfig(root: string, branch: string): Array<{ key: string; value: string }> {
+  const escaped = branch.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return git(root, ["config", "-z", "--get-regexp", `^branch\\.${escaped}\\.`], true)
+    .split("\0")
+    .filter(Boolean)
+    .map((entry) => {
+      const separator = entry.indexOf("\n");
+      if (separator <= 0) throw new Error(`BRANCH_CONFIG_INVALID: ${branch}`);
+      return { key: entry.slice(0, separator), value: entry.slice(separator + 1) };
+    });
+}
+
+function removeBranchConfig(root: string, branch: string, planned: Array<{ key: string; value: string }>): void {
+  if (hashObject(branchConfig(root, branch)) !== hashObject(planned)) {
+    throw new Error(`BRANCH_CONFIG_DRIFT: ${branch}`);
+  }
+  const entries = new Map(planned.map((entry) => [`${entry.key}\0${entry.value}`, entry]));
+  for (const entry of entries.values()) {
+    const result = gitCommand(root, [
+      "config",
+      "--fixed-value",
+      "--unset-all",
+      entry.key,
+      entry.value,
+    ], process.env);
+    if (result.status !== 0) throw new Error(`BRANCH_CONFIG_REMOVE_FAILED: ${branch}`);
+  }
+  if (branchConfig(root, branch).length !== 0) throw new Error(`BRANCH_CONFIG_DRIFT: ${branch}`);
+}
+
+function restoreBranchConfig(
+  root: string,
+  branch: string,
+  planned: Array<{ key: string; value: string }>,
+): void {
+  const remaining = [...planned];
+  for (const entry of branchConfig(root, branch)) {
+    const index = remaining.findIndex((candidate) =>
+      candidate.key === entry.key && candidate.value === entry.value
+    );
+    if (index === -1) throw new Error("WORKSPACE_CLOSE_COMPENSATION_UNSAFE: branch config changed");
+    remaining.splice(index, 1);
+  }
+  for (const entry of remaining) git(root, ["config", "--add", entry.key, entry.value]);
+}
+
+function branchUpstream(
+  root: string,
+  branch: string,
+): { remote: string; ref: string; config: Array<{ key: string; value: string }> } {
+  const config = branchConfig(root, branch);
+  const prefix = `branch.${branch}.`;
+  const remote = config.filter((entry) => entry.key === `${prefix}remote`).map((entry) => entry.value);
+  const merge = config.filter((entry) => entry.key === `${prefix}merge`).map((entry) => entry.value);
+  if (remote.length !== 1 || merge.length !== 1 || remote[0] === "." ||
+      !merge[0].startsWith("refs/heads/")) {
+    throw new Error(`BRANCH_UPSTREAM_REQUIRED: ${branch}`);
+  }
+  return { remote: remote[0], ref: merge[0], config };
+}
+
+function remotePushEndpoint(root: string, remote: string): { value: string; hash: string } {
+  const result = gitCommand(root, ["remote", "get-url", "--push", "--all", remote], process.env);
+  if (result.status !== 0) throw new Error(`REMOTE_PUSH_ENDPOINT_UNAVAILABLE: ${remote}`);
+  const endpoints = result.stdout.split(/\r?\n/u).filter(Boolean);
+  if (endpoints.length !== 1) throw new Error(`REMOTE_PUSH_ENDPOINT_AMBIGUOUS: ${remote}`);
+  const rewrites = gitCommand(root, [
+    "config",
+    "-z",
+    "--get-regexp",
+    "^url\\..*\\.(insteadof|pushinsteadof)$",
+  ], process.env);
+  if (rewrites.status !== 0 && rewrites.status !== 1) {
+    throw new Error(`REMOTE_PUSH_ENDPOINT_UNAVAILABLE: ${remote}`);
+  }
+  const prefixes = rewrites.stdout.split("\0").filter(Boolean).map((entry) => {
+    const separator = entry.indexOf("\n");
+    if (separator === -1) throw new Error(`REMOTE_PUSH_ENDPOINT_UNAVAILABLE: ${remote}`);
+    return entry.slice(separator + 1);
+  });
+  if (prefixes.some((prefix) => endpoints[0].startsWith(prefix))) {
+    throw new Error(`REMOTE_PUSH_ENDPOINT_UNSTABLE: ${remote}`);
+  }
+  return { value: endpoints[0], hash: sha256(endpoints[0]) };
+}
+
+function remoteRefHead(root: string, endpoint: string, remote: string, ref: string): string | null {
+  const observed = gitCommand(root, ["ls-remote", "--heads", endpoint, ref], process.env);
+  if (observed.status !== 0) {
+    const detail = (observed.stderr || observed.error || "unknown error").replaceAll(endpoint, "<remote>");
+    throw new Error(
+      `REMOTE_BRANCH_OBSERVATION_FAILED: ${remote} ${ref}: ${detail}`,
+    );
+  }
+  const lines = observed.stdout.split(/\r?\n/u).filter(Boolean);
+  if (lines.length === 0) return null;
+  if (lines.length !== 1) throw new Error(`REMOTE_BRANCH_AMBIGUOUS: ${remote} ${ref}`);
+  const [head, observedRef] = lines[0].split(/\s+/u, 2);
+  if (observedRef !== ref || !/^[0-9a-f]{40,64}$/u.test(head)) {
+    throw new Error(`REMOTE_BRANCH_OBSERVATION_INVALID: ${remote} ${ref}`);
+  }
+  return head;
+}
+
+function githubEndpointRepository(endpoint: string, remote: string): string {
+  const scp = endpoint.match(/^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?\/?$/iu);
+  let repository = scp?.[1];
+  if (!repository) {
+    try {
+      const url = new URL(endpoint);
+      if (url.hostname.toLowerCase() === "github.com") {
+        repository = url.pathname.replace(/^\//u, "").replace(/\.git\/?$/u, "").replace(/\/$/u, "");
+      }
+    } catch {
+      // Non-URL push targets cannot prove a GitHub repository identity.
+    }
+  }
+  if (!repository || !/^[^/\s]+\/[^/\s]+$/u.test(repository)) {
+    throw new Error(`GITHUB_REMOTE_REPOSITORY_MISMATCH: ${remote}`);
+  }
+  return repository;
+}
+
+function deleteRemoteBranch(
+  root: string,
+  endpoint: string,
+  remote: string,
+  ref: string,
+  expectedHead: string,
+): void {
+  const result = gitCommand(root, [
+    "push",
+    `--force-with-lease=${ref}:${expectedHead}`,
+    endpoint,
+    `:${ref}`,
+  ], process.env);
+  if (result.status !== 0) {
+    const detail = (result.stderr || result.error || "unknown error").replaceAll(endpoint, "<remote>");
+    throw new Error(`REMOTE_BRANCH_DELETE_FAILED: ${remote} ${ref}: ${detail}`);
+  }
+}
+
+function objectValue(value: unknown, key: string): unknown {
+  return value && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined;
+}
+
+function githubMergeProof(
+  root: string,
+  config: WorktreeDeliveryConfig,
+  upstream: { remote: string; ref: string },
+  endpoint: string,
+  expectedHead: string,
+  managementUpstream: { remote: string; ref: string },
+  managementEndpoint: string,
+): WorkspaceBranchCleanup["proof"] {
+  const repository = config.provider.repository;
+  if (!repository) throw new Error("GITHUB_MERGE_PROOF_UNAVAILABLE: repository is not configured");
+  for (const [remote, value] of [[upstream.remote, endpoint], [managementUpstream.remote, managementEndpoint]]) {
+    if (githubEndpointRepository(value, remote).toLowerCase() !== repository.toLowerCase()) {
+      throw new Error(`GITHUB_REMOTE_REPOSITORY_MISMATCH: ${remote}`);
+    }
+  }
+  const branch = upstream.ref.slice("refs/heads/".length);
+  const managementBranch = managementUpstream.ref.slice("refs/heads/".length);
+  const [owner] = repository.split("/", 1);
+  const query = new URLSearchParams({
+    state: "closed",
+    base: managementBranch,
+    head: `${owner}:${branch}`,
+    per_page: "100",
+  });
+  const response = commandJson(root, "gh", [
+    "api",
+    "--method",
+    "GET",
+    `repos/${repository}/pulls?${query.toString()}`,
+  ]);
+  if (!response.ok || !Array.isArray(response.value)) {
+    throw new Error(`GITHUB_MERGE_PROOF_UNAVAILABLE: ${response.error ?? "invalid response"}`);
+  }
+  const matches = response.value.filter((candidate) => {
+    const head = objectValue(candidate, "head");
+    const base = objectValue(candidate, "base");
+    return typeof objectValue(candidate, "merged_at") === "string" &&
+      objectValue(head, "ref") === branch &&
+      objectValue(head, "sha") === expectedHead &&
+      objectValue(objectValue(head, "repo"), "full_name") === repository &&
+      objectValue(base, "ref") === managementBranch &&
+      objectValue(objectValue(base, "repo"), "full_name") === repository;
+  });
+  if (matches.length !== 1) {
+    throw new Error(matches.length === 0
+      ? `BRANCH_NOT_MERGED: ${branch} has no exact merged pull request`
+      : `GITHUB_MERGE_PROOF_AMBIGUOUS: ${branch}`);
+  }
+  const number = objectValue(matches[0], "number");
+  const mergedAt = objectValue(matches[0], "merged_at");
+  if (typeof number !== "number" || typeof mergedAt !== "string") {
+    throw new Error("GITHUB_MERGE_PROOF_INVALID");
+  }
+  return { kind: "github-pr", number, mergedAt };
+}
+
+function branchCleanupEvidence(
+  status: WorkspaceStatus,
+  lease: WorkspaceLease,
+  expectedHead: string,
+): WorkspaceBranchCleanup {
+  const managementBranch = status.config.managementBranch;
+  if (!managementBranch) throw new Error("WORKTREE_MANAGEMENT_BRANCH_REQUIRED");
+  if (lease.branch === managementBranch) {
+    throw new Error(`PROTECTED_BRANCH_CLEANUP: ${lease.branch}`);
+  }
+  if (status.leases.some((item) => item.workItem !== lease.workItem && item.branch === lease.branch) ||
+      status.worktrees.some((item) => item.branch === lease.branch && !samePath(item.path, lease.path))) {
+    throw new Error(`BRANCH_CLEANUP_IN_USE: ${lease.branch}`);
+  }
+  const localRef = `refs/heads/${lease.branch}`;
+  const localHead = git(status.projectDir, ["rev-parse", "--verify", `${localRef}^{commit}`]).trim();
+  if (localHead !== expectedHead) throw new Error(`LOCAL_BRANCH_DRIFT: ${lease.branch}`);
+  const managementHead = git(status.projectDir, [
+    "rev-parse",
+    "--verify",
+    `${managementBranch}^{commit}`,
+  ]).trim();
+  const upstream = branchUpstream(status.projectDir, lease.branch);
+  const managementUpstream = branchUpstream(status.projectDir, managementBranch);
+  const endpoint = remotePushEndpoint(status.projectDir, upstream.remote);
+  const managementEndpoint = remotePushEndpoint(status.projectDir, managementUpstream.remote);
+  const managementRemoteHead = remoteRefHead(
+    status.projectDir,
+    managementEndpoint.value,
+    managementUpstream.remote,
+    managementUpstream.ref,
+  );
+  if (managementRemoteHead !== managementHead) {
+    throw new Error(`MANAGEMENT_BRANCH_NOT_CURRENT: local ${managementHead}, remote ${managementRemoteHead ?? "absent"}`);
+  }
+  const remoteHead = remoteRefHead(status.projectDir, endpoint.value, upstream.remote, upstream.ref);
+  if (remoteHead !== null && remoteHead !== expectedHead) {
+    throw new Error(`REMOTE_BRANCH_DRIFT: expected ${expectedHead}, observed ${remoteHead}`);
+  }
+  const proof = gitIsAncestor(status.projectDir, expectedHead, managementHead)
+    ? { kind: "ancestry" as const }
+    : status.config.provider.kind === "github"
+      ? githubMergeProof(
+        status.projectDir,
+        status.config,
+        upstream,
+        endpoint.value,
+        expectedHead,
+        managementUpstream,
+        managementEndpoint.value,
+      )
+      : (() => { throw new Error(`BRANCH_NOT_MERGED: ${lease.branch}`); })();
+  return {
+    branch: lease.branch,
+    localRef,
+    expectedHead,
+    branchConfig: upstream.config,
+    managementBranch,
+    managementHead,
+    proof,
+    remote: {
+      name: upstream.remote,
+      ref: upstream.ref,
+      expectedHead: remoteHead,
+      endpointHash: endpoint.hash,
+    },
+  };
+}
+
 export function planWorkspaceClose(args: {
   projectRoot: string;
   workItem: string;
@@ -2026,7 +2327,14 @@ export function planWorkspaceClose(args: {
   if (observed.head !== args.acceptedCommit) {
     throw new Error(`ACCEPTED_COMMIT_MISMATCH: expected ${observed.head}, received ${args.acceptedCommit}`);
   }
-  if (remoteRefsContaining(status.projectDir, observed.head).length === 0) {
+  const ignored = ignoredPaths(status.projectDir, lease.path);
+  if (ignored.length > 0) {
+    throw new Error(`WORKTREE_IGNORED_CONTENT: ${lease.path}: ${JSON.stringify(ignored)}`);
+  }
+  const branchCleanup = status.config.remoteBranchDeletion
+    ? branchCleanupEvidence(status, lease, observed.head)
+    : undefined;
+  if (!branchCleanup && remoteRefsContaining(status.projectDir, observed.head).length === 0) {
     throw new Error(`UNPUSHED_COMMIT: ${observed.head} has no remote reference`);
   }
   return savePlan(status.projectDir, planDraft({
@@ -2036,9 +2344,14 @@ export function planWorkspaceClose(args: {
       lease: { ...lease, acceptedCommit: args.acceptedCommit },
       expectedHead: observed.head,
       expectedLeaseHash: fileHash(leaseFile(status.commonDir, lease.workItem)) ?? "",
+      ignoredPathCount: 0,
+      ignoredPathsHash: hashObject(ignored),
+      branchCleanup,
     },
     now: args.now,
-    warnings: ["Local and remote branches are preserved after close."],
+    warnings: branchCleanup
+      ? ["Close deletes the exact merged local branch and its matching remote ref using SHA compare-and-swap."]
+      : ["Local and remote branches are preserved by explicit compatibility configuration."],
   }));
 }
 
@@ -2339,6 +2652,44 @@ function loadWorkspacePlan(root: string, path: string): WorkspacePlan {
       throw new Error("WORKSPACE_PLAN_INVALID");
     }
   }
+  if (plan.operation.kind === "close") {
+    try {
+      const operation = plan.operation;
+      validLease(operation.lease, leaseRelativePath(operation.lease.workItem));
+      if (
+        operation.lease.acceptedCommit !== operation.expectedHead ||
+        !/^[a-f0-9]{40,64}$/u.test(operation.expectedHead) ||
+        !/^[a-f0-9]{64}$/u.test(operation.expectedLeaseHash) ||
+        (operation.ignoredPathCount !== undefined && operation.ignoredPathCount !== 0) ||
+        (operation.ignoredPathsHash !== undefined && operation.ignoredPathsHash !== hashObject([]))
+      ) {
+        throw new Error("invalid close envelope");
+      }
+      const cleanup = operation.branchCleanup;
+      const branchPrefix = cleanup ? `branch.${cleanup.branch}.` : "";
+      if (cleanup && (
+        cleanup.branch !== operation.lease.branch ||
+        cleanup.localRef !== `refs/heads/${operation.lease.branch}` ||
+        cleanup.expectedHead !== operation.expectedHead ||
+        !Array.isArray(cleanup.branchConfig) || cleanup.branchConfig.length < 2 ||
+        cleanup.branchConfig.some((entry) =>
+          typeof entry.key !== "string" || typeof entry.value !== "string") ||
+        cleanup.managementBranch === operation.lease.branch ||
+        !/^[0-9a-f]{40,64}$/u.test(cleanup.managementHead) ||
+        cleanup.branchConfig.filter((entry) =>
+          entry.key === `${branchPrefix}remote` && entry.value === cleanup.remote.name).length !== 1 ||
+        cleanup.branchConfig.filter((entry) =>
+          entry.key === `${branchPrefix}merge` && entry.value === cleanup.remote.ref).length !== 1 ||
+        (cleanup.remote.expectedHead !== null &&
+          cleanup.remote.expectedHead !== operation.expectedHead) ||
+        !["ancestry", "github-pr"].includes(cleanup.proof.kind)
+      )) {
+        throw new Error("invalid branch cleanup evidence");
+      }
+    } catch {
+      throw new Error("WORKSPACE_PLAN_INVALID");
+    }
+  }
   if (plan.operation.kind === "rebind") {
     try {
       const operation = plan.operation;
@@ -2502,15 +2853,7 @@ function destructiveAiEvidence(root: string, plan: WorkspacePlan): {
       ignoredPathsHash: hashObject([]),
     };
   }
-  const ignored = git(root, [
-    "-C",
-    target,
-    "status",
-    "--porcelain=v1",
-    "-z",
-    "--untracked-files=all",
-    "--ignored=matching",
-  ]).split("\0").filter((token) => token.startsWith("!! ")).map((token) => token.slice(3)).sort();
+  const ignored = ignoredPaths(root, target);
   const uniqueCommits = record.uniqueCommits ?? 0;
   const unpushedCommits = record.unpushedCommits ?? 0;
   return {
@@ -2805,6 +3148,9 @@ function appliedReceipt(plan: WorkspacePlan): WorkspaceReceipt | null {
     return receipt;
   }
   if (receipt.status === "rolled-back") return receipt;
+  if (receipt.status === "started" && plan.operation.kind === "close") {
+    throw new Error(`WORKTREE_CLOSE_RECOVERY_REQUIRED: ${plan.id}; inspect its durable receipt`);
+  }
   if (receipt.status === "failed") {
     throw new Error(`CHANGE_PREVIOUSLY_FAILED: ${plan.id}; inspect its durable receipt`);
   }
@@ -3305,6 +3651,7 @@ export function applyWorkspacePlan(args: {
   now?: Date;
   testFailAfterLeaseWrites?: number;
   testFailCloseAfterWorktreeRemove?: boolean;
+  testFailRemoteDeleteAfterPush?: boolean;
 }): WorkspaceReceipt {
   const root = repositoryRoot(args.projectRoot);
   const plan = loadWorkspacePlan(root, args.planPath);
@@ -3374,6 +3721,11 @@ export function applyWorkspacePlan(args: {
   let hostBindingWritten = false;
   let allowedRootCreated = false;
   let worktreeRemoved = false;
+  let localBranchDeleted = false;
+  let branchConfigRemoved = false;
+  let remoteDeleteAttempted = false;
+  let remoteDeleteEndpoint: string | null = null;
+  let remoteBranchDeleted = false;
   let recoveryRemoved = false;
   try {
     writeReceipt(receiptPath, receipt);
@@ -3469,6 +3821,22 @@ export function applyWorkspacePlan(args: {
       if (!observed || observed.head !== operation.expectedHead || observed.dirty) {
         throw new Error("WORKSPACE_DRIFT: close preconditions changed");
       }
+      const ignored = ignoredPaths(
+        before.projectDir,
+        operation.lease.path,
+        resolve(root, args.planPath),
+      );
+      if (ignored.length > 0 ||
+          operation.ignoredPathCount !== undefined && operation.ignoredPathCount !== ignored.length ||
+          operation.ignoredPathsHash !== undefined && operation.ignoredPathsHash !== hashObject(ignored)) {
+        throw new Error(`WORKSPACE_DRIFT: ignored close content changed: ${JSON.stringify(ignored)}`);
+      }
+      if (operation.branchCleanup) {
+        const cleanup = branchCleanupEvidence(before, operation.lease, operation.expectedHead);
+        if (hashObject(cleanup) !== hashObject(operation.branchCleanup)) {
+          throw new Error("WORKSPACE_DRIFT: branch cleanup evidence changed");
+        }
+      }
       receipt.leaseChanges = [{
         action: "remove",
         workItem: operation.lease.workItem,
@@ -3486,6 +3854,61 @@ export function applyWorkspacePlan(args: {
       }
       unlinkSync(leaseFile(plan.commonDir, operation.lease.workItem));
       receipt.steps.push({ id: "remove-lease", status: "applied", detail: operation.lease.workItem });
+      if (operation.branchCleanup) {
+        git(postCloseRoot, [
+          "update-ref",
+          "-d",
+          operation.branchCleanup.localRef,
+          operation.branchCleanup.expectedHead,
+        ]);
+        localBranchDeleted = true;
+        receipt.steps.push({
+          id: "delete-local-branch",
+          status: "applied",
+          detail: `${operation.branchCleanup.localRef}@${operation.branchCleanup.expectedHead}`,
+        });
+        branchConfigRemoved = true;
+        removeBranchConfig(
+          postCloseRoot,
+          operation.branchCleanup.branch,
+          operation.branchCleanup.branchConfig,
+        );
+        receipt.steps.push({
+          id: "remove-branch-config",
+          status: "applied",
+          detail: operation.branchCleanup.branch,
+        });
+        if (operation.branchCleanup.remote.expectedHead !== null) {
+          const endpoint = remotePushEndpoint(postCloseRoot, operation.branchCleanup.remote.name);
+          if (endpoint.hash !== operation.branchCleanup.remote.endpointHash) {
+            throw new Error(`REMOTE_PUSH_ENDPOINT_DRIFT: ${operation.branchCleanup.remote.name}`);
+          }
+          remoteDeleteEndpoint = endpoint.value;
+          remoteDeleteAttempted = true;
+          receipt.steps.push({
+            id: "checkpoint-remote-branch-delete",
+            status: "applied",
+            detail: `${operation.branchCleanup.remote.name}/${operation.branchCleanup.remote.ref}@${operation.branchCleanup.remote.expectedHead}`,
+          });
+          writeReceipt(receiptPath, receipt);
+          deleteRemoteBranch(
+            postCloseRoot,
+            endpoint.value,
+            operation.branchCleanup.remote.name,
+            operation.branchCleanup.remote.ref,
+            operation.branchCleanup.remote.expectedHead,
+          );
+          if (args.testFailRemoteDeleteAfterPush) {
+            throw new Error("TEST_REMOTE_DELETE_CLIENT_FAILURE");
+          }
+          remoteBranchDeleted = true;
+          receipt.steps.push({
+            id: "delete-remote-branch",
+            status: "applied",
+            detail: `${operation.branchCleanup.remote.name}/${operation.branchCleanup.remote.ref}`,
+          });
+        }
+      }
     } else if (plan.operation.kind === "rebind") {
       const operation = plan.operation;
       requireHostBinding(before);
@@ -3571,6 +3994,7 @@ export function applyWorkspacePlan(args: {
     return receipt;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    let finalError: unknown = error;
     receipt.status = "failed";
     receipt.error = message;
     receipt.steps.push({ id: "apply", status: "failed", detail: message });
@@ -3616,10 +4040,74 @@ export function applyWorkspacePlan(args: {
           git(root, ["branch", "-d", plan.operation.lease.branch]);
         }
         receipt.steps.push({ id: "remove-allocation", status: "compensated", detail: plan.operation.lease.path });
-      } else if (plan.operation.kind === "close" && worktreeRemoved) {
+      } else if (plan.operation.kind === "close" && worktreeRemoved && !remoteBranchDeleted) {
+        let compensationSafe = true;
+        if (remoteDeleteAttempted && plan.operation.branchCleanup?.remote.expectedHead) {
+          try {
+            if (!remoteDeleteEndpoint) throw new Error("remote endpoint was not retained");
+            const observed = remoteRefHead(
+              postCloseRoot,
+              remoteDeleteEndpoint,
+              plan.operation.branchCleanup.remote.name,
+              plan.operation.branchCleanup.remote.ref,
+            );
+            if (observed !== plan.operation.branchCleanup.remote.expectedHead) {
+              compensationSafe = false;
+              remoteBranchDeleted = observed === null;
+              finalError = new Error(
+                `WORKTREE_CLOSE_RECOVERY_REQUIRED: remote delete outcome is ${
+                  observed === null ? "deleted" : `moved to ${observed}`
+                }; inspect ${receiptPath}`,
+              );
+            }
+          } catch (observationError) {
+            compensationSafe = false;
+            finalError = new Error(
+              `WORKTREE_CLOSE_RECOVERY_REQUIRED: remote delete outcome is unobservable: ${
+                observationError instanceof Error ? observationError.message : String(observationError)
+              }; inspect ${receiptPath}`,
+            );
+          }
+          if (!compensationSafe) {
+            receipt.steps.push({
+              id: "remote-delete-recovery",
+              status: "failed",
+              detail: finalError instanceof Error ? finalError.message : String(finalError),
+            });
+          }
+        }
+        if (!compensationSafe) {
+          receipt.error = finalError instanceof Error ? finalError.message : String(finalError);
+        } else {
+        if (localBranchDeleted && plan.operation.branchCleanup) {
+          git(postCloseRoot, [
+            "update-ref",
+            plan.operation.branchCleanup.localRef,
+            plan.operation.branchCleanup.expectedHead,
+            "0".repeat(plan.operation.branchCleanup.expectedHead.length),
+          ]);
+          receipt.steps.push({
+            id: "restore-local-branch",
+            status: "compensated",
+            detail: plan.operation.branchCleanup.localRef,
+          });
+        }
+        if (branchConfigRemoved && plan.operation.branchCleanup) {
+          restoreBranchConfig(
+            postCloseRoot,
+            plan.operation.branchCleanup.branch,
+            plan.operation.branchCleanup.branchConfig,
+          );
+          receipt.steps.push({
+            id: "restore-branch-config",
+            status: "compensated",
+            detail: plan.operation.branchCleanup.branch,
+          });
+        }
         git(postCloseRoot, ["worktree", "add", plan.operation.lease.path, plan.operation.lease.branch]);
         atomicWrite(leaseFile(plan.commonDir, plan.operation.lease.workItem), prettyJson(plan.operation.lease));
         receipt.steps.push({ id: "restore-close", status: "compensated", detail: plan.operation.lease.path });
+        }
       } else if (plan.operation.kind === "rebind" &&
           fileHash(leaseFile(plan.commonDir, plan.operation.lease.workItem)) === plan.operation.afterLeaseHash) {
         atomicWrite(leaseFile(plan.commonDir, plan.operation.lease.workItem), prettyJson(plan.operation.lease));
@@ -3641,7 +4129,7 @@ export function applyWorkspacePlan(args: {
     }
     receipt.completedAt = (args.now ?? new Date()).toISOString();
     writeReceipt(receiptPath, receipt);
-    throw error;
+    throw finalError;
   } finally {
     releaseLock(lock);
   }
@@ -3846,6 +4334,11 @@ export function rollbackWorkspaceChange(args: {
         "WORKSPACE_ROLLBACK_REQUIRES_CLOSE_PLAN: an allocated worktree must pass a new exact-hash close plan",
       );
     } else if (plan.operation.kind === "close") {
+      if (plan.operation.branchCleanup) {
+        throw new Error(
+          "WORKSPACE_ROLLBACK_UNAVAILABLE: branch cleanup is irreversible by automatic rollback",
+        );
+      }
       requireHostBinding(status);
       validateTarget(status.hostBinding, plan.operation.lease.path);
       if (existsSync(plan.operation.lease.path)) {
@@ -4131,11 +4624,16 @@ export function retentionAuditWorkspace(args: {
     "for-each-ref",
     "--format=%(refname)%00%(committerdate:iso-strict)%00",
     "refs/remotes",
-  ], true).split("\0").filter(Boolean);
+  ], true).split("\0").map((token) => token.trim()).filter(Boolean);
+  const remotes = git(status.projectDir, ["remote"], true).split(/\r?\n/u).filter(Boolean)
+    .sort((left, right) => right.length - left.length);
   const remoteBranches: RetentionAudit["remoteBranches"] = [];
   for (let index = 0; index + 1 < remoteTokens.length; index += 2) {
     const ref = remoteTokens[index];
     if (ref.endsWith("/HEAD")) continue;
+    const remote = remotes.find((candidate) => ref.startsWith(`refs/remotes/${candidate}/`));
+    const branch = remote ? ref.slice(`refs/remotes/${remote}/`.length) : null;
+    if (status.config.managementBranch && branch === status.config.managementBranch) continue;
     const committedAt = remoteTokens[index + 1];
     const ageDays = Math.max(
       0,
@@ -4161,7 +4659,7 @@ export function retentionAuditWorkspace(args: {
     checkedAt: now.toISOString(),
     reviewTtlMinutes: status.config.reviewTtlMinutes,
     remoteBranchRetentionDays: status.config.remoteBranchRetentionDays,
-    remoteDeletionEnabled: false,
+    remoteDeletionEnabled: status.config.remoteBranchDeletion,
     staleReviews,
     staleLeases,
     staleLocks,

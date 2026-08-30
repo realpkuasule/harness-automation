@@ -46,7 +46,8 @@
     },
     "remoteBranchRetentionDays": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "description": "Read-only stale feature-branch audit age; management branches are excluded and new configurations default to 1 day."
     },
     "allowedRoots": {
       "type": "array",
@@ -71,7 +72,8 @@
       }
     },
     "remoteBranchDeletion": {
-      "const": false
+      "type": "boolean",
+      "description": "When true, close requires merge proof and deletes the exact local and remote feature refs with SHA compare-and-swap. New configurations default to true."
     },
     "provider": {
       "$ref": "#/$defs/provider"

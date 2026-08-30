@@ -261,6 +261,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
             leaseTtlHours: { type: "integer", minimum: 1 },
             reviewTtlMinutes: { type: "integer", minimum: 1 },
             remoteBranchRetentionDays: { type: "integer", minimum: 1 },
+            remoteBranchDeletion: { type: "boolean" },
             allowedRoots: { type: "array", items: { type: "string" } },
             protectedRoots: { type: "array", items: { type: "string" } },
             topology: { enum: ["container-v1"] },
@@ -690,6 +691,9 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
           : undefined,
         remoteBranchRetentionDays: typeof v2Args.remoteBranchRetentionDays === "number"
           ? v2Args.remoteBranchRetentionDays
+          : undefined,
+        remoteBranchDeletion: typeof v2Args.remoteBranchDeletion === "boolean"
+          ? v2Args.remoteBranchDeletion
           : undefined,
         allowedRoots: Array.isArray(v2Args.allowedRoots)
           ? v2Args.allowedRoots.filter((item): item is string => typeof item === "string")

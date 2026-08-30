@@ -114,6 +114,15 @@ function required(args: ParsedArguments, name: string): string {
   return result;
 }
 
+function booleanOption(args: ParsedArguments, name: string): boolean | undefined {
+  if (args.flags.has(name)) return true;
+  const selected = value(args, name);
+  if (selected === undefined) return undefined;
+  if (selected === "true") return true;
+  if (selected === "false") return false;
+  throw new Error(`INVALID_BOOLEAN: --${name} must be true or false`);
+}
+
 function projectRoot(args: ParsedArguments): string {
   return resolve(value(args, "project") ?? process.cwd());
 }
@@ -414,6 +423,7 @@ function runWorktreeCommand(
         leaseTtlHours: positiveInteger(args, "lease-ttl-hours"),
         reviewTtlMinutes: positiveInteger(args, "review-ttl-minutes"),
         remoteBranchRetentionDays: positiveInteger(args, "remote-retention-days"),
+        remoteBranchDeletion: booleanOption(args, "remote-branch-deletion"),
         allowedRoots: args.values.get("allow-root"),
         protectedRoots: args.values.get("protect-root"),
         topology: value(args, "topology") as "container-v1" | undefined,
