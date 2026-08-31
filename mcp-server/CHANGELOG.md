@@ -1,3 +1,13 @@
+## [2.7.1] - 2026-08-31
+
+### Fixed
+
+- stabilize self-hosted release tests (#62) (a0cfbc9)
+- isolate Go build cache by account (#59) (
+0f1ee0)
+- skip slow Linux cache restore (#61) (
+9a857f)
+
 ## [2.7.0] - 2026-08-31
 
 ### Added
