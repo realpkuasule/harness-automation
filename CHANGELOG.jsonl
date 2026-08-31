@@ -246,3 +246,4 @@
 {"timestamp": "2026-08-31T02:23:04+08:00", "type": "fix", "phase": "2.6.1", "description": "Harden Windows worktree tests and preserve CI failures while covering exact branch-cleanup evidence.", "issueRef": "realpkuasule/harness-automation#52", "relatedFiles": [".github/workflows/ci.yml", "mcp-server/src/worktree/service.test.ts"], "agent": "codex"}
 {"timestamp": "2026-08-31T09:20:52+08:00", "type": "fix", "phase": 54, "description": "Make tag publish idempotent after skill-sync release", "issueRef": "realpkuasule/harness-automation#54"}
 {"timestamp": "2026-08-31T10:00:11+08:00", "type": "fix", "phase": 56, "description": "Split long Windows worktree CI batches before Vitest RPC timeout", "issueRef": "realpkuasule/harness-automation#56"}
+{"timestamp": "2026-08-31T13:35:24+08:00", "type": "fix", "phase": 60, "description": "Skip slow remote npm cache restore on self-hosted Linux CI", "issueRef": "realpkuasule/harness-automation#60"}
