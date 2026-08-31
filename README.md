@@ -150,7 +150,8 @@ Issue state machine:
 
 ```text
 backlog ──(claim: worktree lease exists + seed generated)──▶ in-progress
-in-progress ──(handoff doc on disk + validation passed + receipt)──▶ ready-for-review
+in-progress ──(continuation handoff: doc + validation + receipt)──▶ in-progress
+in-progress ──(explicit delivery review: doc + validation + receipt)──▶ ready-for-review
 ready-for-review ──(accepted-commit exists)──▶ done
 any state ──(humans only)──▶ backlog (reopen)
 ```
@@ -165,7 +166,7 @@ harness-automation session handoff \
   --project <project-dir> \
   --work-item github:owner/repository#24 \
   --session <current-session-id> \
-  [--to-status ready-for-review] \
+  [--to-status in-progress|ready-for-review] \
   [--dry-run]
 
 # Read-only state: issue, board fields, handoff doc validation, latest receipt
@@ -183,7 +184,7 @@ harness-automation session seed \
 - The handoff document `docs/HANDOFF-<issue>.md` is validated by the CLI: required sections present, no unfilled `{{...}}` placeholders outside the SEED section, referenced file paths exist, and receipt ids cited under "已完成" resolve in the harness receipt library. Failure refuses the handoff without leaving a half-written state.
 - The handoff receipt is written to `<git-common-dir>/harness/session-handoff/receipts/handoff-<issue>-<docHash12>.json`; its id is derived from the document hash, so re-running with an unchanged document is idempotent.
 - Issue writes reuse the existing `gh` credential channel and the provider mapping in `.harness/worktree-delivery.json`; no new credential mechanism is introduced.
-- Thresholds, template references, field names, and the status display-name mapping live in `.harness/session-workflow.yaml`. A project file is used when present; otherwise package-distributed defaults are used read-only. Changes to this policy go through the normal plan-hash approval flow — never through the CLI or a plugin.
+- Template references, field names, and the status display-name mapping live in `.harness/session-workflow.yaml`. A project file is used when present; otherwise package-distributed defaults are used read-only. The CLI has no runtime session metrics or thresholds: those fields were removed because no P1 consumer exists. Policy changes go through the normal plan-hash approval flow — never through the CLI or a plugin.
 
 ## Eval-driven development
 

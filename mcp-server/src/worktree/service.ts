@@ -2086,7 +2086,7 @@ function branchUpstream(
   return { remote: remote[0], ref: merge[0], config };
 }
 
-function remotePushEndpoint(root: string, remote: string): { value: string; hash: string } {
+export function remotePushEndpoint(root: string, remote: string): { value: string; hash: string } {
   const result = gitCommand(root, ["remote", "get-url", "--push", "--all", remote], process.env);
   if (result.status !== 0) throw new Error(`REMOTE_PUSH_ENDPOINT_UNAVAILABLE: ${remote}`);
   const endpoints = result.stdout.split(/\r?\n/u).filter(Boolean);
@@ -2111,7 +2111,7 @@ function remotePushEndpoint(root: string, remote: string): { value: string; hash
   return { value: endpoints[0], hash: sha256(endpoints[0]) };
 }
 
-function remoteRefHead(root: string, endpoint: string, remote: string, ref: string): string | null {
+export function remoteRefHead(root: string, endpoint: string, remote: string, ref: string): string | null {
   const observed = gitCommand(root, ["ls-remote", "--heads", endpoint, ref], process.env);
   if (observed.status !== 0) {
     const detail = (observed.stderr || observed.error || "unknown error").replaceAll(endpoint, "<remote>");
@@ -2129,7 +2129,7 @@ function remoteRefHead(root: string, endpoint: string, remote: string, ref: stri
   return head;
 }
 
-function githubEndpointRepository(endpoint: string, remote: string): string {
+export function githubEndpointRepository(endpoint: string, remote: string): string {
   const scp = endpoint.match(/^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?\/?$/iu);
   let repository = scp?.[1];
   if (!repository) {

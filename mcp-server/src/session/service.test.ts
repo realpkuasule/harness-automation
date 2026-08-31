@@ -258,7 +258,7 @@ describe("session handoff", () => {
     expect(readdirOrEmpty(receiptDir(root))).toHaveLength(0);
   });
 
-  it("validates, writes a receipt, posts receipts comment and transitions the issue", () => {
+  it("validates, writes a receipt, posts receipts comment, and keeps development in progress", () => {
     const root = fixture();
     worktreeReceipt(root);
     write(root, "docs/HANDOFF-24.md", filledDoc());
@@ -281,12 +281,21 @@ describe("session handoff", () => {
       handoffDocHash: sha256(doc),
       receiptIds: ["worktree-123"],
       fromStatus: "in-progress",
-      toStatus: "ready-for-review",
+      toStatus: "in-progress",
     });
     expect(receipt.commit).toMatch(/^[0-9a-f]{40}$/u);
     const log = ghLog(root);
     expect(log.some((call) => call.post && call.body === JSON.stringify([id, "worktree-123"]))).toBe(true);
-    expect(log.filter((call) => call.graphql).length).toBeGreaterThanOrEqual(4);
+    expect(log.filter((call) => call.graphql).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("moves to ready-for-review only when delivery review is explicit", () => {
+    const root = fixture();
+    worktreeReceipt(root);
+    write(root, "docs/HANDOFF-24.md", filledDoc());
+    const result = sessionHandoff({ ...HANDOFF_ARGS, projectRoot: root, toStatus: "ready-for-review" });
+    expect(result.receipt?.toStatus).toBe("ready-for-review");
+    expect(ghLog(root).filter((call) => call.graphql).length).toBeGreaterThanOrEqual(4);
   });
 
   it("is idempotent for an unchanged document", () => {

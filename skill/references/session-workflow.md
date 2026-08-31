@@ -14,14 +14,15 @@
 
 ```
 backlog ──(工作项被认领：worktree 租约存在 + seed 已生成)──▶ in-progress
-in-progress ──(handoff 文档落盘 + 校验通过 + 回执)──▶ ready-for-review
+in-progress ──(继续开发交接：文档 + 校验 + 回执)──▶ in-progress
+in-progress ──(显式交付评审：文档 + 校验 + 回执)──▶ ready-for-review
 ready-for-review ──(accepted-commit 存在)──▶ done
 任意状态 ──(仅人可操作)──▶ backlog（reopen）
 ```
 
 - 任何自动流转都必须携带证据（commit sha / 回执 id / 检查结果），证据缺失即拒绝流转。
 - `status` / `handoff-doc` 写在 GitHub Project 看板字段；`receipts` 以 issue 评论（JSON 回执 id 列表）追加。
-- P1 只支持 `in-progress → ready-for-review` 一次流转；其余流转不在此命令组内。
+- P1 的默认 handoff 保持 `in-progress`；只有明确传入 `--to-status ready-for-review` 的交付评审才流转。其余流转不在此命令组内。
 
 ## 命令（§6）
 
@@ -32,7 +33,7 @@ node <skill>/scripts/run.mjs session handoff \
   --project <项目绝对路径> \
   --work-item <provider:repository#issue> \
   --session <当前session-id> \
-  [--to-status ready-for-review] \
+  [--to-status in-progress|ready-for-review] \
   [--dry-run]
 
 # 只读状态：issue、看板字段、交接文档校验结果、最近回执
@@ -69,7 +70,7 @@ node <skill>/scripts/run.mjs session seed \
 
 ## 仓库策略（.harness/session-workflow.yaml）
 
-- 阈值、模板文件引用、issue 附加字段名、statusValues 映射、seed 约束段都存于此文件。
+- 模板文件引用、issue 附加字段名、statusValues 映射、seed 约束段都存于此文件；P1 没有宿主观测实现，故没有 session 阈值字段或默认值。
 - 项目有 `.harness/session-workflow.yaml` 则用之；没有则使用包内默认值（CLI 只读，绝不写回项目）。
 - 该文件与默认值的任何变更必须走 harness `plan`/`apply` 计划哈希批准流程；插件与 CLI 均不得自行改写。
 - provider 主体（repository、project 编号、statusField）复用 `.harness/worktree-delivery.json`；
@@ -79,11 +80,12 @@ node <skill>/scripts/run.mjs session seed \
 
 - 由 `session seed` / `session handoff` 确定性渲染：issue 标题=目标、验收标准字段=验收，
   固定前缀块（项目/仓库/规则文件/报告协议）+ 约束段来自策略文件。逐字节固定，无时间戳、无随机数。
-- 交接完成后，seed 与 `docs/HANDOFF-<issue>.md` 一起落盘，新会话复制即用。
+- 交接完成后，seed 与 `docs/HANDOFF-<issue>.md` 一起落盘，新会话复制即用。若 work-item 有有效的交付授权回执，seed 必须恢复该包络、当前 head/PR/check evidence 与 retry budget；会话切换本身不构成新的确认门。
 
 ## 不变量（§8 摘要）
 
 - 无证据不流转 issue 状态；CLI 校验失败必须拒绝，不留半成品状态。
 - 不把 AI 自然语言摘要当作状态事实；进展只认 git 产物 + harness 回执 + issue 字段。
+- 正常的 commit、同一授权范围内的 rebase、同 SHA 基础设施重试和会话切换不应重新请求授权；只有授权稳定事实失效、deterministic blocker 或证据冲突才停止。
 - 不重复实现 git / worktree / 租约逻辑；不新造凭据机制。
-- 策略（阈值、模板）变更必须走计划哈希批准。
+- 策略（模板、字段映射）变更必须走计划哈希批准。

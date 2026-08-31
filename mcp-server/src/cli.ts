@@ -63,6 +63,7 @@ import {
 } from "./worktree/types.js";
 import { runSessionCommand } from "./session/cli.js";
 import { auditGitHubGovernance } from "./github/governance.js";
+import { authorizeDelivery, deliveryStatus, mergeDelivery, pushDelivery, upsertDeliveryPullRequest } from "./delivery/service.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -537,6 +538,57 @@ function runWorktreeCommand(
   }
 }
 
+function runDeliveryCommand(root: string, args: ParsedArguments): void {
+  const action = args.positionals[0];
+  switch (action) {
+    case "authorize": {
+      const mergeMode = value(args, "merge-mode") ?? "manual";
+      if (mergeMode !== "manual" && mergeMode !== "checks-green") {
+        throw new Error("DELIVERY_MERGE_MODE_INVALID: choose manual or checks-green");
+      }
+      const result = authorizeDelivery({
+        projectRoot: root,
+        workItem: required(args, "work-item"),
+        repository: value(args, "repository"),
+        remote: value(args, "remote"),
+        baseBranch: required(args, "base"),
+        featureBranch: value(args, "branch"),
+        allowedPaths: args.values.get("allow-path") ?? [],
+        intent: required(args, "intent"),
+        approvalSource: required(args, "approval-source"),
+        supersedes: value(args, "supersedes"),
+        retryLimit: positiveInteger(args, "retry-limit"),
+        capabilities: { mergeMode },
+      });
+      printJson({ authorizationPath: result.path, authorization: result.authorization });
+      return;
+    }
+    case "status":
+      printJson(deliveryStatus(root, required(args, "authorization")));
+      return;
+    case "push":
+      printJson(pushDelivery({ projectRoot: root, authorizationHash: required(args, "authorization") }));
+      return;
+    case "pr":
+      printJson(upsertDeliveryPullRequest({
+        projectRoot: root,
+        authorizationHash: required(args, "authorization"),
+        title: required(args, "title"),
+        body: value(args, "body"),
+      }));
+      return;
+    case "merge":
+      printJson(mergeDelivery({
+        projectRoot: root,
+        authorizationHash: required(args, "authorization"),
+        pullRequest: Number(required(args, "pull-request")),
+      }));
+      return;
+    default:
+      throw new Error("DELIVERY_COMMAND_REQUIRED: choose delivery authorize, delivery status, delivery push, delivery pr, or delivery merge");
+  }
+}
+
 function usage(): void {
   console.log(`Harness Automation v2
 
@@ -569,7 +621,12 @@ Usage:
   harness-automation worktree renew --work-item <provider:id> [--project .]
   harness-automation worktree recover --path <absolute-path> [--project .]
   harness-automation worktree apply-ai --plan <relative-path> --intent <plain-language intent> [--project .]
-  harness-automation session handoff --work-item <provider:repo#issue> --session <session-id> [--to-status ready-for-review] [--dry-run] [--project .]
+  harness-automation delivery authorize --work-item <github:owner/repo#issue> --base <branch> --allow-path <path-or-directory/> [--allow-path <path-or-directory/>...] --intent <approved-intent> --approval-source <immutable-user-authorization-reference> [--branch <branch>] [--repository <owner/repo>] [--remote <name>] [--merge-mode manual|checks-green] [--retry-limit <n>] [--supersedes <authorization-hash>] [--project .]
+  harness-automation delivery status --authorization <sha256> [--project .]
+  harness-automation delivery push --authorization <sha256> [--project .]
+  harness-automation delivery pr --authorization <sha256> --title <title> [--body <body>] [--project .]
+  harness-automation delivery merge --authorization <sha256> --pull-request <number> [--project .]
+  harness-automation session handoff --work-item <provider:repo#issue> --session <session-id> [--to-status in-progress|ready-for-review] [--dry-run] [--project .]
   harness-automation session status [--work-item <provider:repo#issue>] [--project .]
   harness-automation session seed --work-item <provider:repo#issue> [--project .]
 
@@ -654,6 +711,9 @@ function runWorkflow(argv: string[]): void {
       return;
     case "worktree":
       runWorktreeCommand(root, args, trailingCommand);
+      return;
+    case "delivery":
+      runDeliveryCommand(root, args);
       return;
     case "github": {
       if (args.positionals[0] !== "audit") throw new Error("GITHUB_COMMAND_REQUIRED: choose audit");

@@ -150,7 +150,8 @@ Issue 状态机：
 
 ```text
 backlog ──(工作项被认领：worktree 租约存在 + seed 已生成)──▶ in-progress
-in-progress ──(handoff 文档落盘 + 校验通过 + 回执)──▶ ready-for-review
+in-progress ──(继续开发交接：文档 + 校验 + 回执)──▶ in-progress
+in-progress ──(显式交付评审：文档 + 校验 + 回执)──▶ ready-for-review
 ready-for-review ──(accepted-commit 存在)──▶ done
 任意状态 ──(仅人可操作)──▶ backlog（reopen）
 ```
@@ -164,7 +165,7 @@ harness-automation session handoff \
   --project <项目绝对路径> \
   --work-item github:owner/repository#24 \
   --session <当前session-id> \
-  [--to-status ready-for-review] \
+  [--to-status in-progress|ready-for-review] \
   [--dry-run]
 
 # 只读状态：issue、看板字段、交接文档校验结果、最近回执
@@ -182,7 +183,7 @@ harness-automation session seed \
 - 交接文档 `docs/HANDOFF-<issue>.md` 由 CLI 校验：必需节齐全、SEED 段外无未填 `{{...}}` 占位符、引用文件路径存在、「已完成」中引用的回执 id 与 harness 回执库一致；失败即拒绝，不留半成品状态。
 - 回执写入 `<git-common-dir>/harness/session-handoff/receipts/handoff-<issue>-<docHash12>.json`；id 由文档哈希决定，同文档重跑幂等。
 - issue 写入复用既有 `gh` 凭据通道与 `.harness/worktree-delivery.json` 的 provider 映射，不新造凭据机制。
-- 阈值、模板引用、字段名与看板状态显示名映射存于 `.harness/session-workflow.yaml`：项目有则用之，无则用包内默认（只读）；该策略变更一律走计划哈希批准流程，CLI 与插件均不得自行改写。
+- 模板引用、字段名与看板状态显示名映射存于 `.harness/session-workflow.yaml`：项目有则用之，无则用包内默认（只读）。P1 CLI 没有运行时会话指标或阈值消费者，因此已删除相应字段；该策略变更一律走计划哈希批准流程，CLI 与插件均不得自行改写。
 
 ## Eval-driven development
 

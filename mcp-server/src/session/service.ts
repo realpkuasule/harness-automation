@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { atomicWrite, readJson, safePath, sha256 } from "../v2/fs.js";
 import { observeProvider } from "../worktree/provider.js";
 import { loadConfig } from "../worktree/service.js";
+import { deliveryStatus, latestDeliveryAuthorization } from "../delivery/service.js";
 import type { WorktreeDeliveryConfig } from "../worktree/types.js";
 import {
   appendReceiptsComment,
@@ -19,7 +20,8 @@ import {
 } from "./templates.js";
 import {
   HANDOFF_FROM_STATUS,
-  HANDOFF_TARGET_STATUS,
+  HANDOFF_CONTINUATION_STATUS,
+  HANDOFF_REVIEW_STATUS,
   SESSION_HANDOFF_RECEIPT_SCHEMA_VERSION,
   parseWorkItem,
   type HandoffCommitEntry,
@@ -344,11 +346,22 @@ export function sessionSeed(options: SessionCommandOptions): { ok: true; seed: s
   const root = options.projectRoot;
   const workItem = parsedWorkItem(options.workItem);
   const loaded = loadSessionWorkflow(root);
-  const config = githubProviderConfig(root);
-  assertRepositoryMatch(config.config, workItem);
-  const issue = readIssue(root, workItem);
+  const authorization = latestDeliveryAuthorization(root, workItem.workItem);
+  const configured = loadConfig(root);
+  if (configured.config.provider.kind === "github") assertRepositoryMatch(configured.config, workItem);
+  let issue: { title: string; body: string; url: string };
+  try {
+    issue = readIssue(root, workItem);
+  } catch (error) {
+    if (!authorization) throw error;
+    issue = {
+      title: authorization.intent,
+      body: "",
+      url: `https://github.com/${workItem.owner}/${workItem.repository}/issues/${workItem.number}`,
+    };
+  }
   const handoffPath = `docs/HANDOFF-${workItem.number}.md`;
-  const acceptance = acceptanceValue(loaded, root, config.config, workItem, issue.body, issue.url);
+  const acceptance = acceptanceValue(loaded, root, configured.config, workItem, issue.body, issue.url);
   const seed = renderSeed(loaded, {
     projectName: workItem.repository,
     repoUrl: `https://github.com/${workItem.owner}/${workItem.repository}`,
@@ -357,7 +370,11 @@ export function sessionSeed(options: SessionCommandOptions): { ok: true; seed: s
     handoffPath,
     constraints: loaded.workflow.seed.constraints,
   });
-  return { ok: true, seed };
+  const delivery = authorization ? deliveryStatus(root, authorization.authorizationHash) : null;
+  const authorizationBlock = delivery
+    ? `\n\n【交付授权】${delivery.authorization.authorizationHash}\n阶段：${delivery.phase}${delivery.invalidation ? `\n暂停原因：${delivery.invalidation}` : ""}`
+    : "\n\n【交付授权】未找到有效授权回执；在执行外部交付动作前先取得一次覆盖完整工作流的授权。";
+  return { ok: true, seed: `${seed}${authorizationBlock}` };
 }
 
 /** `session status`：只读。`--work-item` 缺省时扫描 docs/HANDOFF-*.md。 */
@@ -401,6 +418,21 @@ export function sessionStatus(options: SessionCommandOptions): {
       ? validateHandoffDoc(root, commonDir, docPath)
       : { exists: existsSync(docPath), valid: false, problems: ["GIT_REPOSITORY_REQUIRED"], referencedFiles: [], receiptIds: [], placeholders: [] };
     const last = commonDir ? lastReceiptFor(root, commonDir, workItem.workItem) : null;
+    let delivery: Record<string, unknown> | null = null;
+    try {
+      const authorization = latestDeliveryAuthorization(root, workItem.workItem);
+      if (authorization) {
+        const status = deliveryStatus(root, authorization.authorizationHash);
+        delivery = {
+          authorizationHash: authorization.authorizationHash,
+          phase: status.phase,
+          invalidation: status.invalidation,
+          receipts: status.receipts.map((receipt) => receipt.id),
+        };
+      }
+    } catch (error) {
+      delivery = { error: error instanceof Error ? error.message : String(error) };
+    }
     let issue: Record<string, unknown>;
     try {
       const observed = readIssue(root, workItem);
@@ -445,6 +477,7 @@ export function sessionStatus(options: SessionCommandOptions): {
             handoffDocHash: last.receipt.handoffDocHash,
           }
         : null,
+      delivery,
     };
   });
   return {
@@ -500,9 +533,9 @@ export function sessionHandoff(options: SessionCommandOptions): SessionHandoffRe
   const dryRun = options.dryRun === true;
   const workItem = parsedWorkItem(options.workItem);
   const sessionId = parseSessionId(options.session);
-  const toStatus = options.toStatus ?? HANDOFF_TARGET_STATUS;
-  if (toStatus !== HANDOFF_TARGET_STATUS) {
-    throw new Error(`SESSION_TO_STATUS_UNSUPPORTED: P1 only supports --to-status ${HANDOFF_TARGET_STATUS}`);
+  const toStatus = options.toStatus ?? HANDOFF_CONTINUATION_STATUS;
+  if (toStatus !== HANDOFF_CONTINUATION_STATUS && toStatus !== HANDOFF_REVIEW_STATUS) {
+    throw new Error(`SESSION_TO_STATUS_UNSUPPORTED: choose ${HANDOFF_CONTINUATION_STATUS} or explicit ${HANDOFF_REVIEW_STATUS}`);
   }
   const loaded = loadSessionWorkflow(root);
   const config = githubProviderConfig(root);
@@ -591,7 +624,7 @@ export function sessionHandoff(options: SessionCommandOptions): SessionHandoffRe
       issueUpdates: {
         receiptsComment: { planned: true, receiptIds: [receiptId, ...finalValidation.receiptIds] },
         fields: [
-          `${project.statusField} -> ${toStatus}`,
+          ...(toStatus === HANDOFF_REVIEW_STATUS ? [`${project.statusField} -> ${toStatus}`] : []),
           `${loaded.workflow.provider.project.handoffDocField} -> docs/HANDOFF-${workItem.number}.md`,
         ],
       },
@@ -628,14 +661,14 @@ export function sessionHandoff(options: SessionCommandOptions): SessionHandoffRe
   const comment = appendReceiptsComment(root, workItem, commentReceiptIds);
   const statusValues = loaded.workflow.provider.project.statusValues;
   const fields = [
-    updateProjectField(
+    ...(toStatus === HANDOFF_REVIEW_STATUS ? [updateProjectField(
       root,
       `${workItem.owner}/${workItem.repository}`,
       project,
       workItem.number,
       project.statusField,
       displayStatus(toStatus, statusValues),
-    ),
+    )] : []),
     updateProjectField(
       root,
       `${workItem.owner}/${workItem.repository}`,
