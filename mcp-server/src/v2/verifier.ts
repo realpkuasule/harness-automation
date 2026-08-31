@@ -188,6 +188,17 @@ export function checkPython(root: string): NamingCheck {
   return externalChecker("python3", [checker, root], [checker, "--self-test"]);
 }
 
+export function goCacheDirectory(
+  env: NodeJS.ProcessEnv = process.env,
+  uid: number | undefined = process.getuid?.(),
+): string {
+  if (env.GOCACHE) return env.GOCACHE;
+  const identity = uid === undefined
+    ? `user-${(env.USERNAME ?? env.USER ?? "default").replace(/[^A-Za-z0-9_.-]/gu, "_")}`
+    : `uid-${uid}`;
+  return join(tmpdir(), `harness-automation-go-build-${identity}`);
+}
+
 export function checkGo(root: string): NamingCheck {
   const checker = join(root, ".harness/generated/check_go_naming.go");
   if (!existsSync(checker)) {
@@ -195,7 +206,7 @@ export function checkGo(root: string): NamingCheck {
   }
   const env = {
     ...process.env,
-    GOCACHE: process.env.GOCACHE || join(tmpdir(), "harness-automation-go-build"),
+    GOCACHE: goCacheDirectory(),
   };
   return externalChecker("go", ["run", checker, root], ["run", checker, "--self-test"], env);
 }
