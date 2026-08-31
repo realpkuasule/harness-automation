@@ -1,3 +1,9 @@
+## [2.7.0] - 2026-08-31
+
+### Added
+
+- default to merged branch cleanup (#53) (68babbe)
+
 ## [2.6.0] - 2026-08-27
 
 ### Changed
