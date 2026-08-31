@@ -2,14 +2,6 @@
 # 项目可用 .harness/session-workflow.yaml 覆盖本文件；
 # 策略变更必须走 harness plan/apply 计划哈希批准流程，CLI 只读不写。
 schemaVersion: "session-workflow/1.0"
-thresholds:
-  turns: 12
-  steps: 150
-  llmMinutes: 30
-  titleChanges: 2
-  retries: 3
-  inboxSplices: 8
-  inputTokens: 5000000
 templates:
   handoff: "handoff.md"
   seed: "seed.md"

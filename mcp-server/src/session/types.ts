@@ -27,16 +27,6 @@ export function parseWorkItem(input: string): ParsedWorkItem | null {
   };
 }
 
-const thresholdsSchema = z.object({
-  turns: z.number().int().positive(),
-  steps: z.number().int().positive(),
-  llmMinutes: z.number().int().positive(),
-  titleChanges: z.number().int().nonnegative(),
-  retries: z.number().int().nonnegative(),
-  inboxSplices: z.number().int().nonnegative(),
-  inputTokens: z.number().int().positive(),
-});
-
 const templatesSchema = z.object({
   handoff: z.string().min(1),
   seed: z.string().min(1),
@@ -58,7 +48,6 @@ const seedSchema = z.object({
 
 export const sessionWorkflowSchema = z.object({
   schemaVersion: z.literal(SESSION_WORKFLOW_SCHEMA_VERSION),
-  thresholds: thresholdsSchema,
   templates: templatesSchema,
   provider: z.object({
     project: providerProjectSchema,
@@ -68,8 +57,9 @@ export const sessionWorkflowSchema = z.object({
 
 export type SessionWorkflow = z.infer<typeof sessionWorkflowSchema>;
 
-/** `session handoff` 允许的目标状态（P1 只支持 in-progress -> ready-for-review） */
-export const HANDOFF_TARGET_STATUS = "ready-for-review" as const;
+/** Normal handoffs continue delivery; review is an explicit separate intent. */
+export const HANDOFF_CONTINUATION_STATUS = "in-progress" as const;
+export const HANDOFF_REVIEW_STATUS = "ready-for-review" as const;
 export const HANDOFF_FROM_STATUS = "in-progress" as const;
 
 export interface IssueObservation {
