@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { checkGo, checkPython, checkTypeScript, checkTypeScriptSource } from "./verifier.js";
+import { checkGo, checkPython, checkTypeScript, checkTypeScriptSource, goCacheDirectory } from "./verifier.js";
 
 const roots: string[] = [];
 
@@ -17,6 +17,12 @@ afterEach(() => {
 });
 
 describe("naming verifiers", () => {
+  it("uses a distinct fallback Go cache for each service account", () => {
+    expect(goCacheDirectory({}, 1001)).toBe(join(tmpdir(), "harness-automation-go-build-uid-1001"));
+    expect(goCacheDirectory({}, 1002)).toBe(join(tmpdir(), "harness-automation-go-build-uid-1002"));
+    expect(goCacheDirectory({ GOCACHE: "/custom/go-cache" }, 1001)).toBe("/custom/go-cache");
+  });
+
   it("reports parser and naming violations across declarations, patterns, members, and imports", () => {
     expect(checkTypeScriptSource("const = ;", "broken.ts")[0]).toContain("broken.ts: parse error:");
     const violations = checkTypeScriptSource(`
