@@ -58,6 +58,18 @@ function commit(root: string, ref: string): string {
   return git(root, ["rev-parse", "--verify", `${ref}^{commit}`]);
 }
 
+function isAncestor(root: string, ancestor: string, descendant: string): boolean {
+  const result = spawnSync("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  if (result.error || (result.status !== 0 && result.status !== 1)) {
+    throw new Error(`GIT_COMMAND_FAILED: git merge-base --is-ancestor: ${(result.stderr || result.error?.message || "unknown error").trim()}`);
+  }
+  return result.status === 0;
+}
+
 function normalizePath(value: string): string {
   const trimmed = value.trim().replaceAll("\\", "/");
   if (!trimmed || trimmed === "." || trimmed.startsWith("/") || trimmed.split("/").includes("..")) {
@@ -441,7 +453,7 @@ function writeDeliveryReceipt(options: {
   if (status.invalidation) throw new Error(status.invalidation);
   const expectedBefore = status.receipts.at(-1)?.afterHead ?? status.authorization.initialHead;
   const featureRoot = featureWorktree(root, status.authorization.featureBranch);
-  if (options.beforeHead !== expectedBefore || options.afterHead !== commit(featureRoot, "HEAD")) {
+  if (!isAncestor(featureRoot, expectedBefore, options.beforeHead) || options.afterHead !== commit(featureRoot, "HEAD")) {
     throw new Error("DELIVERY_RECEIPT_HEAD_CHAIN_INVALID");
   }
   const receipt: DeliveryReceipt = {
@@ -481,7 +493,11 @@ export function pushDelivery(options: {
   const ref = `refs/heads/${status.authorization.featureBranch}`;
   const beforeHead = commit(featureRoot, "HEAD");
   const remoteBefore = remoteRefHead(root, endpoint.value, status.authorization.remote.name, ref);
-  if (remoteBefore && remoteBefore !== beforeHead) throw new Error(`DELIVERY_REMOTE_BRANCH_DRIFT: ${ref}`);
+  const lastPush = [...status.receipts].reverse().find((receipt) => receipt.action === "push");
+  if (remoteBefore && remoteBefore !== beforeHead &&
+      (!lastPush || remoteBefore !== lastPush.afterHead || !isAncestor(featureRoot, remoteBefore, beforeHead))) {
+    throw new Error(`DELIVERY_REMOTE_BRANCH_DRIFT: ${ref}`);
+  }
   git(featureRoot, ["push", endpoint.value, `HEAD:${ref}`]);
   const remoteAfter = remoteRefHead(root, endpoint.value, status.authorization.remote.name, ref);
   if (remoteAfter !== beforeHead) throw new Error(`DELIVERY_PUSH_VERIFICATION_FAILED: ${ref}`);
