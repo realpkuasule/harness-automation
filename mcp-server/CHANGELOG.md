@@ -1,3 +1,9 @@
+## [2.8.0] - 2026-08-31
+
+### Added
+
+- recover delivery authorization across sessions (#65) (28b9b81)
+
 ## [2.7.1] - 2026-08-31
 
 ### Fixed
