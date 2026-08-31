@@ -248,3 +248,4 @@
 {"timestamp": "2026-08-31T10:00:11+08:00", "type": "fix", "phase": 56, "description": "Split long Windows worktree CI batches before Vitest RPC timeout", "issueRef": "realpkuasule/harness-automation#56"}
 {"timestamp": "2026-08-31T13:35:24+08:00", "type": "fix", "phase": 60, "description": "Skip slow remote npm cache restore on self-hosted Linux CI", "issueRef": "realpkuasule/harness-automation#60"}
 {"timestamp": "2026-08-31T11:54:39+08:00", "type": "fix", "phase": 57, "description": "Isolate fallback Go build caches across self-hosted runner accounts", "issueRef": "realpkuasule/harness-automation#57"}
+{"timestamp": "2026-08-31T12:49:54+08:00", "type": "fix", "phase": 58, "description": "Stabilize self-hosted release Vitest execution", "issueRef": "realpkuasule/harness-automation#58"}
