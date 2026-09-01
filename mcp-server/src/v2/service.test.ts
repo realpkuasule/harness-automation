@@ -165,6 +165,10 @@ ImplicitEmbedder = Callable[[str], np.ndarray]
 _TEMPLATES = {}
 _RUN_ID = "run"
 _private_value = 1
+replacement = None
+AutoProcessor.from_pretrained = classmethod(replacement)
+Qwen3VLForConditionalGeneration.from_pretrained = classmethod(replacement)
+AutoProcessor["loader"] = replacement
 
 class CheckerCase(unittest.TestCase):
     @classmethod

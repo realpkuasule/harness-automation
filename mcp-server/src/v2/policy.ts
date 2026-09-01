@@ -592,9 +592,13 @@ def check_source(source, name):
             self.errors.append(f"{name}:{node.lineno}: variable '{node.id}' must be snake_case")
 
         def variable_target(self, target):
-            for child in ast.walk(target):
-                if isinstance(child, ast.Name):
-                    self.variable_name(child)
+            if isinstance(target, ast.Name):
+                self.variable_name(target)
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                for item in target.elts:
+                    self.variable_target(item)
+            elif isinstance(target, ast.Starred):
+                self.variable_target(target.value)
 
         def visit_ClassDef(self, node):
             if not PASCAL.match(node.name):
