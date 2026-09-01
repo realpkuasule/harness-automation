@@ -147,6 +147,12 @@ function getMcpServerPath(packagePath: string): string {
   return join(packagePath, "dist", "index.js");
 }
 
+function getPackageVersion(packagePath: string): string {
+  const manifest = JSON.parse(readFileSync(join(packagePath, "package.json"), "utf8")) as { version?: unknown };
+  if (typeof manifest.version !== "string") throw new Error(`PACKAGE_VERSION_NOT_FOUND: ${packagePath}`);
+  return manifest.version;
+}
+
 function getClaudeJsonPath(): string {
   return join(homedir(), ".claude.json");
 }
@@ -205,7 +211,9 @@ function install(options: { syncGlobal: boolean }): void {
     }
   }
   if (!packagePath) throw new Error("PACKAGE_NOT_FOUND: npm global installation did not produce a package path");
+  const packageVersion = getPackageVersion(packagePath);
   ok(`包路径: ${packagePath}`);
+  ok(`版本: ${packageVersion}`);
 
   const mcpServerPath = getMcpServerPath(packagePath);
   if (!existsSync(mcpServerPath)) throw new Error(`MCP_NOT_BUILT: ${mcpServerPath}`);
@@ -225,7 +233,7 @@ function install(options: { syncGlobal: boolean }): void {
     ok(`Portable Agent Skill (${name}): ${installSkill(skillSource, ".agents", name)}`);
   }
   console.log("");
-  ok("Harness Automation v2 已就绪；未修改 grill-me 或任何其他 Skill");
+  ok(`Harness Automation v${packageVersion} 已就绪；未修改 grill-me 或任何其他 Skill`);
 }
 
 function profile(args: ParsedArguments): StackProfile | undefined {

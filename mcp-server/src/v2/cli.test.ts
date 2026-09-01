@@ -46,6 +46,23 @@ afterEach(() => {
   for (const project of projects.splice(0)) rmSync(project, { recursive: true, force: true });
 });
 describe("v2 CLI forward flow", () => {
+  it("reports the exact manifest version during package and Skill installation", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-cli-install-version-"));
+    projects.push(root);
+
+    const installer = runResult(root, ["install", "--no-global"]);
+    expect(installer.status).toBe(0);
+    expect(installer.stdout).toContain(`版本: ${compilerVersion}`);
+    expect(installer.stdout).toContain(`Harness Automation v${compilerVersion} 已就绪`);
+
+    const packageInstaller = spawnSync("npm", ["run", "postinstall", "--silent"], {
+      cwd: packageRoot,
+      encoding: "utf8",
+    });
+    expect(packageInstaller.status).toBe(0);
+    expect(packageInstaller.stdout).toContain(`Harness Automation v${compilerVersion} installed`);
+  });
+
   it("keeps a conventional eval script advisory until EDD is explicitly selected", () => {
     const root = mkdtempSync(join(tmpdir(), "harness-cli-unmanaged-eval-"));
     projects.push(root);

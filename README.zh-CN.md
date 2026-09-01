@@ -57,6 +57,8 @@ npm install -g @realpkuasule/harness-automation@latest
 harness-automation install
 ```
 
+两条命令都会显示当前安装的 Harness 精确版本。
+
 验证安装：
 
 ```bash
