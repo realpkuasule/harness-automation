@@ -134,6 +134,16 @@ command from `<container>/main` with the same plan and hash to resume only when
 the recorded post-move state still matches. Rollback is deliberately refused.
 No GitHub Team plan or configuration is involved.
 
+### Lease renewal after normal commits
+
+`harness-automation worktree renew` may renew a clean, attached worktree that
+remains on its leased branch after normal commits advance that branch. Its
+exact-hash plan binds the observed branch, path, current HEAD, and prior lease
+hash; apply rechecks all of them and updates only `acceptedCommit` and
+`heartbeatAt`. Detached, locked, prunable, path/branch-mismatched, HEAD-drifted,
+or lease-hash-drifted worktrees fail closed without modifying Git refs or the
+worktree.
+
 ### Delegated AI authorization
 
 Per-plan human approval remains the default. A host may instead delegate selected

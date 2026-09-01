@@ -2278,6 +2278,8 @@ describe("hash-approved worktree lifecycle", () => {
     });
     expect(auditWorkspace(root).policies.find((policy) => policy.id === "workspace.lease-ttl"))
       .toMatchObject({ passing: false });
+    const acceptedCommitBefore = workspaceStatus(root).leases[0].acceptedCommit;
+    git(worktreePath, "commit", "--allow-empty", "-m", "test: advance leased branch");
     const worktreesBefore = git(root, "worktree", "list", "--porcelain");
     const refsBefore = git(root, "for-each-ref", "--format=%(refname)%00%(objectname)");
     const headBefore = git(worktreePath, "rev-parse", "HEAD");
@@ -2290,6 +2292,7 @@ describe("hash-approved worktree lifecycle", () => {
     if (planned.plan.operation.kind !== "renew") throw new Error("expected renew plan");
     expect(planned.plan.operation.replacementLease).toMatchObject({
       branch: "issue-renew",
+      acceptedCommit: headBefore,
       heartbeatAt: "2030-01-02T00:00:00.000Z",
     });
     expect(() => applyWorkspacePlan({
@@ -2309,7 +2312,7 @@ describe("hash-approved worktree lifecycle", () => {
       detail: "github:example/project#renew",
     });
     expect(workspaceStatus(root).leases).toEqual([
-      expect.objectContaining({ heartbeatAt: "2030-01-02T00:00:00.000Z" }),
+      expect.objectContaining({ acceptedCommit: headBefore, heartbeatAt: "2030-01-02T00:00:00.000Z" }),
     ]);
     expect(auditWorkspace(root).policies.find((policy) => policy.id === "workspace.lease-ttl"))
       .toMatchObject({ passing: true });
@@ -2319,7 +2322,7 @@ describe("hash-approved worktree lifecycle", () => {
     expect(rollbackWorkspaceChange({ projectRoot: root, changeId: receipt.id }).status)
       .toBe("rolled-back");
     expect(workspaceStatus(root).leases).toEqual([
-      expect.objectContaining({ heartbeatAt: "2020-01-01T00:00:00.000Z" }),
+      expect.objectContaining({ acceptedCommit: acceptedCommitBefore, heartbeatAt: "2020-01-01T00:00:00.000Z" }),
     ]);
   });
 

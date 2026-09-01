@@ -2444,7 +2444,7 @@ export function planWorkspaceRenew(args: {
   validateBranch(status.projectDir, lease.branch);
   const observed = status.worktrees.find((worktree) => samePath(worktree.path, lease.path));
   if (!observed || observed.branch !== lease.branch || observed.bare || observed.detached ||
-      observed.locked || observed.prunable || observed.head !== lease.acceptedCommit) {
+      observed.locked || observed.prunable) {
     throw new Error("WORKTREE_RENEW_PRECONDITION_FAILED: observed worktree does not match lease");
   }
   const branchHead = git(status.projectDir, [
@@ -2459,7 +2459,7 @@ export function planWorkspaceRenew(args: {
   if (heartbeatAt === lease.heartbeatAt) {
     throw new Error(`WORKTREE_RENEW_NOOP: ${args.workItem} already has this heartbeat`);
   }
-  const replacementLease: WorkspaceLease = { ...lease, heartbeatAt };
+  const replacementLease: WorkspaceLease = { ...lease, acceptedCommit: observed.head, heartbeatAt };
   const expectedLeaseHash = fileHash(leaseFile(status.commonDir, lease.workItem));
   if (!expectedLeaseHash) throw new Error(`WORKTREE_LEASE_NOT_FOUND: ${args.workItem}`);
   return savePlan(status.projectDir, planDraft({
@@ -2724,13 +2724,13 @@ function loadWorkspacePlan(root: string, path: string): WorkspacePlan {
       validLease(operation.lease, leaseRelativePath(operation.lease.workItem));
       validLease(operation.replacementLease, leaseRelativePath(operation.replacementLease.workItem));
       const unchanged = [
-        "workItem", "branch", "path", "owner", "thread", "workItemState", "acceptedCommit", "createdAt", "status",
+        "workItem", "branch", "path", "owner", "thread", "workItemState", "createdAt", "status",
       ] as const;
       if (
         operation.lease.workItem !== operation.replacementLease.workItem ||
         unchanged.some((key) => operation.lease[key] !== operation.replacementLease[key]) ||
         operation.lease.heartbeatAt === operation.replacementLease.heartbeatAt ||
-        operation.lease.acceptedCommit !== operation.expectedHead ||
+        operation.replacementLease.acceptedCommit !== operation.expectedHead ||
         operation.expectedLeaseHash !== sha256(prettyJson(operation.lease)) ||
         operation.afterLeaseHash !== sha256(prettyJson(operation.replacementLease)) ||
         !/^[a-f0-9]{40,64}$/u.test(operation.expectedHead) ||
