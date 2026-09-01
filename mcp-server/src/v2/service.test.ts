@@ -1545,6 +1545,91 @@ describe("v2 project governance upgrade", () => {
     expect(() => planProjectUpdate({ projectRoot: digest })).toThrow(/MANIFEST_POLICY_DIGEST_MISMATCH/u);
   });
 
+  it("adopts a legacy eval snapshot only through an exact-hash migration plan", () => {
+    const root = temporaryProject();
+    approvedSources(root);
+    hardenedEvaluationContract(root);
+    write(root, "package.json", JSON.stringify({ dependencies: { typescript: "1" } }));
+    write(root, "package-lock.json", "{}\n");
+    write(root, "tsconfig.json", "{}\n");
+    write(root, "src/service.ts", "export const userId = 1;\n");
+    applyCurrentPolicy(root, {
+      projectRoot: root,
+      profile: "custom",
+      stacks: ["typescript"],
+      qualityProfiles: ["eval-driven-development"],
+    });
+    rewriteAppliedPolicy(root, (policy) => { delete policy.evaluations; });
+    const legacyPolicy = readFileSync(join(root, ".harness/policy.yaml"), "utf8");
+    const contract = JSON.parse(readFileSync(join(root, "evals/evals.json"), "utf8"));
+    contract.suites[0].target.threshold = 0.5;
+    write(root, "evals/evals.json", `${JSON.stringify(contract, null, 2)}\n`);
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true, now: new Date("2026-01-02T00:00:00Z") });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root, new Date("2026-01-02T00:00:01Z")), null, 2)}\n`);
+
+    expect(() => planProjectUpdate({ projectRoot: root })).toThrow(/EVAL_SEMANTICS_HISTORY_REQUIRED/u);
+    const planned = planProjectUpdate({
+      projectRoot: root,
+      migrateLegacyEvalSnapshot: true,
+      now: new Date("2026-01-02T00:00:02Z"),
+    });
+    expect(planned.plan?.legacyEvalSnapshotMigration).toMatchObject({
+      kind: "legacy-eval-snapshot-adoption",
+      historicalContinuity: "unavailable",
+      historicalEvalSources: expect.arrayContaining([expect.objectContaining({ path: "evals/evals.json" })]),
+      currentApprovedEvalSources: expect.arrayContaining([expect.objectContaining({ path: "evals/evals.json" })]),
+      candidateEvaluations: expect.objectContaining({ schemaVersion: "1.1" }),
+      affectedSuites: [{ suiteId: "representative-quality", requirementIds: ["PRD-AI-004"], ruleIds: ["representative-quality-gate"] }],
+    });
+    expect(readFileSync(join(root, ".harness/policy.yaml"), "utf8")).toBe(legacyPolicy);
+    expect(() => applyPlan({ projectRoot: root, planPath: planned.planPath!, approval: "0".repeat(64) }))
+      .toThrow(/APPROVAL_MISMATCH/u);
+    expect(readFileSync(join(root, ".harness/policy.yaml"), "utf8")).toBe(legacyPolicy);
+    const tampered = JSON.parse(readFileSync(join(root, planned.planPath!), "utf8"));
+    tampered.legacyEvalSnapshotMigration.legacyPolicyDigest = "0".repeat(64);
+    const unsigned = { ...tampered };
+    delete unsigned.planHash;
+    tampered.planHash = hashObject(unsigned);
+    const tamperedPath = ".harness/plans/tampered-legacy-eval-migration.json";
+    write(root, tamperedPath, `${JSON.stringify(tampered, null, 2)}\n`);
+    expect(() => applyPlan({ projectRoot: root, planPath: tamperedPath, approval: tampered.planHash }))
+      .toThrow(/LEGACY_EVAL_SNAPSHOT_MIGRATION_INVALID/u);
+    expect(readFileSync(join(root, ".harness/policy.yaml"), "utf8")).toBe(legacyPolicy);
+    const snapshotTampered = JSON.parse(readFileSync(join(root, planned.planPath!), "utf8"));
+    const policyOperation = snapshotTampered.operations.find((operation: { path: string }) => operation.path === ".harness/policy.yaml");
+    const candidatePolicy = JSON.parse(policyOperation.content);
+    candidatePolicy.evaluations.suites[0].target.threshold = 0.25;
+    policyOperation.content = `${JSON.stringify(candidatePolicy, null, 2)}\n`;
+    policyOperation.afterHash = sha256(policyOperation.content);
+    snapshotTampered.legacyEvalSnapshotMigration.candidateEvaluations = candidatePolicy.evaluations;
+    const snapshotUnsigned = { ...snapshotTampered };
+    delete snapshotUnsigned.planHash;
+    snapshotTampered.planHash = hashObject(snapshotUnsigned);
+    const snapshotTamperedPath = ".harness/plans/tampered-legacy-eval-snapshot.json";
+    write(root, snapshotTamperedPath, `${JSON.stringify(snapshotTampered, null, 2)}\n`);
+    expect(() => applyPlan({ projectRoot: root, planPath: snapshotTamperedPath, approval: snapshotTampered.planHash }))
+      .toThrow(/LEGACY_EVAL_SNAPSHOT_MIGRATION_INVALID: candidate evaluations/u);
+    expect(readFileSync(join(root, ".harness/policy.yaml"), "utf8")).toBe(legacyPolicy);
+
+    applyPlan({ projectRoot: root, planPath: planned.planPath!, approval: planned.planHash! });
+    expect(JSON.parse(readFileSync(join(root, ".harness/policy.yaml"), "utf8")).evaluations).toMatchObject({ schemaVersion: "1.1" });
+
+    contract.suites[0].target.threshold = 0.25;
+    write(root, "evals/evals.json", `${JSON.stringify(contract, null, 2)}\n`);
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true, now: new Date("2026-01-02T00:00:03Z") });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root, new Date("2026-01-02T00:00:04Z")), null, 2)}\n`);
+    const subsequent = planProjectUpdate({ projectRoot: root, now: new Date("2026-01-02T00:00:05Z") });
+    expect(subsequent.plan?.update?.evaluations.changed).toEqual([expect.objectContaining({ suiteId: "representative-quality" })]);
+    expect(subsequent.plan?.update?.weakening.detected).toBe(true);
+
+    rewriteAppliedPolicy(root, (policy) => {
+      delete policy.evaluations;
+      policy.sources = (policy.sources as Array<{ kind: string }>).filter((source) => source.kind !== "eval");
+    });
+    const noHistory = planProjectUpdate({ projectRoot: root, migrateLegacyEvalSnapshot: true, now: new Date("2026-01-02T00:00:06Z") });
+    expect(noHistory.plan?.legacyEvalSnapshotMigration?.historicalEvalSources).toEqual([]);
+  });
+
   it("stops before writing a plan when approved sources or discovery facts drift", () => {
     const sourceRoot = temporaryProject();
     fullTypeScriptProject(sourceRoot);

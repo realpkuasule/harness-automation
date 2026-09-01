@@ -174,6 +174,14 @@ harness-automation update plan --project /absolute/path/to/project
 
 `doctor` reports the offline compiler state as `current`, `stale`, `legacy-version-unknown`, or `unconfigured`.
 
+If an older applied policy has no `evaluations` snapshot and its approved evaluation sources changed, ordinary update planning intentionally fails closed. Do not edit the policy or restore old sources merely to bypass it. The owner can explicitly create an adoption migration plan:
+
+```bash
+harness-automation update legacy-eval-snapshot plan --project /absolute/path/to/project
+```
+
+The immutable plan records the legacy policy digest, available old and current approved evaluation-source hashes, the candidate snapshot, and suite/Requirement/rule traceability. It states that historical pre-implementation continuity is unavailable; review its full hash and use the regular `apply` command to establish the snapshot. Later ordinary updates compare evaluation semantics and weakening from that snapshot onward. This is unrelated to worktree migration.
+
 ## Session handoff (v2.2.0)
 
 Long sessions should be cut when they should be cut — the recovery cost is near zero because the handoff artifacts are on disk. The `session` command group executes handoffs, receipts, and issue transitions deterministically, with no AI involvement. Protocol: [Session Handoff design](docs/designs/session-handoff.md), [session workflow reference](skill/references/session-workflow.md).
@@ -353,7 +361,7 @@ The command never fetches, writes GitHub settings, changes token scopes, or modi
 
 ## CLI and MCP
 
-v2 CLI commands: `doctor`, `research github`, `github audit`, `intake`, `discover`, `plan`, `update plan`, `apply`, `context`, `check`, `drift`, `explain`, `rollback`, plus `worktree configure|allocate|adopt|review|status|audit|close|retention-audit|integration-check` and `session handoff|status|seed`. `plan` supports orthogonal `deliveryProfile`, `domainProfile`, and `qualityProfile`. `check --mode commit|ci` runs the trusted project gates visible in the plan; EDD runners execute only in CI mode and report `blocked` when a runtime is missing. When CI cannot observe host-local worktrees, workspace enforcement is reported honestly as unavailable.
+v2 CLI commands: `doctor`, `research github`, `github audit`, `intake`, `discover`, `plan`, `update plan`, `update legacy-eval-snapshot plan`, `apply`, `context`, `check`, `drift`, `explain`, `rollback`, plus `worktree configure|allocate|adopt|review|status|audit|close|retention-audit|integration-check` and `session handoff|status|seed`. `plan` supports orthogonal `deliveryProfile`, `domainProfile`, and `qualityProfile`. `check --mode commit|ci` runs the trusted project gates visible in the plan; EDD runners execute only in CI mode and report `blocked` when a runtime is missing. When CI cannot observe host-local worktrees, workspace enforcement is reported honestly as unavailable.
 
 The MCP server exposes the same service layer, including the core `harness_*` tools and the matching `harness_worktree_*` tools. The CLI remains the portable baseline for Claude Code, Codex, and DeepSeek/GLM agents.
 

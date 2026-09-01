@@ -3,7 +3,7 @@
 ## Decision summary
 
 - Issue: `realpkuasule/harness-automation#69`.
-- Formal interface: `harness-automation update plan --project <absolute-path>`.
+- Formal interfaces: `harness-automation update plan --project <absolute-path>` and the explicit legacy adoption planner `harness-automation update legacy-eval-snapshot plan --project <absolute-path>`.
 - `upgrade plan`, `plan --upgrade`, `plan --update`, and an MCP update tool are deliberately absent, so there is one public entry point.
 - Update planning is a thin orchestration path around the existing v2 compiler and file-plan lifecycle. `apply`, receipt, rollback and worktree execution remain unchanged owners.
 - A current no-op returns without creating a plan. A non-empty candidate writes exactly one immutable policy plan under `.harness/plans/`.
@@ -61,7 +61,7 @@ The current policy schema remains backward-readable. `project.profile` and root 
 5. Extract one inherited configuration from existing policy: owner, profile, stacks, deliveryProfiles, domainProfiles, qualityProfiles, phase and every recognized explicit project option. Missing arrays normalize only for legacy absence; present values are copied exactly. Unknown explicit fields fail closed instead of being dropped.
 6. Invoke the existing compiler with that configuration and the current approved intake/discovery. Restore inherited phase/name fields that are not compiler choices. Apply the existing naming-baseline transition: multiset intersection for preserve/shrink; expansion only when the existing fresh adoption-intake contract is explicitly selected.
 7. Add the exact compiler identity, render the same policy/generated/managed targets and manifest, and build normal `FileOperation` entries containing all before/after hashes.
-8. Compare policies by stable rule ID and compute the semantic diff. Persist and compare canonical EDD suite semantics (target, tasks, graders, traceability and known-bad control). A legacy policy without this snapshot may inherit it only when its eval source hashes exactly match the current approved set; otherwise planning fails closed. Bind the weakening digest to the before/after policy digests, rule/eval diff, reasons and rule IDs. Compare baseline, sources, compiler/schema and adapter coverage separately.
+8. Compare policies by stable rule ID and compute the semantic diff. Persist and compare canonical EDD suite semantics (target, tasks, graders, traceability and known-bad control). A legacy policy without this snapshot may inherit it only when its eval source hashes exactly match the current approved set; otherwise ordinary planning fails closed. The explicit legacy snapshot planner is the sole exception: it emits an adoption-only immutable plan that records the old policy digest, available historical/current source hashes, candidate snapshot and complete suite/Requirement/rule traceability without claiming historical continuity. Bind the weakening digest to the before/after policy digests, rule/eval diff, reasons and rule IDs. Compare baseline, sources, compiler/schema and adapter coverage separately.
 9. Read worktree status only when `.harness/worktree-delivery.json` exists. Never invoke allocate, adopt, close, migrate apply, `git worktree add/remove`, checkout or branch commands.
 10. If the candidate has no semantic, identity or target-hash change, return `{status:"current", planPath:null, planHash:null}` without writing a policy plan. Companion configuration or migration reporting is independent and cannot create an empty policy plan.
 11. Otherwise embed the complete update metadata into the existing file plan, compute its normal full `planHash`, and atomically write one `.harness/plans/<id>.json`.
@@ -70,7 +70,7 @@ The plan command never executes verification argv. Those commands remain reporte
 
 ## Plan contract
 
-New `ChangePlan` files write optional `update` metadata. The apply reader also accepts the 2.8.1 preview's `upgrade` envelope, but rejects a plan containing both; the only public command is `update plan`, and the same executor remains authoritative:
+New `ChangePlan` files write optional `update` metadata and may carry one `legacyEvalSnapshotMigration` adoption envelope. The apply reader also accepts the 2.8.1 preview's `upgrade` envelope, but rejects a plan containing both; ordinary update planning and the explicit adoption planner share the same authoritative executor:
 
 ```ts
 interface UpdateMetadata {
@@ -110,6 +110,8 @@ interface UpdateMetadata {
 ```
 
 All arrays are deduplicated and sorted before hashing. `targets` is derived from `operations`, not independently authored. The apply validator recomputes the outer plan hash, from/to compiler and policy digests, inherited configuration, intake/discovery/source drift, semantic diff, adapter coverage, worktree status and weakening digest; a companion workspace plan is independently hash-checked. Any mismatch is rejected before target writes.
+
+`legacyEvalSnapshotMigration` is valid only when the before policy has no snapshot, the candidate has a traceable snapshot, and old/current eval sources differ. It includes `{kind:"legacy-eval-snapshot-adoption", historicalContinuity:"unavailable", legacyPolicyDigest, historicalEvalSources, currentApprovedEvalSources, candidateEvaluations, affectedSuites}`. Apply derives it again from the before/after policy and rejects a mismatch before any write. Future ordinary updates compare against the persisted candidate snapshot.
 
 ## Semantic diff and weakening
 
@@ -162,7 +164,7 @@ Before emitting a lossless configuration plan, compare every explicit config, pr
 | `mcp-server/src/v2/types.ts` | compiler identity, persisted profile, upgrade diff/weakening metadata and doctor status types |
 | `mcp-server/src/v2/policy.ts` | emit current compiler identity and persisted profile from existing compiler path |
 | `mcp-server/src/v2/service.ts` | current identity reader, inheritance, drift guard, semantic diff, `planProjectUpdate`, no-op, apply weakening validation, doctor version status; reuse existing apply/rollback |
-| `mcp-server/src/cli.ts` | route and document only `update plan`; parse no replacement profile flags |
+| `mcp-server/src/cli.ts` | route ordinary update and the explicit legacy snapshot plan; parse no replacement profile flags |
 | `docs/api/harness-policy-v2.schema.json` | document exact compiler identity, persisted profile and EDD semantic snapshot while retaining legacy-read compatibility in code |
 | `mcp-server/src/v2/service.test.ts` | service acceptance matrix, including exact apply/rollback and zero-worktree assertions |
 | `mcp-server/src/v2/cli.test.ts` | one public command and stable JSON/no-op behavior |

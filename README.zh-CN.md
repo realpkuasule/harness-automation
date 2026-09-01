@@ -156,6 +156,14 @@ harness-automation update plan --project /absolute/path/to/project
 
 若结果报告 weakening，负责人必须先把完整 weakening digest 和全部 rule ID 绑定到 fresh intake，再 `discover` 和重新规划；普通 plan hash 批准不能替代 weakening 批准。`doctor` 离线报告 `current`、`stale`、`legacy-version-unknown` 或 `unconfigured`。
 
+若旧版已应用 policy 缺少 `evaluations` 快照且已批准的评测来源已经变化，普通更新规划会刻意 fail closed。不要手改 policy，也不要为了绕过它恢复旧来源；负责人只能显式生成 adoption migration：
+
+```bash
+harness-automation update legacy-eval-snapshot plan --project /absolute/path/to/project
+```
+
+该 immutable plan 记录旧 policy digest、旧策略可获得及当前已批准的评测来源哈希、候选快照与 suite/Requirement/rule traceability，并明确历史 pre-implementation 连续性不可证明。负责人审阅完整计划哈希后，仍使用普通 `apply` 建立快照；此后普通 update 从该快照继续检测评测语义变化和 weakening。它与 worktree migration 无关。
+
 ## 会话交接（v2.2.0）
 
 长会话该切就切，恢复成本靠交接物落盘趋近于零。`session` 命令组确定性执行交接、校验、回执与 issue 状态流转，全程无 AI 参与。协议见[会话交接设计](docs/designs/session-handoff.md)与 [session workflow 参考](skill/references/session-workflow.md)。
@@ -324,7 +332,7 @@ harness-automation context --project . --agent codex
 
 ## CLI 与 MCP
 
-v2 CLI 命令：`doctor`、`research github`、`intake`、`discover`、`plan`、`update plan`、`apply`、`context`、`check`、`drift`、`explain`、`rollback`，以及 `worktree configure|allocate|adopt|review|status|audit|close|retention-audit` 和 `session handoff|status|seed`。`plan` 支持正交的 `deliveryProfile`、`domainProfile` 和 `qualityProfile`。`check --mode commit|ci` 会执行计划中可见的可信项目 gate；EDD runner 只在 CI mode 执行，缺失运行时明确返回 `blocked`。CI 无法观察宿主机 worktree 时会如实报告 workspace enforcement 不可用。
+v2 CLI 命令：`doctor`、`research github`、`intake`、`discover`、`plan`、`update plan`、`update legacy-eval-snapshot plan`、`apply`、`context`、`check`、`drift`、`explain`、`rollback`，以及 `worktree configure|allocate|adopt|review|status|audit|close|retention-audit` 和 `session handoff|status|seed`。`plan` 支持正交的 `deliveryProfile`、`domainProfile` 和 `qualityProfile`。`check --mode commit|ci` 会执行计划中可见的可信项目 gate；EDD runner 只在 CI mode 执行，缺失运行时明确返回 `blocked`。CI 无法观察宿主机 worktree 时会如实报告 workspace enforcement 不可用。
 
 MCP 暴露同一 service layer，包括核心 `harness_*` 工具和对应的 `harness_worktree_*` 工具。CLI 仍是 Claude Code、Codex、DeepSeek/GLM 等 Agent 的 portable 基线。
 

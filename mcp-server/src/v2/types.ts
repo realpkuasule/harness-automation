@@ -332,6 +332,21 @@ export interface PolicyUpdateMetadata {
   migrationRequired: boolean;
 }
 
+/**
+ * Explicit adoption boundary for a legacy policy that predates evaluation
+ * snapshots. It records available evidence without claiming historical
+ * pre-implementation continuity.
+ */
+export interface LegacyEvalSnapshotMigration {
+  kind: "legacy-eval-snapshot-adoption";
+  historicalContinuity: "unavailable";
+  legacyPolicyDigest: string;
+  historicalEvalSources: Array<{ path: string; sha256: string }>;
+  currentApprovedEvalSources: Array<{ path: string; sha256: string }>;
+  candidateEvaluations: PolicyEvaluationSnapshot;
+  affectedSuites: Array<{ suiteId: string; requirementIds: string[]; ruleIds: string[] }>;
+}
+
 export interface FileOperation {
   id: string;
   kind: "write";
@@ -354,6 +369,8 @@ export interface ChangePlan {
   commands: string[][];
   warnings: string[];
   update?: PolicyUpdateMetadata;
+  /** Explicit owner-reviewed adoption of evaluations into a legacy policy. */
+  legacyEvalSnapshotMigration?: LegacyEvalSnapshotMigration;
   /** Read-only compatibility for plans created by the 2.8.1 preview. New plans never write this field. */
   upgrade?: PolicyUpdateMetadata;
   planHash: string;

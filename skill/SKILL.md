@@ -117,6 +117,14 @@ node <skill目录>/scripts/run.mjs update plan --project <项目绝对路径>
 
 `doctor` 离线报告 `current`、`stale`、`legacy-version-unknown` 或 `unconfigured`；不得猜测 legacy compiler 的历史 patch 版本。
 
+若旧 policy 缺少 `evaluations` 快照且已批准 eval 来源已经变化，普通 `update plan` 必须继续以 `EVAL_SEMANTICS_HISTORY_REQUIRED` 失败。不得手改 policy 或恢复旧来源；只能由负责人审阅下列 adoption migration：
+
+```bash
+node <skill目录>/scripts/run.mjs update legacy-eval-snapshot plan --project <项目绝对路径>
+```
+
+它只写 immutable plan，并记录旧 policy digest、旧策略可获得的 eval 来源哈希、当前已批准来源哈希、候选快照及 suite/Requirement/rule traceability。计划明确声明历史连续性不可证明，不得伪称 pre-implementation 证据；仍须展示完整计划哈希并使用普通 `apply --approve <完整哈希>`。成功后，未来普通 `update plan` 以该快照检测 eval 语义变化和 weakening。此迁移与 worktree migration 完全独立。
+
 ### 6. 精确批准后应用
 
 只有负责人明确批准当前计划哈希后才运行：

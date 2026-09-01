@@ -48,6 +48,8 @@ When `eval-driven-development` is selected, `evals/evals.json` and every referen
 
 `plan` writes only a new immutable file under `.harness/plans/`. `apply` performs all precondition checks before any target is written and restores already-written targets if a later write fails.
 
+For a legacy applied policy that lacks `evaluations`, changed approved eval sources must still make ordinary `update plan` fail closed. An owner may explicitly create an adoption-only snapshot plan with `update legacy-eval-snapshot plan --project <absolute-path>`. It records the old policy digest, available historical eval-source hashes, current approved eval-source hashes, the candidate snapshot, and suite/Requirement/rule traceability. It does not claim pre-implementation continuity, write policy directly, or share worktree-migration semantics. Only the normal exact plan-hash approval and `apply` can establish the snapshot; after that, ordinary updates resume semantic and weakening comparisons.
+
 After policy initialization, hand daily workspace lifecycle work to `manage-worktree-delivery`. Its read-only audit path does not require PRD intake. Persistent allocate/close/configure operations still use immutable plan, exact hash, drift recheck, apply, and durable receipt.
 
 ## Research evidence

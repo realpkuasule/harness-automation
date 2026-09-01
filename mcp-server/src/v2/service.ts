@@ -34,6 +34,7 @@ import type {
   EnforcementResult,
   FileOperation,
   Intake,
+  LegacyEvalSnapshotMigration,
   PolicyDocument,
   PolicyEvaluationSnapshot,
   PolicyRule,
@@ -642,6 +643,57 @@ function inheritedEvaluationSnapshot(
   throw new Error("EVAL_SEMANTICS_HISTORY_REQUIRED: legacy policy has no eval snapshot and approved eval sources changed; restore the old sources or perform an owner-reviewed migration");
 }
 
+function evaluationSources(policy: PolicyDocument): Array<{ path: string; sha256: string }> {
+  return policy.sources
+    .filter((source) => source.kind === "eval")
+    .map(({ path, sha256: sourceHash }) => ({ path, sha256: sourceHash }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function approvedEvaluationSources(intake: Intake): Array<{ path: string; sha256: string }> {
+  return intake.sources
+    .filter((source) => source.kind === "eval")
+    .map(({ path, sha256: sourceHash }) => ({ path, sha256: sourceHash }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function discoveredEvaluationSnapshot(discovery: Discovery): PolicyEvaluationSnapshot | undefined {
+  const evaluations = discovery.evaluations;
+  if (!evaluations?.valid || !evaluations.schemaVersion) return undefined;
+  return { schemaVersion: evaluations.schemaVersion, suites: evaluations.suites };
+}
+
+function legacyEvalSnapshotMigration(
+  before: PolicyDocument,
+  after: PolicyDocument,
+): LegacyEvalSnapshotMigration {
+  if (before.evaluations) throw new Error("LEGACY_EVAL_SNAPSHOT_MIGRATION_NOT_REQUIRED: policy already has an evaluations snapshot");
+  if (!after.evaluations) throw new Error("LEGACY_EVAL_SNAPSHOT_MIGRATION_CANDIDATE_REQUIRED: current approved sources do not produce an evaluations snapshot");
+  const historicalEvalSources = evaluationSources(before);
+  const currentApprovedEvalSources = evaluationSources(after);
+  if (currentApprovedEvalSources.length === 0 || sameJson(historicalEvalSources, currentApprovedEvalSources)) {
+    throw new Error("LEGACY_EVAL_SNAPSHOT_MIGRATION_NOT_REQUIRED: migration requires a legacy eval source drift");
+  }
+  const affectedSuites = after.evaluations.suites.map((suite) => {
+    const traceability = suite.traceability ?? [];
+    const requirementIds = sortedStrings(traceability.map((trace) => trace.requirementId));
+    const ruleIds = sortedStrings(traceability.flatMap((trace) => trace.ruleIds));
+    if (requirementIds.length === 0 || ruleIds.length === 0) {
+      throw new Error(`LEGACY_EVAL_SNAPSHOT_MIGRATION_TRACEABILITY_REQUIRED: suite ${suite.id} must declare Requirement IDs and rule IDs`);
+    }
+    return { suiteId: suite.id, requirementIds, ruleIds };
+  }).sort((left, right) => left.suiteId.localeCompare(right.suiteId));
+  return {
+    kind: "legacy-eval-snapshot-adoption",
+    historicalContinuity: "unavailable",
+    legacyPolicyDigest: hashObject(before),
+    historicalEvalSources,
+    currentApprovedEvalSources,
+    candidateEvaluations: after.evaluations,
+    affectedSuites,
+  };
+}
+
 function inheritedPolicyConfiguration(
   policy: PolicyDocument,
   discovery: Discovery,
@@ -1031,6 +1083,7 @@ export interface ProjectUpdatePlanResult {
 export function planProjectUpdate(args: {
   projectRoot: string;
   adoptTypeScriptNaming?: boolean;
+  migrateLegacyEvalSnapshot?: boolean;
   now?: Date;
 }): ProjectUpdatePlanResult {
   if (!isAbsolute(args.projectRoot)) throw new Error("UPDATE_PROJECT_ABSOLUTE_REQUIRED: --project must be an absolute path");
@@ -1089,7 +1142,10 @@ export function planProjectUpdate(args: {
     now: args.now,
     writePlan: false,
   });
-  const oldEvaluations = inheritedEvaluationSnapshot(oldPolicy, candidate.policy);
+  const migration = args.migrateLegacyEvalSnapshot
+    ? legacyEvalSnapshotMigration(oldPolicy, candidate.policy)
+    : undefined;
+  const oldEvaluations = migration ? undefined : inheritedEvaluationSnapshot(oldPolicy, candidate.policy);
   const differences = policyDifference(oldPolicy, candidate.policy, oldEvaluations);
   const baseline = baselineDifference(oldPolicy, candidate.policy);
   if ((baseline?.added.length ?? 0) > 0) {
@@ -1111,7 +1167,7 @@ export function planProjectUpdate(args: {
     weakeningApproval.digest === differences.weakening.digest &&
     sameFingerprints(weakeningApproval.ruleIds, differences.weakening.ruleIds) &&
     oldManifest.intakeHash !== intakeHash);
-  const worktree = inspectWorktreeUpdate(root, args.now);
+  const worktree = migration ? observeWorktreeUpdate(root) : inspectWorktreeUpdate(root, args.now);
   const discoveryHash = fileHash(discoveryPath)!;
   const localCompiler = currentCompilerIdentity();
   const metadata: PolicyUpdateMetadata = {
@@ -1143,8 +1199,12 @@ export function planProjectUpdate(args: {
     return { status: "current", planPath: null, planHash: null, plan: null, policy: candidate.policy, worktree };
   }
   candidate.plan.update = metadata;
+  if (migration) candidate.plan.legacyEvalSnapshotMigration = migration;
   candidate.plan.warnings = [
     ...candidate.plan.warnings,
+    ...(migration
+      ? ["Legacy evaluation snapshot adoption: historical pre-implementation continuity is unavailable; owner review is required before apply."]
+      : []),
     ...(differences.weakening.detected && !approved
       ? [`Policy weakening requires owner intake approval for digest ${differences.weakening.digest}.`]
       : []),
@@ -1184,6 +1244,9 @@ function validatePlan(root: string, plan: ChangePlan, approval: string): void {
 function validateUpdateTransition(root: string, plan: ChangePlan): void {
   if (plan.update && plan.upgrade) throw new Error("UPDATE_METADATA_INVALID: plan cannot contain both update and legacy upgrade metadata");
   const update = plan.update ?? plan.upgrade;
+  if (plan.legacyEvalSnapshotMigration && !update) {
+    throw new Error("LEGACY_EVAL_SNAPSHOT_MIGRATION_UPDATE_REQUIRED: migration metadata requires an update plan");
+  }
   if (!update) return;
   const policyOperation = plan.operations.find((item) => item.path === ".harness/policy.yaml");
   if (!policyOperation) throw new Error("UPDATE_POLICY_OPERATION_REQUIRED: update plan must contain the compiled policy");
@@ -1200,7 +1263,16 @@ function validateUpdateTransition(root: string, plan: ChangePlan): void {
   if (!afterCompiler) throw new Error("UPDATE_METADATA_INVALID: updated policy has no exact compiler identity");
   const intakeHash = fileHash(harnessPath(root, "intake.json"))!;
   const discoveryHash = fileHash(harnessPath(root, "discovery.json"))!;
-  const differences = policyDifference(before, after, inheritedEvaluationSnapshot(before, after));
+  const migration = plan.legacyEvalSnapshotMigration;
+  const expectedMigration = migration ? legacyEvalSnapshotMigration(before, after) : undefined;
+  if (migration && !sameJson(migration, expectedMigration)) {
+    throw new Error("LEGACY_EVAL_SNAPSHOT_MIGRATION_INVALID: migration metadata does not match the policy transition");
+  }
+  if (migration && (!sameJson(evaluationSources(after), approvedEvaluationSources(intake)) ||
+    !sameJson(after.evaluations, discoveredEvaluationSnapshot(discovery)))) {
+    throw new Error("LEGACY_EVAL_SNAPSHOT_MIGRATION_INVALID: candidate evaluations do not match current approved discovery evidence");
+  }
+  const differences = policyDifference(before, after, migration ? undefined : inheritedEvaluationSnapshot(before, after));
   const baseline = baselineDifference(before, after);
   if ((baseline?.added.length ?? 0) > 0) {
     differences.weakening.detected = true;
@@ -1220,7 +1292,13 @@ function validateUpdateTransition(root: string, plan: ChangePlan): void {
   const expectedTo = { compiler: afterCompiler, schemaVersion: after.schemaVersion, policyDigest: hashObject(after) };
   const expectedInherited = inheritedPolicyConfiguration(before, discovery);
   const expectedDrift = updateDriftMetadata(root, manifest, intake, intakeHash, discoveryHash);
-  validateWorktreeUpdateMetadata(root, update.worktree);
+  if (migration) {
+    if (!sameJson(update.worktree, observeWorktreeUpdate(root))) {
+      throw new Error("UPDATE_METADATA_INVALID: worktree update status drifted after planning");
+    }
+  } else {
+    validateWorktreeUpdateMetadata(root, update.worktree);
+  }
   if (!sameJson(update.from, expectedFrom) || !sameJson(update.to, expectedTo) ||
     !sameJson(update.inherited, expectedInherited) || !sameJson(update.drift, expectedDrift) ||
     update.migrationRequired !== (update.worktree.status === "migration-required") ||

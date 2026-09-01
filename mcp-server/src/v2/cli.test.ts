@@ -115,7 +115,7 @@ describe("v2 CLI forward flow", () => {
     expect(run(root, ["doctor"]).compiler).toMatchObject({ status: "current", current: { version: compilerVersion } });
   }, 30_000);
 
-  it("exposes only the dedicated update plan interface", () => {
+  it("exposes ordinary updates and the explicit legacy evaluation migration interface", () => {
     const root = mkdtempSync(join(tmpdir(), "harness-cli-update-interface-"));
     projects.push(root);
     for (const alias of [runResult(root, ["plan", "--upgrade"]), runResult(root, ["plan", "--update"]), runResult(root, ["upgrade", "plan"])]) {
@@ -134,6 +134,10 @@ describe("v2 CLI forward flow", () => {
     });
     expect(relative.status).not.toBe(0);
     expect(relative.stderr).toMatch(/UPDATE_PROJECT_ABSOLUTE_REQUIRED/u);
+
+    const migration = runResult(root, ["update", "legacy-eval-snapshot", "plan"]);
+    expect(migration.status).not.toBe(0);
+    expect(migration.stderr).toMatch(/HARNESS_INITIALIZATION_REQUIRED/u);
   });
 
   it("requires initialization before planning an update", () => {

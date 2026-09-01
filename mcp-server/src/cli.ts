@@ -612,6 +612,7 @@ Usage:
   harness-automation plan [--delivery-profile worktree-delivery] [--domain-profile game-development] [--project .]
   harness-automation plan [--quality-profile eval-driven-development] [--adopt-typescript-naming] [--project .]
   harness-automation update plan --project <absolute-path> [--adopt-typescript-naming]
+  harness-automation update legacy-eval-snapshot plan --project <absolute-path>
   harness-automation apply --plan <relative-path> --approve <sha256> [--project .]
   harness-automation context [--project .]
   harness-automation check [--project .] [--mode session|commit|ci]
@@ -703,11 +704,17 @@ function runWorkflow(argv: string[]): void {
     case "upgrade":
       throw new Error("UPDATE_INTERFACE_INVALID: use `harness-automation update plan --project <absolute-path>`");
     case "update": {
-      if (args.positionals[0] !== "plan") throw new Error("UPDATE_COMMAND_REQUIRED: only `update plan` is available");
+      const legacyEvalSnapshotMigration = args.positionals[0] === "legacy-eval-snapshot" && args.positionals[1] === "plan";
+      if (!legacyEvalSnapshotMigration && args.positionals[0] !== "plan") {
+        throw new Error("UPDATE_COMMAND_REQUIRED: use `update plan` or `update legacy-eval-snapshot plan`");
+      }
       const replacementOptions = ["profile", "stack", "delivery-profile", "domain-profile", "quality-profile"]
         .filter((name) => args.flags.has(name) || args.values.has(name));
       if (replacementOptions.length > 0) {
         throw new Error(`UPDATE_CONFIG_INHERITED: remove ${replacementOptions.map((name) => `--${name}`).join(", ")}; update inherits applied project configuration`);
+      }
+      if (legacyEvalSnapshotMigration && args.flags.has("adopt-typescript-naming")) {
+        throw new Error("LEGACY_EVAL_SNAPSHOT_MIGRATION_FOCUSED: run TypeScript naming adoption in a separate update plan");
       }
       const requestedProject = value(args, "project");
       if (!requestedProject || !isAbsolute(requestedProject)) {
@@ -716,6 +723,7 @@ function runWorkflow(argv: string[]): void {
       const result = planProjectUpdate({
         projectRoot: root,
         adoptTypeScriptNaming: args.flags.has("adopt-typescript-naming"),
+        migrateLegacyEvalSnapshot: legacyEvalSnapshotMigration,
       });
       printJson({
         status: result.status,
@@ -731,6 +739,7 @@ function runWorkflow(argv: string[]): void {
         targets: result.plan?.update?.targets ?? [],
         drift: result.plan?.update?.drift ?? null,
         weakening: result.plan?.update?.weakening ?? null,
+        legacyEvalSnapshotMigration: result.plan?.legacyEvalSnapshotMigration ?? null,
         worktree: result.worktree,
         migrationRequired: result.worktree.status === "migration-required",
         warnings: result.plan?.warnings ?? [],
