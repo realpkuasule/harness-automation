@@ -1,0 +1,1 @@
+{"id":"npm-release-no-worktree","requirementIds":["PRD-REL-001","PRD-REL-002","PRD-REL-003","PRD-REL-004"],"source":"skills/manage-worktree-delivery/SKILL.md","requiredStrings":["## npm release 例外","primary/management checkout","不得为版本更新、验证、打 tag、publish 或发布重试新建专用 worktree","普通 Issue 开发、集成检查和临时 Review worktree 不受影响"]}

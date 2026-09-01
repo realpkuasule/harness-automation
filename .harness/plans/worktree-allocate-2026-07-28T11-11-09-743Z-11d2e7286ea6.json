@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "worktree-delivery/1.0",
+  "kind": "workspace-plan",
+  "id": "worktree-allocate-2026-07-28T11-11-09-743Z-11d2e7286ea6",
+  "createdAt": "2026-07-28T11:11:09.743Z",
+  "projectDir": "/Users/zhichao/codex/harness-automation",
+  "commonDir": "/Users/zhichao/codex/harness-automation/.git",
+  "observedHash": "09103b9d30f07bfb0afc52f004f92aaa846683655c7e853edfe00dcfe728a5f1",
+  "operation": {
+    "kind": "allocate",
+    "lease": {
+      "schemaVersion": "1.0",
+      "workItem": "github:realpkuasule/harness-automation#6",
+      "branch": "codex/worktree-delivery-dogfood",
+      "path": "/Users/zhichao/codex/worktrees/harness-automation/issue-6",
+      "owner": "realpkuasule",
+      "acceptedCommit": "bcda44377fb6ab61a383cdc156dd5bd24da077bd",
+      "createdAt": "2026-07-28T11:11:09.742Z",
+      "heartbeatAt": "2026-07-28T11:11:09.742Z",
+      "status": "active"
+    },
+    "startPoint": "bcda44377fb6ab61a383cdc156dd5bd24da077bd",
+    "createBranch": false
+  },
+  "warnings": [],
+  "planHash": "220c6717ab3f78dbfaa767c5f9ab5ed819be73740d8c281de386d7aa4f0f8ec2"
+}

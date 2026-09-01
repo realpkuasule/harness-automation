@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "2.0",
+  "id": "2026-09-01T03-34-04-038Z-565dd77a4665",
+  "planHash": "ce26910e992a79262cee97020988a939a32ab498df5b8fa8c81245cc4ccd871e",
+  "appliedAt": "2026-09-01T03:36:23.496Z",
+  "operations": [
+    {
+      "path": ".harness/policy.yaml",
+      "beforeHash": "3b606edd2464575178df04b00e0989dc4920d7ee3edba12cb04f3270aa1dbaee",
+      "afterHash": "4b908501d4b8c7edded4ba6a8b593b04dab8d3f93b3f3429de74909e327892c2",
+      "backupPath": ".harness/changes/2026-09-01T03-34-04-038Z-565dd77a4665/before/.harness/policy.yaml"
+    },
+    {
+      "path": ".harness/generated/effective-policy.md",
+      "beforeHash": "a37cac4700e0d5d6de6785d4b322370a644b351e3fcd720851c2f64e624af2ad",
+      "afterHash": "46e9495c1e5f5e1f65793cd53d69faae353b5fd117a76fe3615a1a5e24a34d3d",
+      "backupPath": ".harness/changes/2026-09-01T03-34-04-038Z-565dd77a4665/before/.harness/generated/effective-policy.md"
+    },
+    {
+      "path": "AGENTS.md",
+      "beforeHash": "a17e933794429e5591de4a152b54088819852fcbbaa31587b0469d27e8e5bc2f",
+      "afterHash": "2f6669f6ee330167c7733b6a56af6a08278591875fd3b20994c13073a9243634",
+      "backupPath": ".harness/changes/2026-09-01T03-34-04-038Z-565dd77a4665/before/AGENTS.md"
+    },
+    {
+      "path": "CLAUDE.md",
+      "beforeHash": "d98301487d1eb7325d07568bbc1c3d7ef1fde55a207dbd55ca7d45bb5622d828",
+      "afterHash": "15ec25f60a0309e79f54499a52ca8324722bbc325f7139a3746289149bda57e1",
+      "backupPath": ".harness/changes/2026-09-01T03-34-04-038Z-565dd77a4665/before/CLAUDE.md"
+    },
+    {
+      "path": ".harness/.gitignore",
+      "beforeHash": "848edfa49c00887f16ed7d92410f639701dd0f5685d4051057c52e1d28b1db73",
+      "afterHash": "848edfa49c00887f16ed7d92410f639701dd0f5685d4051057c52e1d28b1db73",
+      "backupPath": ".harness/changes/2026-09-01T03-34-04-038Z-565dd77a4665/before/.harness/.gitignore"
+    },
+    {
+      "path": ".harness/manifest.json",
+      "beforeHash": "840edd1407cdec06b39ad0a4b4a2d87cce76f7babe3c8c0ebe89167caa8f30ba",
+      "afterHash": "f2fc27004fe940d2198f5df5dd4d2772c354514554bbd20dca6ce12e8e22a8f5",
+      "backupPath": ".harness/changes/2026-09-01T03-34-04-038Z-565dd77a4665/before/.harness/manifest.json"
+    }
+  ]
+}

@@ -93,13 +93,13 @@ function typescriptNaming(owner: string, sources: SourceSnapshot[]): PolicyRule 
   return rule({
     id: "typescript-naming",
     title: "TypeScript naming",
-    statement: "Use camelCase for variables, functions, parameters, methods, and local properties; PascalCase for classes, interfaces, types, enums, and React components; UPPER_SNAKE_CASE is allowed only for module constants.",
+    statement: "Use camelCase for variables, functions, parameters, methods, and local properties; PascalCase for classes, interfaces, types, enums, React components, and exported Zod schemas; UPPER_SNAKE_CASE is allowed for module constants, imported constants, and static readonly class constants. Node __dirname/__filename and the exact unused-parameter placeholder _ are allowed.",
     rationale: "A deterministic naming gate prevents fresh sessions from alternating between camelCase and snake_case.",
     scope: { include: ["**/*.ts", "**/*.tsx"], exclude: ["**/*.d.ts", "**/generated/**", ".harness/**"], boundaries: ["code"] },
     formalization: "deterministic",
     severity: "error",
     targets: [{ kind: "linter", adapter: "harness-typescript-ast" }],
-    verification: { commands: [["harness-automation", "check", "--project", "."]], passCriteria: "The AST naming verifier passes the invalid fixture test and the repository contains no violations." },
+    verification: { commands: [["harness-automation", "check", "--project", "."]], passCriteria: "The AST naming verifier passes its invalid fixture and the repository contains no unapproved violations." },
     examples: { valid: ["const userId = 1", "class UserService {}"], invalid: ["const user_id = 1", "class user_service {}"] },
   }, owner, sources);
 }

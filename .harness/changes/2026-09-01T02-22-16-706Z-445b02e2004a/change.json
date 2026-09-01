@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "2.0",
+  "id": "2026-09-01T02-22-16-706Z-445b02e2004a",
+  "planHash": "c6fbb853f2ae85b0566120d68028bfa2cb210204f2cc5c71be528647d0ac620f",
+  "appliedAt": "2026-09-01T02:37:43.797Z",
+  "operations": [
+    {
+      "path": ".harness/policy.yaml",
+      "beforeHash": null,
+      "afterHash": "3b606edd2464575178df04b00e0989dc4920d7ee3edba12cb04f3270aa1dbaee",
+      "backupPath": null
+    },
+    {
+      "path": ".harness/generated/effective-policy.md",
+      "beforeHash": null,
+      "afterHash": "a37cac4700e0d5d6de6785d4b322370a644b351e3fcd720851c2f64e624af2ad",
+      "backupPath": null
+    },
+    {
+      "path": "AGENTS.md",
+      "beforeHash": "d4ffc7f771a88472d056819982e3a98a3d306c637ab08ecdc693a9a469406c05",
+      "afterHash": "a17e933794429e5591de4a152b54088819852fcbbaa31587b0469d27e8e5bc2f",
+      "backupPath": ".harness/changes/2026-09-01T02-22-16-706Z-445b02e2004a/before/AGENTS.md"
+    },
+    {
+      "path": "CLAUDE.md",
+      "beforeHash": "0051d1705e980dadfc04da3f89446d7a51af06229c9e9825f5ea0d19e5d536c8",
+      "afterHash": "d98301487d1eb7325d07568bbc1c3d7ef1fde55a207dbd55ca7d45bb5622d828",
+      "backupPath": ".harness/changes/2026-09-01T02-22-16-706Z-445b02e2004a/before/CLAUDE.md"
+    },
+    {
+      "path": ".harness/.gitignore",
+      "beforeHash": null,
+      "afterHash": "848edfa49c00887f16ed7d92410f639701dd0f5685d4051057c52e1d28b1db73",
+      "backupPath": null
+    },
+    {
+      "path": ".harness/manifest.json",
+      "beforeHash": null,
+      "afterHash": "840edd1407cdec06b39ad0a4b4a2d87cce76f7babe3c8c0ebe89167caa8f30ba",
+      "backupPath": null
+    }
+  ]
+}

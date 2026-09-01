@@ -112,6 +112,14 @@ harness-automation discover --project .
 # Generate a plan only; target files are not modified
 harness-automation plan --project . --profile full-typescript
 
+# Existing TypeScript naming debt requires an explicit owner-approved intake snapshot
+harness-automation intake --project . --owner <owner> --approve-sources \
+  --approve-typescript-naming-adoption
+harness-automation discover --project .
+
+# The matching rule-bound fingerprints then enter the immutable, hash-approved plan
+harness-automation plan --project . --profile full-typescript --adopt-typescript-naming
+
 # When no full preset matches, the owner approves the exact stacks; --stack is repeatable
 harness-automation plan --project . --profile custom \
   --stack typescript \

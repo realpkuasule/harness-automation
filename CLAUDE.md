@@ -123,3 +123,18 @@ npx vitest run --coverage  # 覆盖率报告
 ### 新 Preset
 
 - `team-gitlab-ts` — TypeScript 团队 + GitLab 完整 Harness 配置（23 条规则）
+
+<!-- harness-automation:v2:start -->
+## Harness engineering continuity
+
+Effective policy digest: `f8a93f537ed51ac89df6fa4174662df79b268cee67ddb554d55b93ea274d954f`
+
+Before editing code in a new session:
+
+1. Run `harness-automation context --project .` and read `.harness/generated/effective-policy.md`.
+2. Search for the existing implementation and identify the owning module before adding a new one.
+3. Treat shared APIs, RPC, database schemas, queues, and generated code as contracts.
+4. Run `harness-automation check --project .` before declaring work complete.
+5. Never edit `.harness/generated/**` or this managed block directly.
+
+<!-- harness-automation:v2:end -->

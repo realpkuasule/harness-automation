@@ -3,7 +3,8 @@ name: manage-worktree-delivery
 description: >
   审计和治理 AI coding 项目的 Git worktree 交付生命周期。用户要求分配或接管 Issue worktree、创建临时 Review
   环境、检查重复或残留 worktree、关闭已完成 worktree、执行合并后短生命周期分支清理、检查租约/容量/漂移，或处理
-  跨 Agent/跨会话 worktree 失控时使用。普通 Git 仓库无需 PRD 即可运行只读 status、audit 和临时 review。
+  跨 Agent/跨会话 worktree 失控，或准备 npm release 并需要判断是否应创建 worktree 时使用。普通 Git 仓库无需 PRD
+  即可运行只读 status、audit 和临时 review。
 ---
 
 # Manage Worktree Delivery
@@ -26,6 +27,12 @@ node <skill目录>/scripts/run.mjs worktree audit --project <项目绝对路径>
 仓库级 GitHub ruleset、Actions、环境和 Project 治理不属于本 Skill 的 worktree 生命周期职责；需要只读观察时使用共享 CLI 的 `github audit`。GitHub Actions 也不是 worktree 或 Harness 使用前提。
 
 分别报告 `configured`、`loaded`、`enforced`、`passing`。Provider 不可用、租约重复或映射漂移时，不得把 `blocked` 解释为通过。
+
+## npm release 例外
+
+npm 版本更新、验证、打 tag、publish 和发布重试必须复用现有 primary/management checkout。不得为版本更新、验证、打 tag、publish 或发布重试新建专用 worktree，也不得为此分配、接管或使用专用 worktree。若该 checkout 不适合安全发布，停止并报告原因，不得用新 worktree 兜底。
+
+普通 Issue 开发、集成检查和临时 Review worktree 不受影响。
 
 ## 正式启用
 

@@ -38,10 +38,11 @@ import type {
   Stack,
   StackAdapterResult,
   StackProfile,
+  TypeScriptNamingBaseline,
 } from "./types.js";
-import { hasBuiltInStackAdapter, stackAdapterSupport } from "./types.js";
+import { hasBuiltInStackAdapter, stackAdapterSupport, TYPESCRIPT_NAMING_RULE_ID } from "./types.js";
 import { EVAL_CONTRACT_PATH, evaluationSourcePaths, inspectEvaluations, readEvalContract } from "./evals.js";
-import { checkGo, checkPython, checkTypeScript } from "./verifier.js";
+import { checkGo, checkPython, checkTypeScript, inspectTypeScript } from "./verifier.js";
 import {
   applyWorkspacePlan,
   auditWorkspace,
@@ -232,6 +233,7 @@ export function intakeProject(args: {
   projectRoot: string;
   owner: string;
   approveSources: boolean;
+  approveTypeScriptNamingAdoption?: boolean;
   now?: Date;
 }): Intake {
   if (!args.owner.trim()) throw new Error("OWNER_REQUIRED: provide the project owner's stable name or handle");
@@ -245,6 +247,16 @@ export function intakeProject(args: {
     approvedAt: (args.now ?? new Date()).toISOString(),
     sources: collectSources(root),
   };
+  if (args.approveTypeScriptNamingAdoption) {
+    const observed = inspectTypeScript(root);
+    if (observed.some((violation) => violation.fingerprint === null)) {
+      throw new Error("TYPESCRIPT_NAMING_ADOPTION_PARSE_ERROR: fix TypeScript parse errors before approving naming debt");
+    }
+    intake.typescriptNamingAdoption = {
+      ruleId: TYPESCRIPT_NAMING_RULE_ID,
+      fingerprints: observed.map((violation) => violation.fingerprint!).sort(),
+    };
+  }
   atomicWrite(harnessPath(root, "intake.json"), prettyJson(intake));
   return intake;
 }
@@ -304,6 +316,56 @@ function uniqueCommands(commands: string[][]): string[][] {
   });
 }
 
+function typeScriptNamingBaseline(baseline: unknown): TypeScriptNamingBaseline | null {
+  if (!baseline || typeof baseline !== "object" || Array.isArray(baseline)) return null;
+  const candidate = baseline as Record<string, unknown>;
+  if (candidate.ruleId !== TYPESCRIPT_NAMING_RULE_ID || typeof candidate.approvedIntakeHash !== "string" ||
+    !Array.isArray(candidate.fingerprints) || !candidate.fingerprints.every((item) => typeof item === "string")) return null;
+  const fingerprints = candidate.fingerprints as string[];
+  const sorted = [...fingerprints].sort();
+  if (!/^[a-f0-9]{64}$/u.test(candidate.approvedIntakeHash) ||
+    fingerprints.some((item, index) => !/^[a-f0-9]{64}$/u.test(item) || item !== sorted[index])) return null;
+  return {
+    ruleId: TYPESCRIPT_NAMING_RULE_ID,
+    approvedIntakeHash: candidate.approvedIntakeHash,
+    fingerprints: sorted,
+  };
+}
+
+function currentTypeScriptNamingBaseline(root: string): TypeScriptNamingBaseline | null {
+  const path = harnessPath(root, "policy.yaml");
+  if (!existsSync(path)) return null;
+  return typeScriptNamingBaseline((readJson<Record<string, unknown>>(path)).typescriptNamingBaseline);
+}
+
+function sameFingerprints(left: readonly string[], right: readonly string[]): boolean {
+  const a = [...left].sort();
+  const b = [...right].sort();
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function subtractFingerprints(left: readonly string[], right: readonly string[]): string[] {
+  const remaining = new Map<string, number>();
+  for (const item of right) remaining.set(item, (remaining.get(item) ?? 0) + 1);
+  return left.filter((item) => {
+    const count = remaining.get(item) ?? 0;
+    if (count === 0) return true;
+    remaining.set(item, count - 1);
+    return false;
+  });
+}
+
+function intersectFingerprints(left: readonly string[], right: readonly string[]): string[] {
+  const remaining = new Map<string, number>();
+  for (const item of right) remaining.set(item, (remaining.get(item) ?? 0) + 1);
+  return left.filter((item) => {
+    const count = remaining.get(item) ?? 0;
+    if (count === 0) return false;
+    remaining.set(item, count - 1);
+    return true;
+  });
+}
+
 export function planProject(args: {
   projectRoot: string;
   profile?: StackProfile;
@@ -311,6 +373,7 @@ export function planProject(args: {
   deliveryProfiles?: DeliveryProfile[];
   domainProfiles?: DomainProfile[];
   qualityProfiles?: QualityProfile[];
+  adoptTypeScriptNaming?: boolean;
   now?: Date;
 }): { plan: ChangePlan; path: string; policy: PolicyDocument } {
   const root = resolve(args.projectRoot);
@@ -320,6 +383,7 @@ export function planProject(args: {
   if (!existsSync(discoveryFile)) throw new Error("DISCOVERY_REQUIRED: run discover first");
   const intake = readJson<Intake>(intakeFile);
   const discovery = readJson<Discovery>(discoveryFile);
+  const intakeHash = fileHash(intakeFile)!;
   ensureApprovedSources(root, intake);
   const qualityProfiles = [...new Set(args.qualityProfiles ?? [])];
   if (qualityProfiles.includes("eval-driven-development")) {
@@ -345,6 +409,41 @@ export function planProject(args: {
     domainProfiles: args.domainProfiles,
     qualityProfiles,
   });
+  const currentBaseline = currentTypeScriptNamingBaseline(root);
+  const observedNaming = policy.project.stacks.includes("typescript") ? inspectTypeScript(root) : [];
+  const observedFingerprints = observedNaming.flatMap((violation) => violation.fingerprint ?? []).sort();
+  if (args.adoptTypeScriptNaming) {
+    if (!policy.project.stacks.includes("typescript")) {
+      throw new Error("TYPESCRIPT_NAMING_ADOPTION_REQUIRES_TYPESCRIPT: select the typescript stack first");
+    }
+    if (observedNaming.some((violation) => violation.fingerprint === null)) {
+      throw new Error("TYPESCRIPT_NAMING_ADOPTION_PARSE_ERROR: fix TypeScript parse errors before adopting naming debt");
+    }
+    const approval = intake.typescriptNamingAdoption;
+    if (approval?.ruleId !== TYPESCRIPT_NAMING_RULE_ID) {
+      throw new Error("TYPESCRIPT_NAMING_ADOPTION_INTAKE_REQUIRED: rerun intake with explicit owner approval for the current naming fingerprints");
+    }
+    if (!sameFingerprints(approval.fingerprints, observedFingerprints)) {
+      throw new Error("TYPESCRIPT_NAMING_ADOPTION_DRIFT: naming violations changed after intake approval; rerun intake");
+    }
+    const added = subtractFingerprints(observedFingerprints, currentBaseline?.fingerprints ?? []);
+    if (currentBaseline && added.length > 0 && currentBaseline.approvedIntakeHash === intakeHash) {
+      throw new Error("TYPESCRIPT_NAMING_ADOPTION_FRESH_INTAKE_REQUIRED: baseline expansion or replacement requires a new explicit adoption intake");
+    }
+    policy.typescriptNamingBaseline = {
+      ruleId: TYPESCRIPT_NAMING_RULE_ID,
+      approvedIntakeHash: intakeHash,
+      fingerprints: observedFingerprints,
+    };
+  } else if (policy.project.stacks.includes("typescript")) {
+    policy.typescriptNamingBaseline = {
+      ruleId: TYPESCRIPT_NAMING_RULE_ID,
+      approvedIntakeHash: intakeHash,
+      fingerprints: currentBaseline
+        ? intersectFingerprints(currentBaseline.fingerprints, observedFingerprints)
+        : [],
+    };
+  }
   const policyDigest = hashObject(policy);
   const effectivePolicy = renderEffectivePolicy(policy, policyDigest);
   const instruction = managedInstructionBlock(policyDigest);
@@ -380,6 +479,7 @@ export function planProject(args: {
     deliveryProfiles: args.deliveryProfiles ?? [],
     domainProfiles: args.domainProfiles ?? [],
     qualityProfiles,
+    adoptTypeScriptNaming: args.adoptTypeScriptNaming === true,
   });
   const id = `${createdAt.replace(/[:.]/gu, "-")}-${seed.slice(0, 12)}`;
   const draft: ChangePlan = {
@@ -387,7 +487,7 @@ export function planProject(args: {
     id,
     createdAt,
     projectDir: root,
-    intakeHash: fileHash(intakeFile) ?? "",
+    intakeHash,
     discoveryHash: fileHash(discoveryFile) ?? "",
     sourceHashes: intake.sources.map(({ path, sha256: sourceHash }) => ({ path, sha256: sourceHash })),
     operations,
@@ -404,6 +504,12 @@ export function planProject(args: {
         .filter((stack) => !hasBuiltInStackAdapter(stack))
         .map((stack) => `Stack-specific enforcement blocked for '${stack}': no built-in adapter; generic continuity policies will still be applied.`),
       ...policy.policies.filter((item) => item.formalization === "cognitive").map((item) => `${item.id}: guidance requires owner/reviewer judgment`),
+      ...(args.adoptTypeScriptNaming
+        ? [`Owner-approved intake adopts ${policy.typescriptNamingBaseline?.fingerprints.length ?? 0} existing TypeScript naming violation(s) as a ratcheted baseline.`]
+        : []),
+      ...(currentBaseline && !args.adoptTypeScriptNaming && (policy.typescriptNamingBaseline?.fingerprints.length ?? 0) < currentBaseline.fingerprints.length
+        ? [`TypeScript naming baseline ratchets from ${currentBaseline.fingerprints.length} to ${policy.typescriptNamingBaseline?.fingerprints.length ?? 0} violation(s).`]
+        : []),
     ],
     planHash: "",
   };
@@ -421,6 +527,35 @@ function validatePlan(root: string, plan: ChangePlan, approval: string): void {
   assertCurrentHash(harnessPath(root, "intake.json"), plan.intakeHash);
   assertCurrentHash(harnessPath(root, "discovery.json"), plan.discoveryHash);
   for (const source of plan.sourceHashes) assertCurrentHash(safePath(root, source.path), source.sha256);
+}
+
+function validateTypeScriptNamingTransition(root: string, plan: ChangePlan): void {
+  const policyOperation = plan.operations.find((item) => item.path === ".harness/policy.yaml");
+  if (!policyOperation) return;
+  const nextPolicy = JSON.parse(policyOperation.content) as Record<string, unknown>;
+  const next = typeScriptNamingBaseline(nextPolicy.typescriptNamingBaseline);
+  const project = nextPolicy.project as Record<string, unknown> | undefined;
+  if (!Array.isArray(project?.stacks) || !project.stacks.includes("typescript")) return;
+  if (!next) throw new Error("TYPESCRIPT_NAMING_BASELINE_INVALID: TypeScript policy requires a sorted rule-bound fingerprint baseline");
+  const current = currentTypeScriptNamingBaseline(root);
+  const nextFingerprints = next.fingerprints;
+  const observed = inspectTypeScript(root);
+  if (observed.some((violation) => violation.fingerprint === null) ||
+    !sameFingerprints(observed.flatMap((violation) => violation.fingerprint ?? []), nextFingerprints)) {
+    throw new Error("TYPESCRIPT_NAMING_ADOPTION_DRIFT: naming violations changed after the plan was created");
+  }
+  const added = subtractFingerprints(nextFingerprints, current?.fingerprints ?? []);
+  if (added.length === 0) return;
+
+  const intake = readJson<Intake>(harnessPath(root, "intake.json"));
+  const approval = intake.typescriptNamingAdoption;
+  if (approval?.ruleId !== TYPESCRIPT_NAMING_RULE_ID ||
+    !sameFingerprints(approval.fingerprints, nextFingerprints) || next.approvedIntakeHash !== plan.intakeHash) {
+    throw new Error("TYPESCRIPT_NAMING_BASELINE_EXPANSION_NOT_APPROVED: baseline expansion or replacement requires the matching explicit adoption intake");
+  }
+  if (current?.approvedIntakeHash === plan.intakeHash) {
+    throw new Error("TYPESCRIPT_NAMING_ADOPTION_FRESH_INTAKE_REQUIRED: baseline expansion or replacement requires a new explicit adoption intake");
+  }
 }
 
 export function applyPlan(args: {
@@ -444,6 +579,7 @@ function applyFilePlan(args: {
   const root = resolve(args.projectRoot);
   const plan = readJson<ChangePlan>(safePath(root, args.planPath));
   validatePlan(root, plan, args.approval);
+  validateTypeScriptNamingTransition(root, plan);
   const changeFile = harnessPath(root, `changes/${plan.id}/change.json`);
   if (existsSync(changeFile)) {
     const existing = readJson<AppliedChange>(changeFile);
@@ -603,7 +739,9 @@ export function checkProject(projectRoot: string, observedDrift?: ReturnType<typ
     return existsSync(target) && readFileSync(target, "utf8").includes(digest);
   });
   const naming = {
-    typescript: policy.project.stacks.includes("typescript") ? checkTypeScript(root) : null,
+    typescript: policy.project.stacks.includes("typescript")
+      ? checkTypeScript(root, policy.typescriptNamingBaseline)
+      : null,
     python: policy.project.stacks.includes("python") ? checkPython(root) : null,
     go: policy.project.stacks.includes("go") ? checkGo(root) : null,
   };

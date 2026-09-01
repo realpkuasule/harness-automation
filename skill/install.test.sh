@@ -38,5 +38,6 @@ test -f "$TEST_HOME/.claude.json"
 grep -q 'harness-automation' "$TEST_HOME/.claude.json"
 grep -q 'Harness Automation' "$TEST_HOME/.codex/skills/harness-automation/SKILL.md"
 grep -q 'worktree audit' "$TEST_HOME/.codex/skills/manage-worktree-delivery/SKILL.md"
+grep -q '不得为版本更新、验证、打 tag、publish 或发布重试新建专用 worktree' "$TEST_HOME/.codex/skills/manage-worktree-delivery/SKILL.md"
 
 echo "Installer test passed"

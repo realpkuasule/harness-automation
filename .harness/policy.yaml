@@ -1,0 +1,633 @@
+{
+  "schemaVersion": "2.0",
+  "project": {
+    "name": "harness-automation",
+    "owner": "zhichao",
+    "phase": "design-approved",
+    "stacks": [
+      "typescript"
+    ],
+    "deliveryProfiles": [],
+    "domainProfiles": [],
+    "qualityProfiles": [
+      "eval-driven-development"
+    ]
+  },
+  "sources": [
+    {
+      "id": "prd",
+      "kind": "prd",
+      "path": "docs/PRD.md",
+      "sha256": "bdff07ea53335ce52829bd8e5d3c2b270b694580d76b5a526695296e21bbea3b",
+      "approved": true
+    },
+    {
+      "id": "design-harness-automation-design-v2-0-backup",
+      "kind": "design",
+      "path": "docs/design/harness-automation-design-v2.0-backup.md",
+      "sha256": "9b27dc8b89be4d84d738e7c1e44ce5efcb4ddabe0f2c7c105f4b16a7fb942bfc",
+      "approved": true
+    },
+    {
+      "id": "design-harness-automation-design",
+      "kind": "design",
+      "path": "docs/design/harness-automation-design.md",
+      "sha256": "be715a5787993196dd447b70d2db90d448957c54097082608ccb677c1289e507",
+      "approved": true
+    },
+    {
+      "id": "design-harness-design-comparison",
+      "kind": "design",
+      "path": "docs/design/harness-design-comparison.md",
+      "sha256": "1ad7263e9ad68012e8511f0a7b773d97a9c0144690de6b75c644e2e6b97ca0bb",
+      "approved": true
+    },
+    {
+      "id": "design-harness-skill-v2",
+      "kind": "design",
+      "path": "docs/design/harness-skill-v2.md",
+      "sha256": "37448fa527133a99b3dad892f6ba1000493befe64d91c3f06c1a177f98761ab2",
+      "approved": true
+    },
+    {
+      "id": "design-typescript-naming-adoption-baseline",
+      "kind": "design",
+      "path": "docs/design/typescript-naming-adoption-baseline.md",
+      "sha256": "40de35a515ae50b247d96bd26f031c8518197f87df4807e00655e480022ba42a",
+      "approved": true
+    },
+    {
+      "id": "design-worktree-delivery",
+      "kind": "design",
+      "path": "docs/design/worktree-delivery.md",
+      "sha256": "aaa32ed7b25f4870c8e8a0ca61a0f6fdd68698a85d8f2134c47d4c3e4f89a641",
+      "approved": true
+    },
+    {
+      "id": "research-github-wheels-2026-08-31",
+      "kind": "research",
+      "path": "docs/research/github-wheels-2026-08-31.json",
+      "sha256": "2ae5dbd6bb795fef6ea10a32cf85159e4e4b2557338c06cc7e40efd9802d87b0",
+      "approved": true
+    },
+    {
+      "id": "research-github-wheels-2026-08-31-2",
+      "kind": "research",
+      "path": "docs/research/github-wheels-2026-08-31.md",
+      "sha256": "e4d10b984d423a6b9b62029954059cb03952939f210e6a3ad118357c9f8d02e3",
+      "approved": true
+    },
+    {
+      "id": "research-npm-release-worktree",
+      "kind": "research",
+      "path": "docs/research/npm-release-worktree.md",
+      "sha256": "4b81aafce1d7840407ba906b44f0d7a5a1c82451f549674a3a916b8e8aef407a",
+      "approved": true
+    },
+    {
+      "id": "eval-npm-release-worktree-pre-implementation",
+      "kind": "eval",
+      "path": "evals/baselines/npm-release-worktree-pre-implementation.json",
+      "sha256": "299a5bea6ff72f88e31a805a6b6f7e67d7fcf492ec11da2493f3f96a8f87dd60",
+      "approved": true
+    },
+    {
+      "id": "eval-evals",
+      "kind": "eval",
+      "path": "evals/evals.json",
+      "sha256": "aefc091356b5b5f23e14945ab48d1468599fc51cda211f94c07956d89022b794",
+      "approved": true
+    },
+    {
+      "id": "eval-known-bad-npm-release-policy",
+      "kind": "eval",
+      "path": "evals/fixtures/known-bad-npm-release-policy.md",
+      "sha256": "172a210a2f2f59bdd177ca635e937255559dbd22515b1224e633dd776de3bb9f",
+      "approved": true
+    },
+    {
+      "id": "eval-run-npm-release-policy",
+      "kind": "eval",
+      "path": "evals/run_npm_release_policy.mjs",
+      "sha256": "715d3320bf661d48b1d477592da4a077ef025eb8a41f48704dbfae032c54847a",
+      "approved": true
+    },
+    {
+      "id": "eval-npm-release-worktree",
+      "kind": "eval",
+      "path": "evals/tasks/npm-release-worktree.jsonl",
+      "sha256": "3710cc36bcfbb96ee9d76abe997cc56d16e69b997247b2dc9ce566e7326d9cd9",
+      "approved": true
+    }
+  ],
+  "agents": {
+    "portableInstructionFile": "AGENTS.md",
+    "adapters": [
+      {
+        "id": "portable",
+        "capabilities": [
+          "root-instructions",
+          "scoped-instructions",
+          "structured-output"
+        ]
+      },
+      {
+        "id": "claude-code",
+        "capabilities": [
+          "root-instructions",
+          "scoped-instructions",
+          "instruction-imports",
+          "session-hooks",
+          "mcp"
+        ]
+      },
+      {
+        "id": "codex",
+        "capabilities": [
+          "root-instructions",
+          "scoped-instructions",
+          "mcp",
+          "structured-output"
+        ]
+      }
+    ]
+  },
+  "policies": [
+    {
+      "id": "single-implementation-owner",
+      "title": "Single implementation owner",
+      "statement": "Before implementation, search for an existing implementation and record the owning module; do not create a parallel implementation of the same capability.",
+      "rationale": "Parallel AI sessions otherwise duplicate the same capability and split maintenance ownership.",
+      "scope": {
+        "include": [
+          "**/*"
+        ],
+        "exclude": [
+          ".harness/**",
+          "**/generated/**"
+        ],
+        "boundaries": [
+          "code"
+        ]
+      },
+      "formalization": "procedural",
+      "severity": "error",
+      "targets": [
+        {
+          "kind": "agent-instruction",
+          "adapter": "portable",
+          "configPath": "AGENTS.md"
+        }
+      ],
+      "verification": {
+        "commands": [
+          [
+            "harness-automation",
+            "context",
+            "--project",
+            "."
+          ]
+        ],
+        "passCriteria": "The session receipt records policy digest and implementation ownership review."
+      },
+      "owner": "zhichao",
+      "sourceRefs": [
+        "prd",
+        "design-harness-automation-design-v2-0-backup",
+        "design-harness-automation-design",
+        "design-harness-design-comparison",
+        "design-harness-skill-v2",
+        "design-typescript-naming-adoption-baseline",
+        "design-worktree-delivery",
+        "research-github-wheels-2026-08-31",
+        "research-github-wheels-2026-08-31-2",
+        "research-npm-release-worktree",
+        "eval-npm-release-worktree-pre-implementation",
+        "eval-evals",
+        "eval-known-bad-npm-release-policy",
+        "eval-run-npm-release-policy",
+        "eval-npm-release-worktree"
+      ],
+      "status": "active",
+      "changeControl": {
+        "approvalRequired": true,
+        "migrationRequired": false
+      }
+    },
+    {
+      "id": "contract-first-change",
+      "title": "Contract-first interface changes",
+      "statement": "Change shared API, RPC, schema, database, or queue contracts before changing consumers; update compatibility tests in the same change.",
+      "rationale": "A stable source of truth prevents different sessions from implementing different interface assumptions.",
+      "scope": {
+        "include": [
+          "**/*"
+        ],
+        "exclude": [
+          ".harness/**"
+        ],
+        "boundaries": [
+          "api",
+          "rpc",
+          "database",
+          "queue"
+        ]
+      },
+      "formalization": "cognitive",
+      "severity": "error",
+      "targets": [
+        {
+          "kind": "agent-instruction",
+          "adapter": "portable",
+          "configPath": ".harness/generated/effective-policy.md"
+        }
+      ],
+      "verification": {
+        "commands": [],
+        "passCriteria": "Review confirms that contract sources and consumers changed together."
+      },
+      "owner": "zhichao",
+      "sourceRefs": [
+        "prd",
+        "design-harness-automation-design-v2-0-backup",
+        "design-harness-automation-design",
+        "design-harness-design-comparison",
+        "design-harness-skill-v2",
+        "design-typescript-naming-adoption-baseline",
+        "design-worktree-delivery",
+        "research-github-wheels-2026-08-31",
+        "research-github-wheels-2026-08-31-2",
+        "research-npm-release-worktree",
+        "eval-npm-release-worktree-pre-implementation",
+        "eval-evals",
+        "eval-known-bad-npm-release-policy",
+        "eval-run-npm-release-policy",
+        "eval-npm-release-worktree"
+      ],
+      "status": "active",
+      "changeControl": {
+        "approvalRequired": true,
+        "migrationRequired": false
+      }
+    },
+    {
+      "id": "generated-files-immutable",
+      "title": "Generated files are immutable",
+      "statement": "Never edit generated code or Harness compiler outputs directly; change their source and regenerate them.",
+      "rationale": "Direct edits are overwritten and create cross-session drift.",
+      "scope": {
+        "include": [
+          "**/generated/**",
+          ".harness/generated/**"
+        ],
+        "exclude": [],
+        "boundaries": [
+          "generated-code"
+        ]
+      },
+      "formalization": "procedural",
+      "severity": "error",
+      "targets": [
+        {
+          "kind": "agent-instruction",
+          "adapter": "portable",
+          "configPath": "AGENTS.md"
+        }
+      ],
+      "verification": {
+        "commands": [
+          [
+            "harness-automation",
+            "drift",
+            "--project",
+            "."
+          ]
+        ],
+        "passCriteria": "Generated output hashes match the Harness manifest."
+      },
+      "owner": "zhichao",
+      "sourceRefs": [
+        "prd",
+        "design-harness-automation-design-v2-0-backup",
+        "design-harness-automation-design",
+        "design-harness-design-comparison",
+        "design-harness-skill-v2",
+        "design-typescript-naming-adoption-baseline",
+        "design-worktree-delivery",
+        "research-github-wheels-2026-08-31",
+        "research-github-wheels-2026-08-31-2",
+        "research-npm-release-worktree",
+        "eval-npm-release-worktree-pre-implementation",
+        "eval-evals",
+        "eval-known-bad-npm-release-policy",
+        "eval-run-npm-release-policy",
+        "eval-npm-release-worktree"
+      ],
+      "status": "active",
+      "changeControl": {
+        "approvalRequired": true,
+        "migrationRequired": false
+      }
+    },
+    {
+      "id": "typescript-naming",
+      "title": "TypeScript naming",
+      "statement": "Use camelCase for variables, functions, parameters, methods, and local properties; PascalCase for classes, interfaces, types, enums, React components, and exported Zod schemas; UPPER_SNAKE_CASE is allowed for module constants, imported constants, and static readonly class constants. Node __dirname/__filename and the exact unused-parameter placeholder _ are allowed.",
+      "rationale": "A deterministic naming gate prevents fresh sessions from alternating between camelCase and snake_case.",
+      "scope": {
+        "include": [
+          "**/*.ts",
+          "**/*.tsx"
+        ],
+        "exclude": [
+          "**/*.d.ts",
+          "**/generated/**",
+          ".harness/**"
+        ],
+        "boundaries": [
+          "code"
+        ]
+      },
+      "formalization": "deterministic",
+      "severity": "error",
+      "targets": [
+        {
+          "kind": "linter",
+          "adapter": "harness-typescript-ast"
+        }
+      ],
+      "verification": {
+        "commands": [
+          [
+            "harness-automation",
+            "check",
+            "--project",
+            "."
+          ]
+        ],
+        "passCriteria": "The AST naming verifier passes its invalid fixture and the repository contains no unapproved violations."
+      },
+      "examples": {
+        "valid": [
+          "const userId = 1",
+          "class UserService {}"
+        ],
+        "invalid": [
+          "const user_id = 1",
+          "class user_service {}"
+        ]
+      },
+      "owner": "zhichao",
+      "sourceRefs": [
+        "prd",
+        "design-harness-automation-design-v2-0-backup",
+        "design-harness-automation-design",
+        "design-harness-design-comparison",
+        "design-harness-skill-v2",
+        "design-typescript-naming-adoption-baseline",
+        "design-worktree-delivery",
+        "research-github-wheels-2026-08-31",
+        "research-github-wheels-2026-08-31-2",
+        "research-npm-release-worktree",
+        "eval-npm-release-worktree-pre-implementation",
+        "eval-evals",
+        "eval-known-bad-npm-release-policy",
+        "eval-run-npm-release-policy",
+        "eval-npm-release-worktree"
+      ],
+      "status": "active",
+      "changeControl": {
+        "approvalRequired": true,
+        "migrationRequired": true
+      }
+    },
+    {
+      "id": "eval-contract-before-implementation",
+      "title": "Evaluation contract before implementation",
+      "statement": "Define Requirement/rule traceability, representative tasks, graders, an honest pre-implementation or adoption baseline, a known-bad control, and an explicit target in evals/evals.json before enforcing an evaluated capability.",
+      "rationale": "An approved evaluation contract turns ambiguous success criteria into stable cross-session development evidence.",
+      "scope": {
+        "include": [
+          "evals/**/*",
+          "docs/evals/**/*"
+        ],
+        "exclude": [],
+        "boundaries": [
+          "evaluation"
+        ]
+      },
+      "formalization": "procedural",
+      "severity": "error",
+      "targets": [
+        {
+          "kind": "agent-instruction",
+          "adapter": "portable",
+          "configPath": ".harness/generated/effective-policy.md"
+        }
+      ],
+      "verification": {
+        "commands": [],
+        "passCriteria": "The approved eval contract and every referenced source exist and match intake hashes."
+      },
+      "owner": "zhichao",
+      "sourceRefs": [
+        "prd",
+        "design-harness-automation-design-v2-0-backup",
+        "design-harness-automation-design",
+        "design-harness-design-comparison",
+        "design-harness-skill-v2",
+        "design-typescript-naming-adoption-baseline",
+        "design-worktree-delivery",
+        "research-github-wheels-2026-08-31",
+        "research-github-wheels-2026-08-31-2",
+        "research-npm-release-worktree",
+        "eval-npm-release-worktree-pre-implementation",
+        "eval-evals",
+        "eval-known-bad-npm-release-policy",
+        "eval-run-npm-release-policy",
+        "eval-npm-release-worktree"
+      ],
+      "status": "active",
+      "changeControl": {
+        "approvalRequired": true,
+        "migrationRequired": false
+      }
+    },
+    {
+      "id": "eval-regression-gate",
+      "title": "Evaluation regression gate",
+      "statement": "Run every approved evaluation suite and project-owned known-bad control in CI; passing and enforcement are independent and delivery is rejected unless both succeed.",
+      "rationale": "A repeatable project runner makes quality regressions visible across model, prompt, tool, and implementation changes.",
+      "scope": {
+        "include": [
+          "evals/**/*",
+          "**/*"
+        ],
+        "exclude": [
+          ".harness/eval-runs/**"
+        ],
+        "boundaries": [
+          "evaluation"
+        ]
+      },
+      "formalization": "deterministic",
+      "severity": "error",
+      "targets": [
+        {
+          "kind": "evaluation",
+          "adapter": "project-eval-1",
+          "command": [
+            "node",
+            "evals/run_npm_release_policy.mjs"
+          ]
+        }
+      ],
+      "verification": {
+        "commands": [
+          [
+            "node",
+            "evals/run_npm_release_policy.mjs"
+          ]
+        ],
+        "passCriteria": "Every approved evaluation runner exits successfully in `check --mode ci`."
+      },
+      "owner": "zhichao",
+      "sourceRefs": [
+        "prd",
+        "design-harness-automation-design-v2-0-backup",
+        "design-harness-automation-design",
+        "design-harness-design-comparison",
+        "design-harness-skill-v2",
+        "design-typescript-naming-adoption-baseline",
+        "design-worktree-delivery",
+        "research-github-wheels-2026-08-31",
+        "research-github-wheels-2026-08-31-2",
+        "research-npm-release-worktree",
+        "eval-npm-release-worktree-pre-implementation",
+        "eval-evals",
+        "eval-known-bad-npm-release-policy",
+        "eval-run-npm-release-policy",
+        "eval-npm-release-worktree"
+      ],
+      "status": "active",
+      "changeControl": {
+        "approvalRequired": true,
+        "migrationRequired": false
+      }
+    },
+    {
+      "id": "eval-evidence-provenance",
+      "title": "Evaluation evidence provenance",
+      "statement": "Keep evaluation tasks, baselines, and grader calibration evidence in approved repository sources protected by SHA-256 drift checks.",
+      "rationale": "Changing the measurement while changing the implementation makes quality comparisons unreliable.",
+      "scope": {
+        "include": [
+          "evals/**/*",
+          "docs/evals/**/*"
+        ],
+        "exclude": [
+          ".harness/eval-runs/**"
+        ],
+        "boundaries": [
+          "evaluation"
+        ]
+      },
+      "formalization": "procedural",
+      "severity": "error",
+      "targets": [
+        {
+          "kind": "agent-instruction",
+          "adapter": "portable"
+        }
+      ],
+      "verification": {
+        "commands": [],
+        "passCriteria": "All referenced evidence remains inside the repository and matches its approved intake hash."
+      },
+      "owner": "zhichao",
+      "sourceRefs": [
+        "prd",
+        "design-harness-automation-design-v2-0-backup",
+        "design-harness-automation-design",
+        "design-harness-design-comparison",
+        "design-harness-skill-v2",
+        "design-typescript-naming-adoption-baseline",
+        "design-worktree-delivery",
+        "research-github-wheels-2026-08-31",
+        "research-github-wheels-2026-08-31-2",
+        "research-npm-release-worktree",
+        "eval-npm-release-worktree-pre-implementation",
+        "eval-evals",
+        "eval-known-bad-npm-release-policy",
+        "eval-run-npm-release-policy",
+        "eval-npm-release-worktree"
+      ],
+      "status": "active",
+      "changeControl": {
+        "approvalRequired": true,
+        "migrationRequired": false
+      }
+    },
+    {
+      "id": "eval-judge-calibration",
+      "title": "Model grader calibration",
+      "statement": "Treat model graders as guidance unless human calibration evidence is recorded; only calibrated model graders may participate in a hard gate.",
+      "rationale": "Uncalibrated model judgments are stochastic opinions, not sound deterministic enforcement.",
+      "scope": {
+        "include": [
+          "evals/**/*",
+          "docs/evals/**/*"
+        ],
+        "exclude": [],
+        "boundaries": [
+          "evaluation"
+        ]
+      },
+      "formalization": "cognitive",
+      "severity": "error",
+      "targets": [
+        {
+          "kind": "agent-instruction",
+          "adapter": "portable"
+        }
+      ],
+      "verification": {
+        "commands": [],
+        "passCriteria": "Human review confirms that every gating model grader cites calibration evidence."
+      },
+      "owner": "zhichao",
+      "sourceRefs": [
+        "prd",
+        "design-harness-automation-design-v2-0-backup",
+        "design-harness-automation-design",
+        "design-harness-design-comparison",
+        "design-harness-skill-v2",
+        "design-typescript-naming-adoption-baseline",
+        "design-worktree-delivery",
+        "research-github-wheels-2026-08-31",
+        "research-github-wheels-2026-08-31-2",
+        "research-npm-release-worktree",
+        "eval-npm-release-worktree-pre-implementation",
+        "eval-evals",
+        "eval-known-bad-npm-release-policy",
+        "eval-run-npm-release-policy",
+        "eval-npm-release-worktree"
+      ],
+      "status": "active",
+      "changeControl": {
+        "approvalRequired": true,
+        "migrationRequired": false
+      }
+    }
+  ],
+  "typescriptNamingBaseline": {
+    "ruleId": "typescript-naming",
+    "approvedIntakeHash": "68f81e55f7d1ba6e0934bde564e9dfe81022dbed3f6187a1e554b80267d75a1c",
+    "fingerprints": [
+      "5f7d5836abc203bf0bc8e469dafa452611d1b2f22af030dc7c41f1cd6070244c",
+      "c63722c4fe9610ffa13ca9c13e6b0a212bf9fb980cba84077842f1832d549705",
+      "d1da6976a067caecbdd7d4085f4fa5e401ae929da2ad3537a0a4e29624f7196e",
+      "d48c569c7513dfd05795414f874862161e782994288f356351ba940e1d66fe52"
+    ]
+  }
+}

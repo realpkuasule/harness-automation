@@ -50,3 +50,18 @@ python3 scripts/changelog.py add feat 11 "Implement x" --issue realpkuasule/harn
 Compatibility note: the product still ships legacy `task-board` support for
 existing users. That compatibility layer is not the source of truth for this
 repository's own development workflow.
+
+<!-- harness-automation:v2:start -->
+## Harness engineering continuity
+
+Effective policy digest: `f8a93f537ed51ac89df6fa4174662df79b268cee67ddb554d55b93ea274d954f`
+
+Before editing code in a new session:
+
+1. Run `harness-automation context --project .` and read `.harness/generated/effective-policy.md`.
+2. Search for the existing implementation and identify the owning module before adding a new one.
+3. Treat shared APIs, RPC, database schemas, queues, and generated code as contracts.
+4. Run `harness-automation check --project .` before declaring work complete.
+5. Never edit `.harness/generated/**` or this managed block directly.
+
+<!-- harness-automation:v2:end -->

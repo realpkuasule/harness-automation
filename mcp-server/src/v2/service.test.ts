@@ -398,6 +398,122 @@ printf '%s' '{"items":[{"full_name":"example/wheel","html_url":"https://github.c
 });
 
 describe("v2 plan/apply/check/rollback", () => {
+  it("ratchets a rule-bound TypeScript naming baseline through intake and immutable plans", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    write(root, "src/userService.ts", "export const legacy_name = 1;\n");
+    const discover = (): void => write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true, now: new Date("2026-01-01T00:00:00Z") });
+    discover();
+
+    const strict = planProject({ projectRoot: root });
+    expect(() => applyPlan({
+      projectRoot: root,
+      planPath: strict.path,
+      approval: strict.plan.planHash,
+    })).toThrow(/TYPESCRIPT_NAMING_ADOPTION_DRIFT/u);
+
+    expect(() => planProject({ projectRoot: root, adoptTypeScriptNaming: true }))
+      .toThrow(/TYPESCRIPT_NAMING_ADOPTION_INTAKE_REQUIRED/u);
+    write(root, "src/userService.ts", "const = ;\n");
+    expect(() => intakeProject({
+      projectRoot: root,
+      owner: "owner",
+      approveSources: true,
+      approveTypeScriptNamingAdoption: true,
+    }))
+      .toThrow(/TYPESCRIPT_NAMING_ADOPTION_PARSE_ERROR/u);
+    write(root, "src/userService.ts", "export const legacy_name = 1;\n");
+
+    intakeProject({
+      projectRoot: root,
+      owner: "owner",
+      approveSources: true,
+      approveTypeScriptNamingAdoption: true,
+      now: new Date("2026-01-01T00:00:01Z"),
+    });
+    discover();
+    const adopted = planProject({ projectRoot: root, adoptTypeScriptNaming: true });
+    expect(adopted.policy.typescriptNamingBaseline).toMatchObject({
+      ruleId: "typescript-naming",
+      fingerprints: [expect.stringMatching(/^[a-f0-9]{64}$/u)],
+    });
+    expect(adopted.plan.warnings).toContain("Owner-approved intake adopts 1 existing TypeScript naming violation(s) as a ratcheted baseline.");
+    expect(() => applyPlan({
+      projectRoot: root,
+      planPath: adopted.path,
+      approval: "0".repeat(64),
+    })).toThrow(/APPROVAL_MISMATCH/u);
+    applyPlan({ projectRoot: root, planPath: adopted.path, approval: adopted.plan.planHash });
+    expect(checkProject(root).ok).toBe(true);
+
+    write(root, "src/userService.ts", "\n\nexport const legacy_name = 1;\n");
+    expect(checkProject(root).ok).toBe(true);
+    write(root, "src/userService.ts", "export const changed_name = 1;\n");
+    expect(checkProject(root)).toMatchObject({ ok: false, violations: [expect.stringContaining("changed_name")] });
+
+    write(root, "src/userService.ts", "export const legacy_name = 1;\nexport const new_debt = 2;\n");
+    expect(checkProject(root)).toMatchObject({
+      ok: false,
+      violations: [expect.stringContaining("new_debt")],
+    });
+    expect(() => planProject({ projectRoot: root, adoptTypeScriptNaming: true }))
+      .toThrow(/TYPESCRIPT_NAMING_ADOPTION_DRIFT/u);
+
+    intakeProject({
+      projectRoot: root,
+      owner: "owner",
+      approveSources: true,
+      now: new Date("2026-01-01T00:00:02Z"),
+    });
+    discover();
+    expect(() => planProject({ projectRoot: root, adoptTypeScriptNaming: true }))
+      .toThrow(/TYPESCRIPT_NAMING_ADOPTION_INTAKE_REQUIRED/u);
+
+    intakeProject({
+      projectRoot: root,
+      owner: "owner",
+      approveSources: true,
+      approveTypeScriptNamingAdoption: true,
+      now: new Date("2026-01-01T00:00:03Z"),
+    });
+    discover();
+    const expanded = planProject({ projectRoot: root, adoptTypeScriptNaming: true });
+    expect(expanded.policy.typescriptNamingBaseline?.fingerprints).toHaveLength(2);
+    expect(() => applyPlan({ projectRoot: root, planPath: expanded.path, approval: "0".repeat(64) }))
+      .toThrow(/APPROVAL_MISMATCH/u);
+    write(root, "src/userService.ts", "export const legacy_name = 1;\n");
+    expect(() => applyPlan({ projectRoot: root, planPath: expanded.path, approval: expanded.plan.planHash }))
+      .toThrow(/TYPESCRIPT_NAMING_ADOPTION_DRIFT/u);
+    write(root, "src/userService.ts", "export const legacy_name = 1;\nexport const new_debt = 2;\n");
+    applyPlan({ projectRoot: root, planPath: expanded.path, approval: expanded.plan.planHash });
+    expect(checkProject(root).ok).toBe(true);
+
+    write(root, "src/userService.ts", "export const legacy_name = 1;\n");
+    const partialShrink = planProject({ projectRoot: root });
+    expect(partialShrink.policy.typescriptNamingBaseline?.fingerprints).toHaveLength(1);
+    expect(partialShrink.plan.warnings).toContain("TypeScript naming baseline ratchets from 2 to 1 violation(s).");
+    applyPlan({ projectRoot: root, planPath: partialShrink.path, approval: partialShrink.plan.planHash });
+    write(root, "src/userService.ts", "export const legacy_name = 1;\nexport const new_debt = 2;\n");
+    expect(() => planProject({ projectRoot: root, adoptTypeScriptNaming: true }))
+      .toThrow(/TYPESCRIPT_NAMING_ADOPTION_FRESH_INTAKE_REQUIRED/u);
+
+    write(root, "src/userService.ts", "export const userId = 1;\n");
+    intakeProject({
+      projectRoot: root,
+      owner: "owner",
+      approveSources: true,
+      now: new Date("2026-01-01T00:00:04Z"),
+    });
+    discover();
+    const shrunk = planProject({ projectRoot: root });
+    expect(shrunk.policy.typescriptNamingBaseline?.fingerprints).toEqual([]);
+    expect(shrunk.plan.warnings).toContain("TypeScript naming baseline ratchets from 1 to 0 violation(s).");
+    applyPlan({ projectRoot: root, planPath: shrunk.path, approval: shrunk.plan.planHash });
+    write(root, "src/userService.ts", "export const legacy_name = 1;\n");
+    expect(checkProject(root)).toMatchObject({ ok: false, violations: [expect.stringContaining("legacy_name")] });
+  });
+
   it("is hash-approved, idempotent, preserves unmanaged content, and rolls back nested files byte-for-byte", () => {
     const root = temporaryProject();
     fullTypeScriptProject(root);
@@ -410,6 +526,7 @@ describe("v2 plan/apply/check/rollback", () => {
     const first = planProject({ projectRoot: root, now: new Date("2026-01-01T00:00:02Z") });
     const second = planProject({ projectRoot: root, now: new Date("2026-01-01T00:00:02Z") });
     expect(second.plan.planHash).toBe(first.plan.planHash);
+    expect(first.policy.typescriptNamingBaseline?.fingerprints).toEqual([]);
 
     const change = applyPlan({ projectRoot: root, planPath: first.path, approval: first.plan.planHash, now: new Date("2026-01-01T00:00:03Z") });
     expect(readFileSync(join(root, "AGENTS.md"), "utf8")).toContain("Keep this paragraph.");
@@ -478,8 +595,12 @@ describe("v2 plan/apply/check/rollback", () => {
 
   it("restores every target when post-apply enforcement fails", () => {
     const root = temporaryProject();
-    fullTypeScriptProject(root);
-    write(root, "src/invalid.ts", "export const user_id = 1;\n");
+    approvedSources(root);
+    write(root, "manage.py", "#!/usr/bin/env python3\n");
+    write(root, "requirements.txt", "Django\npydantic\ncelery\npsycopg\n");
+    write(root, "frontend/package.json", JSON.stringify({ dependencies: { typescript: "1", react: "1" } }));
+    write(root, "package-lock.json", "{}\n");
+    write(root, "src/invalid.py", "badName = 1\n");
     write(root, "AGENTS.md", "original instructions\n");
     intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
     const discovery = discoverProject(root);

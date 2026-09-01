@@ -2,7 +2,14 @@ import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { checkGo, checkPython, checkTypeScript, checkTypeScriptSource, goCacheDirectory } from "./verifier.js";
+import {
+  checkGo,
+  checkPython,
+  checkTypeScript,
+  checkTypeScriptSource,
+  goCacheDirectory,
+  inspectTypeScriptSource,
+} from "./verifier.js";
 
 const roots: string[] = [];
 
@@ -68,6 +75,65 @@ describe("naming verifiers", () => {
       expect.stringContaining("bad_function"),
       expect.stringContaining("bad_parameter"),
     ]));
+  });
+
+  it("classifies supported constants, Node identifiers, placeholders, and exported Zod schemas", () => {
+    const violations = checkTypeScriptSource(`
+      import { z } from "zod";
+      import { MODULE_CONSTANT } from "module";
+      export const UserInputSchema = z.object({});
+      const __filename = "file";
+      const __dirname = "dir";
+      const MODULE_VALUE = 1;
+      function callback(_: string) {}
+      class Registry { static readonly KNOWN_VALUES = new Set(); }
+      let MUTABLE_VALUE = 1;
+      function local() { const LOCAL_VALUE = 1; }
+      const RuntimeValue = z.object({});
+      const HiddenSchema = z.object({});
+    `, "legal-categories.ts");
+
+    expect(violations).toEqual(expect.arrayContaining([
+      expect.stringContaining("MUTABLE_VALUE"),
+      expect.stringContaining("LOCAL_VALUE"),
+      expect.stringContaining("RuntimeValue"),
+      expect.stringContaining("HiddenSchema"),
+    ]));
+    for (const legal of ["MODULE_CONSTANT", "UserInputSchema", "__filename", "__dirname", "MODULE_VALUE", "'_'", "KNOWN_VALUES"]) {
+      expect(violations.join("\n")).not.toContain(legal);
+    }
+  });
+
+  it("uses line-stable, rule-bound fingerprints and distinguishes duplicate violations", () => {
+    const original = inspectTypeScriptSource("const legacy_name = 1;\n", "src/value.ts")[0];
+    const moved = inspectTypeScriptSource("\n\nconst legacy_name = 1;\n", "src/value.ts")[0];
+    const renamed = inspectTypeScriptSource("const changed_name = 1;\n", "src/value.ts")[0];
+    const relocated = inspectTypeScriptSource("const legacy_name = 1;\n", "src/other.ts")[0];
+    const changedRole = inspectTypeScriptSource("function use(legacy_name: string) {}\n", "src/value.ts")[0];
+    const duplicates = inspectTypeScriptSource(
+      "function first(legacy_name: string) {}\nfunction second(legacy_name: string) {}\n",
+      "src/value.ts",
+    );
+
+    expect(original.ruleId).toBe("typescript-naming");
+    expect(original.fingerprint).toBe(moved.fingerprint);
+    expect(new Set([original.fingerprint, renamed.fingerprint, relocated.fingerprint, changedRole.fingerprint]).size).toBe(4);
+    expect(duplicates).toHaveLength(2);
+    expect(duplicates[0].fingerprint).toBe(duplicates[1].fingerprint);
+    expect(inspectTypeScriptSource("const = ;", "broken.ts")[0].fingerprint).toBeNull();
+
+    const projectRoot = root();
+    writeFileSync(join(projectRoot, "duplicate.ts"),
+      "function first(legacy_name: string) {}\nfunction second(legacy_name: string) {}\n");
+    const approvedOne = inspectTypeScriptSource(
+      "function first(legacy_name: string) {}\nfunction second(legacy_name: string) {}\n",
+      "duplicate.ts",
+    )[0].fingerprint!;
+    expect(checkTypeScript(projectRoot, {
+      ruleId: "typescript-naming",
+      approvedIntakeHash: "a".repeat(64),
+      fingerprints: [approvedOne],
+    })).toMatchObject({ passing: false, violations: [expect.stringContaining("legacy_name")] });
   });
 
   it("scans only TypeScript sources and skips declarations, ignored directories, and symlinks", () => {

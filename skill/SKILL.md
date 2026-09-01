@@ -91,6 +91,8 @@ node <skill目录>/scripts/run.mjs plan --project <项目绝对路径> --profile
 node <skill目录>/scripts/run.mjs plan --project <项目绝对路径> --profile custom --stack typescript --quality-profile eval-driven-development
 ```
 
+若 TypeScript 既有仓库因历史 naming debt 无法首次 apply，先修正 verifier 的分类误报，不要把合法标识符塞入 baseline，也不要为通过 gate 批量重命名无关代码。确认剩余是真实历史债务后，向负责人展示规则 ID 与稳定违规指纹，并取得明确采纳批准；随后重新运行 `intake --approve-sources --approve-typescript-naming-adoption`、`discover`，再在 plan 增加 `--adopt-typescript-naming`。baseline 绑定 `typescript-naming`、该次 intake hash 与排序后的稳定指纹，并进入 immutable plan 和完整计划哈希。默认 plan 只能保留或收缩旧 baseline；新建、扩张或替换必须重新取得显式 adoption intake 和新的完整计划哈希批准。新增、变化或已收缩后重新引入的违规都会失败，parse error 永远不可采纳。
+
 向负责人展示：选定 stack、未在仓库中观察到的 stack 警告、将修改的路径、每个旧/新哈希、建议验证命令、未自动形式化的 guidance 和计划哈希。计划不得安装依赖、运行迁移、修改仓库设置或覆盖既有 CI。preset 不接受 `--stack` 裁剪；需要裁剪时改用 `custom` 并显式列出 stack。
 
 ### 6. 精确批准后应用

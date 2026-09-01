@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "2.0",
+  "compiler": "harness-automation@2",
+  "policyDigest": "18a0a4263ac0d647cac2a08f9dcd784f373b7f61d97143028aec78c4a388e413",
+  "outputs": [
+    {
+      "path": ".harness/policy.yaml",
+      "sha256": "3b606edd2464575178df04b00e0989dc4920d7ee3edba12cb04f3270aa1dbaee"
+    },
+    {
+      "path": ".harness/generated/effective-policy.md",
+      "sha256": "a37cac4700e0d5d6de6785d4b322370a644b351e3fcd720851c2f64e624af2ad"
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "a17e933794429e5591de4a152b54088819852fcbbaa31587b0469d27e8e5bc2f"
+    },
+    {
+      "path": "CLAUDE.md",
+      "sha256": "d98301487d1eb7325d07568bbc1c3d7ef1fde55a207dbd55ca7d45bb5622d828"
+    },
+    {
+      "path": ".harness/.gitignore",
+      "sha256": "848edfa49c00887f16ed7d92410f639701dd0f5685d4051057c52e1d28b1db73"
+    }
+  ]
+}

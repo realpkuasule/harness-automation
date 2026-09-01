@@ -596,12 +596,12 @@ Usage:
   harness-automation install
   harness-automation doctor [--project .]
   harness-automation research github [--project .] [--query "..."]
-  harness-automation intake --owner <name> --approve-sources [--project .]
+  harness-automation intake --owner <name> --approve-sources [--approve-typescript-naming-adoption] [--project .]
   harness-automation discover [--project .]
   harness-automation plan [--project .] [--profile full-typescript|python-data-ai|go-performance]
   harness-automation plan --profile custom --stack <stack> [--stack <stack>...] [--project .]
   harness-automation plan [--delivery-profile worktree-delivery] [--domain-profile game-development] [--project .]
-  harness-automation plan [--quality-profile eval-driven-development] [--project .]
+  harness-automation plan [--quality-profile eval-driven-development] [--adopt-typescript-naming] [--project .]
   harness-automation apply --plan <relative-path> --approve <sha256> [--project .]
   harness-automation context [--project .]
   harness-automation check [--project .] [--mode session|commit|ci]
@@ -650,7 +650,12 @@ function runWorkflow(argv: string[]): void {
       printJson(researchGitHub({ projectRoot: root, queries: args.values.get("query") }));
       return;
     case "intake":
-      printJson(intakeProject({ projectRoot: root, owner: required(args, "owner"), approveSources: args.flags.has("approve-sources") }));
+      printJson(intakeProject({
+        projectRoot: root,
+        owner: required(args, "owner"),
+        approveSources: args.flags.has("approve-sources"),
+        approveTypeScriptNamingAdoption: args.flags.has("approve-typescript-naming-adoption"),
+      }));
       return;
     case "discover":
       printJson(discoverAndSave(root));
@@ -675,6 +680,7 @@ function runWorkflow(argv: string[]): void {
           "quality-profile",
           QUALITY_PROFILES,
         ),
+        adoptTypeScriptNaming: args.flags.has("adopt-typescript-naming"),
       });
       printJson({ planPath: result.path, planHash: result.plan.planHash, stacks: result.policy.project.stacks, qualityProfiles: result.policy.project.qualityProfiles ?? [], operations: result.plan.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash })), commands: result.plan.commands, warnings: result.plan.warnings });
       return;

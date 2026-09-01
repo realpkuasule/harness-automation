@@ -95,6 +95,42 @@ describe("v2 CLI forward flow", () => {
     expect(run(root, ["drift"]).clean).toBe(true);
   }, 30_000);
 
+  it("routes TypeScript naming adoption through intake and plan", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-cli-naming-adoption-"));
+    projects.push(root);
+    write(root, "docs/PRD.md", "# Service\n");
+    write(root, "docs/design/architecture.md", "# Architecture\n");
+    write(root, "docs/research/github.md", "# Evidence\n");
+    write(root, "package.json", JSON.stringify({ dependencies: { typescript: "1" } }));
+    write(root, "package-lock.json", "{}\n");
+    write(root, "tsconfig.json", "{}\n");
+    write(root, "src/service.ts", "export const legacy_name = 1;\n");
+
+    const intake = run(root, [
+      "intake",
+      "--owner",
+      "owner",
+      "--approve-sources",
+      "--approve-typescript-naming-adoption",
+    ]);
+    expect(intake.typescriptNamingAdoption).toMatchObject({
+      ruleId: "typescript-naming",
+      fingerprints: [expect.stringMatching(/^[a-f0-9]{64}$/u)],
+    });
+    run(root, ["discover"]);
+    const planned = run(root, [
+      "plan",
+      "--profile",
+      "custom",
+      "--stack",
+      "typescript",
+      "--adopt-typescript-naming",
+    ]);
+    const policyOperation = (planned.operations as Array<Record<string, unknown>>)
+      .find((operation) => operation.path === ".harness/policy.yaml");
+    expect(policyOperation).toBeDefined();
+  }, 30_000);
+
   it("accepts repeated owner-selected stacks for a custom repository", () => {
     const root = mkdtempSync(join(tmpdir(), "harness-cli-custom-"));
     projects.push(root);

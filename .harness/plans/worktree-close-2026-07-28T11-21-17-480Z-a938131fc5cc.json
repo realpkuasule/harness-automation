@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "worktree-delivery/1.0",
+  "kind": "workspace-plan",
+  "id": "worktree-close-2026-07-28T11-21-17-480Z-a938131fc5cc",
+  "createdAt": "2026-07-28T11:21:17.480Z",
+  "projectDir": "/Users/zhichao/codex/harness-automation",
+  "commonDir": "/Users/zhichao/codex/harness-automation/.git",
+  "observedHash": "d81fb47e9ad789c0af6bf9abc5ae0461b3722a3fdf7de81a7bfc490fb527ad3e",
+  "operation": {
+    "kind": "close",
+    "lease": {
+      "schemaVersion": "1.0",
+      "workItem": "github:realpkuasule/harness-automation#6",
+      "branch": "codex/worktree-delivery-dogfood",
+      "path": "/Users/zhichao/codex/worktrees/harness-automation/issue-6",
+      "owner": "realpkuasule",
+      "acceptedCommit": "bcda44377fb6ab61a383cdc156dd5bd24da077bd",
+      "createdAt": "2026-07-28T11:11:09.742Z",
+      "heartbeatAt": "2026-07-28T11:11:09.742Z",
+      "status": "active"
+    },
+    "expectedHead": "bcda44377fb6ab61a383cdc156dd5bd24da077bd",
+    "expectedLeaseHash": "a3deddcfc159f649ff4d2d64a7ae4e42e5829b62d7863ff837923e16f156bbb1"
+  },
+  "warnings": [
+    "Local and remote branches are preserved after close."
+  ],
+  "planHash": "dd0b91e0c10c842cdbf6838620900119fdee4905c169fc17159d2c77f0e38853"
+}

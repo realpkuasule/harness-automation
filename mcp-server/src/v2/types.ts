@@ -1,4 +1,5 @@
 export const HARNESS_VERSION = "2.0" as const;
+export const TYPESCRIPT_NAMING_RULE_ID = "typescript-naming" as const;
 
 export const STACK_ID_PATTERN_SOURCE = "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$";
 export const MAX_STACKS = 16;
@@ -68,6 +69,10 @@ export interface Intake {
   owner: string;
   approvedAt: string;
   sources: SourceSnapshot[];
+  typescriptNamingAdoption?: {
+    ruleId: typeof TYPESCRIPT_NAMING_RULE_ID;
+    fingerprints: string[];
+  };
 }
 
 export interface Evidence {
@@ -205,8 +210,16 @@ export interface PolicyRule {
   changeControl: { approvalRequired: boolean; migrationRequired: boolean };
 }
 
+export interface TypeScriptNamingBaseline {
+  ruleId: typeof TYPESCRIPT_NAMING_RULE_ID;
+  approvedIntakeHash: string;
+  fingerprints: string[];
+}
+
 export interface PolicyDocument {
   schemaVersion: "2.0";
+  /** Rule-bound TypeScript naming debt explicitly adopted through intake and an immutable plan. */
+  typescriptNamingBaseline?: TypeScriptNamingBaseline;
   project: {
     name: string;
     owner: string;

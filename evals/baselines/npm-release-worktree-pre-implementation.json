@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "capturedAt": "2026-09-01T00:33:49+08:00",
+  "commit": "d1a45181fc3af847081aee1aaa4d0da517cdcb65",
+  "origin": "pre-implementation",
+  "command": ["node", "evals/run_npm_release_policy.mjs"],
+  "exitCode": 1,
+  "metric": "pass-all-trials",
+  "score": 0,
+  "trials": 1,
+  "stdoutSha256": "f3268a20bc4fb47fea64f9938a4a6c4947049752c80f5aea1ab6932993ff7fdd",
+  "missing": [
+    "## npm release 例外",
+    "primary/management checkout",
+    "不得为版本更新、验证、打 tag、publish 或发布重试新建专用 worktree",
+    "普通 Issue 开发、集成检查和临时 Review worktree 不受影响"
+  ]
+}

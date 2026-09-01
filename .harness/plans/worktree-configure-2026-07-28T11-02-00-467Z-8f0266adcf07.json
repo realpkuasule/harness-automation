@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "worktree-delivery/1.0",
+  "kind": "workspace-plan",
+  "id": "worktree-configure-2026-07-28T11-02-00-467Z-8f0266adcf07",
+  "createdAt": "2026-07-28T11:02:00.467Z",
+  "projectDir": "/Users/zhichao/codex/harness-automation",
+  "commonDir": "/Users/zhichao/codex/harness-automation/.git",
+  "observedHash": "da395848764efa636bf67a87583bf1fa2f3851ee5b4b78f883b5d2658138109a",
+  "operation": {
+    "kind": "configure",
+    "configPath": ".harness/worktree-delivery.json",
+    "beforeHash": null,
+    "afterHash": "efd55fd3401e2a3aab0ac6a39eb6718d63b1f57cfd510cc149fa6eb31b916f6e",
+    "content": "{\n  \"schemaVersion\": \"1.0\",\n  \"mode\": \"enforced\",\n  \"maxPersistentWorktrees\": 4,\n  \"leaseTtlHours\": 168,\n  \"reviewTtlMinutes\": 120,\n  \"remoteBranchRetentionDays\": 14,\n  \"allowedRoots\": [\n    \"/Users/zhichao/codex/worktrees/harness-automation\"\n  ],\n  \"protectedRoots\": [\n    \"/Users/zhichao/codex/harness-automation\",\n    \"/Users/zhichao/codex/harness-automation/.git\",\n    \"/\"\n  ],\n  \"remoteBranchDeletion\": false,\n  \"provider\": {\n    \"kind\": \"github\",\n    \"repository\": \"realpkuasule/harness-automation\",\n    \"project\": {\n      \"owner\": \"realpkuasule\",\n      \"number\": 2,\n      \"statusField\": \"Status\",\n      \"doneValues\": [\n        \"Done\"\n      ]\n    }\n  }\n}\n"
+  },
+  "warnings": [],
+  "planHash": "7dd890d70315232f90b8575ac8462d6337f793b4bc862e58d08de9814df0dea5"
+}

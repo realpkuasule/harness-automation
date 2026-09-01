@@ -158,7 +158,20 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
       {
         name: "harness_intake",
         description: "v2: snapshot owner-approved PRD, design, and research sources",
-        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir", "owner", "approveSources"], properties: { projectDir: { type: "string" }, owner: { type: "string" }, approveSources: { type: "boolean", const: true } } },
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["projectDir", "owner", "approveSources"],
+          properties: {
+            projectDir: { type: "string" },
+            owner: { type: "string" },
+            approveSources: { type: "boolean", const: true },
+            approveTypeScriptNamingAdoption: {
+              type: "boolean",
+              description: "Explicit owner approval to capture the current rule-bound TypeScript naming fingerprints in intake.",
+            },
+          },
+        },
       },
       {
         name: "harness_discover",
@@ -197,6 +210,10 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
               type: "array",
               uniqueItems: true,
               items: { enum: [...QUALITY_PROFILES] },
+            },
+            adoptTypeScriptNaming: {
+              type: "boolean",
+              description: "Include only the matching fingerprints from an explicit owner-approved TypeScript naming adoption intake in the immutable plan.",
             },
           },
         },
@@ -596,6 +613,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         projectRoot: v2String("projectDir"),
         owner: v2String("owner"),
         approveSources: v2Args.approveSources === true,
+        approveTypeScriptNamingAdoption: v2Args.approveTypeScriptNamingAdoption === true,
       }));
 
     case "harness_discover":
@@ -615,6 +633,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         qualityProfiles: Array.isArray(v2Args.qualityProfiles)
           ? v2Args.qualityProfiles as QualityProfile[]
           : undefined,
+        adoptTypeScriptNaming: v2Args.adoptTypeScriptNaming === true,
       });
       return v2Result({
         planPath: result.path,

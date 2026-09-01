@@ -41,6 +41,9 @@ describe("v2 MCP transport", () => {
       "harness_worktree_retention_audit",
       "harness_worktree_integration_check",
     ]));
+    expect(tools.tools.find((tool) => tool.name === "harness_intake")?.inputSchema).toMatchObject({
+      properties: { approveTypeScriptNamingAdoption: { type: "boolean" } },
+    });
     const adoptTool = tools.tools.find((tool) => tool.name === "harness_worktree_adopt");
     expect(adoptTool?.inputSchema).toMatchObject({
       additionalProperties: false,
@@ -77,6 +80,7 @@ describe("v2 MCP transport", () => {
           type: "array",
           items: { enum: ["eval-driven-development"] },
         },
+        adoptTypeScriptNaming: { type: "boolean" },
       },
     });
 

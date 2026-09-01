@@ -1,0 +1,221 @@
+{
+  "schemaVersion": "2.0",
+  "generatedAt": "2026-09-01T03:33:51.930Z",
+  "profile": "custom",
+  "stacks": [
+    "typescript"
+  ],
+  "manifests": [
+    "mcp-server/package.json",
+    "mcp-server/src/__fixtures__/mixed/package.json"
+  ],
+  "lockfiles": [
+    "mcp-server/package-lock.json"
+  ],
+  "packages": [
+    "mcp-server",
+    "mcp-server/src/__fixtures__/mixed"
+  ],
+  "commands": {
+    "npm:mcp-server:build": [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "build"
+    ],
+    "npm:mcp-server:start": [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "start"
+    ],
+    "npm:mcp-server:dev": [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "dev"
+    ],
+    "npm:mcp-server:lint": [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "lint"
+    ],
+    "npm:mcp-server:test": [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "test"
+    ],
+    "npm:mcp-server:test:watch": [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "test:watch"
+    ],
+    "npm:mcp-server:test:coverage": [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "test:coverage"
+    ],
+    "npm:mcp-server:test:ci": [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "test:ci"
+    ],
+    "npm:mcp-server:prepare": [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "prepare"
+    ],
+    "npm:mcp-server:prepublishOnly": [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "prepublishOnly"
+    ],
+    "eval:npm-release-worktree-policy": [
+      "node",
+      "evals/run_npm_release_policy.mjs"
+    ],
+    "eval-negative:npm-release-worktree-policy": [
+      "node",
+      "evals/run_npm_release_policy.mjs",
+      "evals/fixtures/known-bad-npm-release-policy.md"
+    ]
+  },
+  "boundaries": [],
+  "agents": [
+    {
+      "id": "portable",
+      "capabilities": [
+        "root-instructions",
+        "scoped-instructions",
+        "structured-output"
+      ],
+      "evidence": [
+        "Portable AGENTS.md adapter is always available"
+      ]
+    },
+    {
+      "id": "claude-code",
+      "capabilities": [
+        "root-instructions",
+        "scoped-instructions",
+        "instruction-imports",
+        "session-hooks",
+        "mcp"
+      ],
+      "evidence": [
+        "CLAUDE.md"
+      ]
+    },
+    {
+      "id": "codex",
+      "capabilities": [
+        "root-instructions",
+        "scoped-instructions",
+        "mcp",
+        "structured-output"
+      ],
+      "evidence": [
+        "AGENTS.md"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "fact": "Detected stack profile: custom",
+      "paths": [
+        "mcp-server/package.json",
+        "mcp-server/src/__fixtures__/mixed/package.json"
+      ],
+      "confidence": 0.5
+    },
+    {
+      "fact": "Detected stacks: typescript",
+      "paths": [
+        "mcp-server/package.json",
+        "mcp-server/src/__fixtures__/mixed/package.json"
+      ],
+      "confidence": 0.9
+    }
+  ],
+  "warnings": [
+    "No preset stack profile matched exactly; owner-approved custom stacks are required."
+  ],
+  "evaluations": {
+    "configured": true,
+    "valid": true,
+    "contractPath": "evals/evals.json",
+    "suites": [
+      {
+        "id": "npm-release-worktree-policy",
+        "kind": "capability",
+        "command": [
+          "node",
+          "evals/run_npm_release_policy.mjs"
+        ],
+        "baseline": {
+          "score": 0,
+          "trials": 1,
+          "evidence": "evals/baselines/npm-release-worktree-pre-implementation.json",
+          "origin": "pre-implementation"
+        },
+        "runnerSources": [
+          "evals/run_npm_release_policy.mjs"
+        ],
+        "traceability": [
+          {
+            "requirementId": "PRD-REL-001",
+            "ruleIds": [
+              "npm-release-primary-checkout"
+            ]
+          },
+          {
+            "requirementId": "PRD-REL-002",
+            "ruleIds": [
+              "npm-release-no-linked-worktree"
+            ]
+          },
+          {
+            "requirementId": "PRD-REL-003",
+            "ruleIds": [
+              "npm-release-fail-closed"
+            ]
+          },
+          {
+            "requirementId": "PRD-REL-004",
+            "ruleIds": [
+              "development-worktrees-preserved"
+            ]
+          }
+        ],
+        "negativeControl": {
+          "command": [
+            "node",
+            "evals/run_npm_release_policy.mjs",
+            "evals/fixtures/known-bad-npm-release-policy.md"
+          ],
+          "fixture": "evals/fixtures/known-bad-npm-release-policy.md",
+          "expectedExitCode": 1
+        }
+      }
+    ],
+    "errors": [],
+    "unmanagedCandidates": []
+  }
+}

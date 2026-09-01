@@ -1,3 +1,10 @@
+## [2.8.1] - 2026-09-01
+
+### Fixed
+
+- harden owner-approved TypeScript naming adoption and unblock Harness self-governance (#68)
+- prohibit dedicated npm release worktrees (#67)
+
 ## [2.8.0] - 2026-08-31
 
 ### Added

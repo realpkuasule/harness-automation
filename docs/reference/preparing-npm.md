@@ -68,7 +68,15 @@ npm 已于 **2025 年 12 月 9 日** 移除 Classic Token，现在有两种方�
 
 不需要修改——secret 引用已就位。
 
-## 6. 测试 dry-run 发布
+## 6. 使用现有发布 checkout
+
+npm 版本更新、验证、打 tag、publish 和发布重试一律在现有 primary/management checkout 中完成，不为 release 新建、分配、接管或使用专用 worktree。若该 checkout 不适合安全发布，停止并修复或报告原因，不用新 worktree 兜底。
+
+`v*` tag 会触发 `.github/workflows/publish.yml`，GitHub Actions 会自行 checkout；本地 release worktree 不提供额外隔离价值。
+
+普通 Issue 开发、集成检查和临时 Review worktree 保持原有流程。
+
+## 7. 测试 dry-run 发布
 
 在真正发布之前，确认包不会包含多余文件：
 
@@ -79,10 +87,10 @@ npm pack --dry-run
 
 应该只看到 `dist/` 目录下的文件——没有 `*.test.*`，没有 `src/`，没有 `node_modules/`，没有 source map。
 
-## 7. 发布
+## 8. 发布
 
 ```bash
-# 提交未完成的工作
+# 在现有 primary/management checkout 中提交未完成的工作
 git add -A
 git commit -m "chore: 准备 v1.0.6 发布"
 
@@ -94,7 +102,7 @@ git push origin v1.0.6
 open https://github.com/realpkuasule/harness-automation/actions
 ```
 
-## 8. 验证已发布的包
+## 9. 验证已发布的包
 
 ```bash
 npm view @realpkuasule/harness-automation
