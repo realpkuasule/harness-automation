@@ -1,3 +1,9 @@
+## [2.8.5] - 2026-09-01
+
+### Fixed
+
+- accept PascalCase JSX component aliases in TypeScript naming verification (b6dcb59)
+
 ## [2.8.1] - 2026-09-01
 
 ### Fixed
