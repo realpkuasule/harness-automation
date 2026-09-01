@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, parse } from "node:path";
@@ -20,6 +20,7 @@ import {
 } from "./service.js";
 import { planWorkspaceConfiguration } from "../worktree/service.js";
 import { hashObject, sha256 } from "./fs.js";
+import { PYTHON_NAMING_CHECKER } from "./policy.js";
 
 const roots: string[] = [];
 const compilerVersion = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version as string;
@@ -137,6 +138,63 @@ function rewriteAppliedPolicy(root: string, mutate: (policy: Record<string, unkn
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("generated Python naming checker", () => {
+  it("accepts Python semantic exceptions while rejecting ordinary camelCase names", () => {
+    const root = temporaryProject();
+    const checker = join(root, ".harness/generated/check_python_naming.py");
+    write(root, ".harness/generated/check_python_naming.py", PYTHON_NAMING_CHECKER);
+    write(root, "legal.py", `
+import typing
+import typing_extensions
+import unittest
+from typing import TypeAlias
+from typing_extensions import TypeAlias as ExtensionsTypeAlias
+
+StageAction: TypeAlias = str
+OutputRetriever: ExtensionsTypeAlias = str
+Embedder: typing.TypeAlias = str
+CommandRunner: typing_extensions.TypeAlias = str
+_TEMPLATES = {}
+_RUN_ID = "run"
+_private_value = 1
+
+class CheckerCase(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        pass
+
+    @classmethod
+    def tearDownClass(cls):
+        pass
+
+    def setUp(self):
+        pass
+
+    def tearDown(self):
+        pass
+
+    def test_placeholders(self):
+        for _ in range(1):
+            _ = None
+
+def normal_function(normal_parameter):
+    local_value = normal_parameter
+    return local_value
+
+def discard(_):
+    return _
+`);
+
+    expect(spawnSync("python3", [checker, root], { encoding: "utf8" }).status).toBe(0);
+    expect(spawnSync("python3", [checker, "--self-test"], { encoding: "utf8" }).status).toBe(1);
+
+    write(root, "invalid.py", "def badFunction(badParameter):\n    badVariable = badParameter\n");
+    const invalid = spawnSync("python3", [checker, root], { encoding: "utf8" });
+    expect(invalid.status).toBe(1);
+    expect(`${invalid.stderr}`).toContain("badFunction");
+  });
 });
 
 describe("v2 stack discovery", () => {

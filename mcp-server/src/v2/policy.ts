@@ -127,7 +127,7 @@ function profileRules(profile: StackProfile, stacks: Stack[], owner: string, sou
     rules.push(rule({
       id: "python-naming",
       title: "Python naming",
-      statement: "Use snake_case for Python variables, functions, parameters, modules, and fields; PascalCase for classes; UPPER_SNAKE_CASE only for constants.",
+      statement: "Use snake_case for Python variables, functions, parameters, modules, and fields; PascalCase for classes and TypeAlias definitions; UPPER_SNAKE_CASE only for constants.",
       rationale: "Python follows its native convention while mappings make TypeScript boundaries explicit.",
       scope: { include: ["**/*.py"], exclude: ["**/migrations/**", "**/generated/**", ".venv/**"], boundaries: ["code"] },
       formalization: "deterministic",
@@ -521,28 +521,107 @@ import sys
 SNAKE = re.compile(r"^(?:_?[a-z][a-z0-9]*(?:_[a-z0-9]+)*|_[a-z][a-z0-9_]*|__[a-z0-9_]+__)$")
 PASCAL = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 UPPER = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$")
+PRIVATE_UPPER = re.compile(r"^_[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$")
 IGNORE = {"migrations", ".venv", "venv", "generated", ".harness", "node_modules"}
+TESTCASE_LIFECYCLE = {"setUp", "tearDown", "setUpClass", "tearDownClass"}
+
+def imported_names(tree):
+    type_aliases = set()
+    typing_modules = set()
+    test_cases = set()
+    unittest_modules = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                local = alias.asname or alias.name
+                if alias.name in {"typing", "typing_extensions"}:
+                    typing_modules.add(local)
+                if alias.name == "unittest":
+                    unittest_modules.add(local)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module in {"typing", "typing_extensions"}:
+                for alias in node.names:
+                    if alias.name == "TypeAlias":
+                        type_aliases.add(alias.asname or alias.name)
+            if node.module == "unittest":
+                for alias in node.names:
+                    if alias.name == "TestCase":
+                        test_cases.add(alias.asname or alias.name)
+    return type_aliases, typing_modules, test_cases, unittest_modules
+
+def type_alias_annotation(annotation, type_aliases, typing_modules):
+    if isinstance(annotation, ast.Name):
+        return annotation.id in type_aliases
+    return (isinstance(annotation, ast.Attribute) and annotation.attr == "TypeAlias" and
+        isinstance(annotation.value, ast.Name) and annotation.value.id in typing_modules)
+
+def test_case_base(base, test_cases, unittest_modules):
+    if isinstance(base, ast.Name):
+        return base.id in test_cases
+    return (isinstance(base, ast.Attribute) and base.attr == "TestCase" and
+        isinstance(base.value, ast.Name) and base.value.id in unittest_modules)
 
 def check_source(source, name):
-    errors = []
     try:
         tree = ast.parse(source, filename=name)
     except SyntaxError as exc:
         return [f"{name}:{exc.lineno}: syntax error: {exc.msg}"]
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not SNAKE.match(node.name):
-            errors.append(f"{name}:{node.lineno}: function '{node.name}' must be snake_case")
-        if isinstance(node, ast.ClassDef) and not PASCAL.match(node.name):
-            errors.append(f"{name}:{node.lineno}: class '{node.name}' must be PascalCase")
-        if isinstance(node, ast.arg) and node.arg not in {"self", "cls"} and not SNAKE.match(node.arg):
-            errors.append(f"{name}:{node.lineno}: parameter '{node.arg}' must be snake_case")
-        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for target in targets:
-                for child in ast.walk(target):
-                    if isinstance(child, ast.Name) and not (SNAKE.match(child.id) or UPPER.match(child.id)):
-                        errors.append(f"{name}:{child.lineno}: variable '{child.id}' must be snake_case")
-    return errors
+    type_aliases, typing_modules, test_cases, unittest_modules = imported_names(tree)
+
+    class NamingVisitor(ast.NodeVisitor):
+        def __init__(self):
+            self.errors = []
+            self.test_case_stack = []
+
+        def variable_name(self, node):
+            if node.id == "_" or SNAKE.match(node.id) or UPPER.match(node.id) or PRIVATE_UPPER.match(node.id):
+                return
+            self.errors.append(f"{name}:{node.lineno}: variable '{node.id}' must be snake_case")
+
+        def variable_target(self, target):
+            for child in ast.walk(target):
+                if isinstance(child, ast.Name):
+                    self.variable_name(child)
+
+        def visit_ClassDef(self, node):
+            if not PASCAL.match(node.name):
+                self.errors.append(f"{name}:{node.lineno}: class '{node.name}' must be PascalCase")
+            is_test_case = any(test_case_base(base, test_cases, unittest_modules) for base in node.bases)
+            if is_test_case:
+                test_cases.add(node.name)
+            self.test_case_stack.append(is_test_case)
+            self.generic_visit(node)
+            self.test_case_stack.pop()
+
+        def visit_FunctionDef(self, node):
+            if not (self.test_case_stack and self.test_case_stack[-1] and node.name in TESTCASE_LIFECYCLE) and not SNAKE.match(node.name):
+                self.errors.append(f"{name}:{node.lineno}: function '{node.name}' must be snake_case")
+            self.generic_visit(node)
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_arg(self, node):
+            if node.arg not in {"self", "cls", "_"} and not SNAKE.match(node.arg):
+                self.errors.append(f"{name}:{node.lineno}: parameter '{node.arg}' must be snake_case")
+
+        def visit_Assign(self, node):
+            for target in node.targets:
+                self.variable_target(target)
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node):
+            if not (isinstance(node.target, ast.Name) and PASCAL.match(node.target.id) and
+                    type_alias_annotation(node.annotation, type_aliases, typing_modules)):
+                self.variable_target(node.target)
+            self.generic_visit(node)
+
+        def visit_NamedExpr(self, node):
+            self.variable_target(node.target)
+            self.generic_visit(node)
+
+    visitor = NamingVisitor()
+    visitor.visit(tree)
+    return visitor.errors
 
 if "--self-test" in sys.argv:
     failures = check_source("def loadUser(userId):\n    return userId\n", "fixture.py")
