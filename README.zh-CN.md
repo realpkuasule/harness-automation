@@ -237,7 +237,13 @@ Harness 分别报告 `passing`（正向 suite 成功）与 `enforced`（known-ba
 harness-automation worktree status --project .
 harness-automation worktree audit --project .
 harness-automation worktree retention-audit --project .
+harness-automation worktree retention-audit --project . --receipt-scope project
 ```
+
+Retention audit 默认保持既有的 host-global review receipt gate。使用
+`--receipt-scope project` 时，仍会读取并 fail-closed 校验 host-global receipt，
+但只有规范化后的 `projectDir` 与 `commonDir` 都匹配当前项目才会纳入结果；
+有效但被排除的 receipt 会在 JSON 中计数，原文件不会被修改。
 
 正式启用、分配、接管既有 worktree 和关闭默认只生成计划：
 

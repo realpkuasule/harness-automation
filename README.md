@@ -269,8 +269,14 @@ Plain Git repositories can run read-only checks without a PRD or a provider:
 harness-automation worktree status --project .
 harness-automation worktree audit --project .
 harness-automation worktree retention-audit --project .
+harness-automation worktree retention-audit --project . --receipt-scope project
 harness-automation worktree integration-check --project . --work-item github:owner/repository#24 [--target main]
 ```
+
+Retention audit defaults to the existing host-global review receipt gate. Use
+`--receipt-scope project` to include only valid receipts whose normalized
+`projectDir` and `commonDir` both match the audited project; excluded receipts
+remain unchanged and are counted in the JSON result.
 
 Configuring, allocating, adopting existing worktrees, and closing produce plans by default:
 

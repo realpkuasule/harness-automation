@@ -60,6 +60,7 @@ import {
   type WorktreeApprovalPolicy,
   type WorktreeDelegatableOperation,
   type WorktreeDeliveryConfig,
+  type ReviewReceiptScope,
   type WorkspacePlan,
 } from "./worktree/types.js";
 import { runSessionCommand } from "./session/cli.js";
@@ -127,6 +128,15 @@ function booleanOption(args: ParsedArguments, name: string): boolean | undefined
 
 function projectRoot(args: ParsedArguments): string {
   return resolve(value(args, "project") ?? process.cwd());
+}
+
+function reviewReceiptScope(args: ParsedArguments): ReviewReceiptScope {
+  if (args.flags.has("receipt-scope")) throw new Error("ARGUMENT_REQUIRED: --receipt-scope");
+  const selected = value(args, "receipt-scope") ?? "host-global";
+  if (selected !== "host-global" && selected !== "project") {
+    throw new Error("RECEIPT_SCOPE_INVALID: --receipt-scope must be host-global or project");
+  }
+  return selected;
 }
 
 function printJson(value: unknown): void {
@@ -523,7 +533,10 @@ function runWorktreeCommand(
       return;
     }
     case "retention-audit": {
-      const audit = retentionAuditWorkspace({ projectRoot: root });
+      const audit = retentionAuditWorkspace({
+        projectRoot: root,
+        receiptScope: reviewReceiptScope(args),
+      });
       printJson(audit);
       if (audit.staleReviews.length > 0 || audit.staleLeases.length > 0 || audit.staleLocks.length > 0 || audit.errors.length > 0) {
         process.exitCode = 2;
@@ -619,7 +632,8 @@ Usage:
   harness-automation drift [--project .]
   harness-automation explain <policy-id> [--project .]
   harness-automation rollback [--project .] [--change <id>]
-  harness-automation worktree status|audit|retention-audit [--project .]
+  harness-automation worktree status|audit [--project .]
+  harness-automation worktree retention-audit [--receipt-scope host-global|project] [--project .]
   harness-automation worktree integration-check --work-item <provider:id> [--target <local-ref>] [--project .]
   harness-automation github audit --project <absolute-repository> [--organization <github-organization>]
   harness-automation worktree configure [--mode audit-only|enforced] [--management-branch <branch>] [--topology container-v1 --workspace-container <absolute-path>] [--allow-root <absolute-path>] [--approval-mode manual|delegated-ai] [--reviewer-model <model>] [--delegate-operation <kind>] [--project .]

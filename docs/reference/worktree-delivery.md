@@ -6,6 +6,7 @@
 harness-automation worktree status --project .
 harness-automation worktree audit --project .
 harness-automation worktree retention-audit --project .
+harness-automation worktree retention-audit --project . --receipt-scope project
 harness-automation worktree integration-check --project . --work-item github:owner/repository#24 [--target main]
 ```
 
@@ -13,6 +14,10 @@ These commands require only Git. They do not require PRD intake and create no
 worktree. Retention audit reports expired review receipts, lease heartbeats,
 lifecycle locks, and remote branches; it deletes none of them. Stale reviews,
 leases, locks, or parse errors return exit 2; old remote branches alone return 0.
+Review receipt scope defaults to `host-global`. Project scope still reads the
+host-global receipt directory, validates every receipt fail-closed, and includes
+only receipts whose normalized `projectDir` and `commonDir` both match the
+audited project. Valid excluded receipts are counted and never modified.
 
 `integration-check` accepts one existing lease and a local target ref (default:
 the management branch). It does not fetch, merge, rebase, checkout, alter a

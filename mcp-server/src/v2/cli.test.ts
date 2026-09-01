@@ -326,6 +326,70 @@ describe("v2 CLI forward flow", () => {
     expect(execFileSync("git", ["for-each-ref", "--format=%(refname)%00%(objectname)"], { cwd: root, encoding: "utf8" })).toBe(refsBefore);
   });
 
+  it("exposes project-scoped review receipt auditing without changing the host-global default", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-cli-retention-scope-"));
+    const otherRoot = mkdtempSync(join(tmpdir(), "harness-cli-retention-other-"));
+    projects.push(root, otherRoot);
+    execFileSync("git", ["init", "-b", "main"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "harness@example.test"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Harness Test"], { cwd: root });
+    write(root, "README.md", "# fixture\n");
+    execFileSync("git", ["add", "README.md"], { cwd: root });
+    execFileSync("git", ["commit", "-m", "test: initialize fixture"], { cwd: root });
+    const receiptPath = join(root, ".test-state", "harness-automation", "reviews", "foreign.json");
+    const receipt = {
+      schemaVersion: "worktree-delivery/1.0",
+      kind: "review-receipt",
+      id: "foreign",
+      projectDir: otherRoot,
+      commonDir: join(otherRoot, ".git"),
+      commit: "fixture",
+      path: join(otherRoot, "checkout"),
+      receiptPath,
+      command: ["false"],
+      createdAt: "2020-01-01T00:00:00.000Z",
+      completedAt: "2020-01-01T00:00:01.000Z",
+      status: "failed",
+      detached: true,
+      dirty: false,
+      exitCode: 1,
+      output: "",
+    };
+    mkdirSync(dirname(receiptPath), { recursive: true });
+    writeFileSync(receiptPath, JSON.stringify(receipt), { encoding: "utf8", flag: "w" });
+
+    const globalResult = runResult(root, ["worktree", "retention-audit"]);
+    expect(globalResult.status).toBe(2);
+    expect(JSON.parse(globalResult.stdout)).toMatchObject({
+      receiptScope: "host-global",
+      excludedReviewReceiptCount: 0,
+      staleReviews: [expect.objectContaining({ id: "foreign" })],
+    });
+
+    const projectResult = runResult(root, [
+      "worktree", "retention-audit", "--receipt-scope", "project",
+    ]);
+    expect(projectResult.status).toBe(0);
+    expect(JSON.parse(projectResult.stdout)).toMatchObject({
+      receiptScope: "project",
+      excludedReviewReceiptCount: 1,
+      staleReviews: [],
+    });
+
+    receipt.projectDir = root;
+    receipt.commonDir = execFileSync("git", [
+      "rev-parse", "--path-format=absolute", "--git-common-dir",
+    ], { cwd: root, encoding: "utf8" }).trim();
+    writeFileSync(receiptPath, JSON.stringify(receipt), "utf8");
+    expect(runResult(root, [
+      "worktree", "retention-audit", "--receipt-scope", "project",
+    ]).status).toBe(2);
+
+    const missing = runResult(root, ["worktree", "retention-audit", "--receipt-scope"]);
+    expect(missing.status).toBe(1);
+    expect(JSON.parse(missing.stderr).error).toContain("ARGUMENT_REQUIRED");
+  });
+
   it("runs the read-only GitHub governance audit and maps blockers to exit 2", () => {
     const root = mkdtempSync(join(tmpdir(), "harness-cli-github-audit-"));
     const bin = mkdtempSync(join(tmpdir(), "harness-cli-github-bin-"));

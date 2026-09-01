@@ -1,7 +1,7 @@
 {
   "schemaVersion": "2.0",
   "owner": "zhichao",
-  "approvedAt": "2026-09-01T06:34:42.864Z",
+  "approvedAt": "2026-09-01T11:48:39.095Z",
   "sources": [
     {
       "id": "prd",
@@ -42,7 +42,7 @@
       "id": "design-project-governance-upgrade",
       "kind": "design",
       "path": "docs/design/project-governance-upgrade.md",
-      "sha256": "dd21190a9794e5a116edf024617ba81d156da03b8dd7123823cd567d4a9958fa",
+      "sha256": "b8ac3cf666054cd18be53a9c4ca50193988da130eb3ffaa25ead56b0c07ed9d7",
       "approved": true
     },
     {

@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "compiler": {
     "package": "@realpkuasule/harness-automation",
-    "version": "2.8.10"
+    "version": "2.8.1"
   },
   "evaluations": {
     "schemaVersion": "1.1",
@@ -135,7 +135,7 @@
       "id": "design-project-governance-upgrade",
       "kind": "design",
       "path": "docs/design/project-governance-upgrade.md",
-      "sha256": "b8ac3cf666054cd18be53a9c4ca50193988da130eb3ffaa25ead56b0c07ed9d7",
+      "sha256": "dd21190a9794e5a116edf024617ba81d156da03b8dd7123823cd567d4a9958fa",
       "approved": true
     },
     {

@@ -127,7 +127,7 @@ npx vitest run --coverage  # 覆盖率报告
 <!-- harness-automation:v2:start -->
 ## Harness engineering continuity
 
-Effective policy digest: `4d97d96717e18809f4b5e6810c78924d91a63937f2f493a1deb153442f864f9f`
+Effective policy digest: `83c535d6a9cb39cffe97788e156980926adee861d3ebc4e98c65f76f20c79789`
 
 Before editing code in a new session:
 

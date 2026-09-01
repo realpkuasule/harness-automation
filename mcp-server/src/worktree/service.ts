@@ -44,6 +44,7 @@ import {
   type WorkspaceAdoptionSnapshot,
   type RetentionAudit,
   type ReviewReceipt,
+  type ReviewReceiptScope,
   type WorkspaceAudit,
   type WorkspaceIntegrationCheck,
   type WorkspaceAiDecision,
@@ -4606,10 +4607,58 @@ export function reviewWorkspace(args: {
   }
 }
 
+const reviewReceiptPathSchema = z.string().min(1)
+  .refine((value) => isAbsolute(value) && !value.includes("\0"), "must be a safe absolute path");
+const reviewReceiptTimestampSchema = z.string()
+  .refine((value) => Number.isFinite(Date.parse(value)), "must be a valid timestamp");
+const reviewReceiptSchema = z.object({
+  schemaVersion: z.literal("worktree-delivery/1.0"),
+  kind: z.literal("review-receipt"),
+  id: z.string().min(1),
+  projectDir: reviewReceiptPathSchema,
+  commonDir: reviewReceiptPathSchema,
+  commit: z.string().min(1),
+  path: reviewReceiptPathSchema,
+  receiptPath: reviewReceiptPathSchema,
+  command: z.array(z.string()).min(1),
+  createdAt: reviewReceiptTimestampSchema,
+  completedAt: reviewReceiptTimestampSchema.optional(),
+  status: z.enum(["starting", "active", "cleaned", "blocked", "failed"]),
+  detached: z.boolean(),
+  dirty: z.boolean(),
+  exitCode: z.number().int().nonnegative().nullable(),
+  output: z.string(),
+  dirtyEvidence: z.array(z.object({
+    path: z.string(),
+    status: z.string(),
+    size: z.number().nonnegative(),
+    sha256: z.string(),
+  }).passthrough()).optional(),
+  dirtyPatch: z.object({
+    size: z.number().nonnegative(),
+    sha256: z.string(),
+  }).passthrough().optional(),
+  error: z.string().optional(),
+}).passthrough();
+
+function validReviewReceipt(input: unknown): ReviewReceipt {
+  if (input && typeof input === "object" &&
+      (input as { kind?: unknown }).kind !== "review-receipt") {
+    throw new Error("not a review receipt");
+  }
+  const parsed = reviewReceiptSchema.safeParse(input);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new Error(`invalid review receipt: ${issue.path.join(".") || "receipt"} ${issue.message}`);
+  }
+  return parsed.data as ReviewReceipt;
+}
+
 export function retentionAuditWorkspace(args: {
   projectRoot: string;
   hostStateRoot?: string;
   now?: Date;
+  receiptScope?: ReviewReceiptScope;
 }): RetentionAudit {
   const status = workspaceStatus(args.projectRoot, {
     providerObservation: { kind: "none", configured: false, available: true, items: [] },
@@ -4617,14 +4666,26 @@ export function retentionAuditWorkspace(args: {
   const now = args.now ?? new Date();
   const hostStateRoot = resolve(args.hostStateRoot ?? defaultHostStateRoot());
   const reviewDirectory = join(hostStateRoot, "reviews");
+  const receiptScope = args.receiptScope ?? "host-global";
+  if (receiptScope !== "host-global" && receiptScope !== "project") {
+    throw new Error("RECEIPT_SCOPE_INVALID: choose host-global or project");
+  }
   const errors: string[] = [];
   const receipts: ReviewReceipt[] = [];
+  let excludedReviewReceiptCount = 0;
   if (existsSync(reviewDirectory)) {
     for (const name of readdirSync(reviewDirectory).filter((entry) => entry.endsWith(".json")).sort()) {
       const path = join(reviewDirectory, name);
       try {
-        const receipt = readJson<ReviewReceipt>(path);
-        if (receipt.kind !== "review-receipt") throw new Error("not a review receipt");
+        const receipt = validReviewReceipt(readJson<unknown>(path));
+        if (receiptScope === "project") {
+          const receiptProjectDir = canonicalPath(receipt.projectDir);
+          const receiptCommonDir = canonicalPath(receipt.commonDir);
+          if (receiptProjectDir !== status.projectDir || receiptCommonDir !== status.commonDir) {
+            excludedReviewReceiptCount += 1;
+            continue;
+          }
+        }
         receipts.push(receipt);
       } catch (error) {
         errors.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
@@ -4679,6 +4740,8 @@ export function retentionAuditWorkspace(args: {
     schemaVersion: WORKTREE_SCHEMA_VERSION,
     projectDir: status.projectDir,
     checkedAt: now.toISOString(),
+    receiptScope,
+    excludedReviewReceiptCount,
     reviewTtlMinutes: status.config.reviewTtlMinutes,
     remoteBranchRetentionDays: status.config.remoteBranchRetentionDays,
     remoteDeletionEnabled: status.config.remoteBranchDeletion,

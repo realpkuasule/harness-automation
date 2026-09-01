@@ -487,10 +487,14 @@ export interface ReviewReceipt {
   error?: string;
 }
 
+export type ReviewReceiptScope = "host-global" | "project";
+
 export interface RetentionAudit {
   schemaVersion: "1.0";
   projectDir: string;
   checkedAt: string;
+  receiptScope: ReviewReceiptScope;
+  excludedReviewReceiptCount: number;
   reviewTtlMinutes: number;
   remoteBranchRetentionDays: number;
   remoteDeletionEnabled: boolean;

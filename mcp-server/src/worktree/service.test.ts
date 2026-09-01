@@ -3800,6 +3800,88 @@ process.stdout.write(fs.readFileSync(process.argv[2]));
 });
 
 describe("temporary review and retention", () => {
+  it("keeps host-global receipt auditing by default and excludes valid foreign receipts in project scope", () => {
+    const root = repository();
+    const otherRoot = repository();
+    const hostStateRoot = mkdtempSync(join(testTempRoot, "harness-host-state-"));
+    repositories.push(hostStateRoot);
+    const receipt = reviewWorkspace({
+      projectRoot: otherRoot,
+      commit: "HEAD",
+      command: [process.execPath, "-e", "process.exit(7)"],
+      hostStateRoot,
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    const receiptBytes = readFileSync(receipt.receiptPath, "utf8");
+
+    const globalAudit = retentionAuditWorkspace({
+      projectRoot: root,
+      hostStateRoot,
+      now: new Date("2026-01-01T03:00:01.000Z"),
+    });
+    expect(globalAudit).toMatchObject({
+      receiptScope: "host-global",
+      excludedReviewReceiptCount: 0,
+      staleReviews: [expect.objectContaining({ id: receipt.id, status: "failed", dirty: false })],
+    });
+
+    const projectAudit = retentionAuditWorkspace({
+      projectRoot: root,
+      hostStateRoot,
+      receiptScope: "project",
+      now: new Date("2026-01-01T03:00:01.000Z"),
+    });
+    expect(projectAudit).toMatchObject({
+      receiptScope: "project",
+      excludedReviewReceiptCount: 1,
+      staleReviews: [],
+    });
+    expect(readFileSync(receipt.receiptPath, "utf8")).toBe(receiptBytes);
+  });
+
+  it("includes normalized same-project receipts and requires both identity fields to match", () => {
+    const root = repository();
+    const otherRoot = repository();
+    const hostStateRoot = mkdtempSync(join(testTempRoot, "harness-host-state-"));
+    repositories.push(hostStateRoot);
+    const receipt = reviewWorkspace({
+      projectRoot: root,
+      commit: "HEAD",
+      command: [process.execPath, "-e", "process.exit(7)"],
+      hostStateRoot,
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    const stored = JSON.parse(readFileSync(receipt.receiptPath, "utf8")) as Record<string, unknown>;
+    stored.projectDir = `${root}/missing/..`;
+    stored.commonDir = `${git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")}/missing/..`;
+    writeFileSync(receipt.receiptPath, JSON.stringify(stored));
+
+    const sameProject = retentionAuditWorkspace({
+      projectRoot: root,
+      hostStateRoot,
+      receiptScope: "project",
+      now: new Date("2026-01-01T03:00:01.000Z"),
+    });
+    expect(sameProject.staleReviews).toEqual([expect.objectContaining({ id: receipt.id })]);
+    expect(sameProject.excludedReviewReceiptCount).toBe(0);
+
+    const foreignCommonDir = git(otherRoot, "rev-parse", "--path-format=absolute", "--git-common-dir");
+    writeFileSync(receipt.receiptPath, JSON.stringify({ ...stored, commonDir: foreignCommonDir }));
+    writeFileSync(join(receipt.receiptPath, "..", "project-mismatch.json"), JSON.stringify({
+      ...stored,
+      id: "project-mismatch",
+      projectDir: otherRoot,
+    }));
+    const mismatched = retentionAuditWorkspace({
+      projectRoot: root,
+      hostStateRoot,
+      receiptScope: "project",
+      now: new Date("2026-01-01T03:00:01.000Z"),
+    });
+    expect(mismatched.staleReviews).toEqual([]);
+    expect(mismatched.excludedReviewReceiptCount).toBe(2);
+  });
+
   it("audits stale feature branches after one day while excluding the management branch", () => {
     const root = repositoryWithRemote();
     configure(root, {
@@ -3813,12 +3895,42 @@ describe("temporary review and retention", () => {
 
     const audit = retentionAuditWorkspace({
       projectRoot: root,
+      receiptScope: "project",
       now: new Date("2030-01-01T00:00:00.000Z"),
     });
 
     expect(audit.remoteBranches.map((branch) => branch.ref)).toContain("refs/remotes/origin/stale-feature");
     expect(audit.remoteBranches.map((branch) => branch.ref)).toContain("refs/remotes/origin/releases/main");
     expect(audit.remoteBranches.map((branch) => branch.ref)).not.toContain("refs/remotes/origin/main");
+    expect(audit.receiptScope).toBe("project");
+  });
+
+  it("does not let project receipt scope bypass stale leases", () => {
+    const root = repository();
+    configure(root, { leaseTtlHours: 1 });
+    const commonDir = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir");
+    const leaseDirectory = join(commonDir, "harness", "worktree-delivery", "leases");
+    mkdirSync(leaseDirectory, { recursive: true });
+    writeFileSync(join(leaseDirectory, "stale.json"), JSON.stringify({
+      schemaVersion: "1.0",
+      workItem: "github:example/project#stale",
+      branch: "main",
+      path: root,
+      owner: "owner",
+      acceptedCommit: git(root, "rev-parse", "HEAD"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      heartbeatAt: "2026-01-01T00:00:00.000Z",
+      status: "active",
+    }));
+
+    const audit = retentionAuditWorkspace({
+      projectRoot: root,
+      receiptScope: "project",
+      now: new Date("2026-01-01T02:00:01.000Z"),
+    });
+    expect(audit.staleLeases).toEqual([
+      expect.objectContaining({ workItem: "github:example/project#stale" }),
+    ]);
   });
 
   it("does not query the configured provider", () => {
@@ -3955,8 +4067,10 @@ describe("temporary review and retention", () => {
     repositories.push(hostStateRoot);
     const reviewDirectory = join(hostStateRoot, "reviews");
     mkdirSync(reviewDirectory, { recursive: true });
-    writeFileSync(join(reviewDirectory, "invalid.json"), JSON.stringify({ kind: "other" }));
-    writeFileSync(join(reviewDirectory, "complete.json"), JSON.stringify({
+    const invalidReceipt = JSON.stringify({ kind: "other" });
+    writeFileSync(join(reviewDirectory, "invalid.json"), invalidReceipt);
+    writeFileSync(join(reviewDirectory, "malformed.json"), "{not json");
+    const completeReceipt = {
       schemaVersion: "worktree-delivery/1.0",
       kind: "review-receipt",
       id: "complete",
@@ -3973,6 +4087,28 @@ describe("temporary review and retention", () => {
       dirty: false,
       exitCode: 0,
       output: "",
+    };
+    writeFileSync(join(reviewDirectory, "complete.json"), JSON.stringify(completeReceipt));
+    writeFileSync(join(reviewDirectory, "missing-identity.json"), JSON.stringify({
+      ...completeReceipt,
+      id: "missing-identity",
+      commonDir: undefined,
+    }));
+    writeFileSync(join(reviewDirectory, "relative-identity.json"), JSON.stringify({
+      ...completeReceipt,
+      id: "relative-identity",
+      projectDir: "relative/project",
+    }));
+    writeFileSync(join(reviewDirectory, "wrong-type.json"), JSON.stringify({
+      ...completeReceipt,
+      id: "wrong-type",
+      projectDir: 42,
+    }));
+    writeFileSync(join(reviewDirectory, "unsafe-common-dir.json"), JSON.stringify({
+      ...completeReceipt,
+      id: "unsafe-common-dir",
+      projectDir: join(root, "..", "foreign-project"),
+      commonDir: join(root, "README.md", "nested"),
     }));
     const commonDir = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir");
     const stateDirectory = join(commonDir, "harness", "worktree-delivery");
@@ -3987,11 +4123,19 @@ describe("temporary review and retention", () => {
     const audit = retentionAuditWorkspace({
       projectRoot: root,
       hostStateRoot,
+      receiptScope: "project",
       now: new Date("2026-01-02T00:00:00.000Z"),
     });
-    expect(audit.errors).toEqual([expect.stringContaining("not a review receipt")]);
+    expect(audit.errors).toHaveLength(6);
+    expect(audit.errors.join("\n")).toContain("not a review receipt");
+    expect(audit.errors.join("\n")).toContain("malformed.json");
+    expect(audit.errors.join("\n")).toContain("commonDir");
+    expect(audit.errors.join("\n")).toContain("projectDir");
+    expect(audit.errors.join("\n")).toContain("WORKTREE_PATH_PARENT_NOT_DIRECTORY");
     expect(audit.staleReviews).toEqual([]);
+    expect(audit.excludedReviewReceiptCount).toBe(0);
     expect(audit.staleLocks).toHaveLength(2);
+    expect(readFileSync(join(reviewDirectory, "invalid.json"), "utf8")).toBe(invalidReceipt);
     expect(existsSync(applyLock)).toBe(true);
     expect(existsSync(reviewLock)).toBe(true);
   });

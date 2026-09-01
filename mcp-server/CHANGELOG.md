@@ -1,3 +1,9 @@
+## [2.8.11] - 2026-09-01
+
+### Fixed
+
+- scope retention review receipts by exact project identity while preserving the host-global default (#77)
+
 ## [2.8.6] - 2026-09-01
 
 ### Fixed
