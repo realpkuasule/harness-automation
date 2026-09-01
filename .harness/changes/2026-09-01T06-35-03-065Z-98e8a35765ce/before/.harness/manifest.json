@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "2.0",
+  "compiler": {
+    "package": "@realpkuasule/harness-automation",
+    "version": "2.8.1"
+  },
+  "policyDigest": "f111eafb26bbd12cccc22a0d3b36d3b08bad596a0ea24f48c018e1bf358957f9",
+  "intakeHash": "929b114afcb2913e2f7c759565eba9df7faf78596fab2518a1bb0a575626e3d9",
+  "discoveryHash": "e1aa0b1cabd6c3794b8f5d0f42b0931ec4b70d8cba3e29fdeba3a66bdee8dedd",
+  "outputs": [
+    {
+      "path": ".harness/policy.yaml",
+      "sha256": "f9983687b5584446ae16e7a71d97a44a937a3ab24450c8dbc7335e75f358736c"
+    },
+    {
+      "path": ".harness/generated/effective-policy.md",
+      "sha256": "129ea3d635eb81f16f8a92851aec267b974fc7de6635d2d279cdfaaa95e09497"
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "e74e9cceb5ce82e5fdb87417a74b2097856e906088396816b4b5b3661b26ce8d"
+    },
+    {
+      "path": "CLAUDE.md",
+      "sha256": "7b5291cee4b376c13046bf30997151a634729a23d561778a23a828ed804760f2"
+    },
+    {
+      "path": ".harness/.gitignore",
+      "sha256": "848edfa49c00887f16ed7d92410f639701dd0f5685d4051057c52e1d28b1db73"
+    }
+  ]
+}

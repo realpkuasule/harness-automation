@@ -88,3 +88,73 @@ Harness Automation 的 npm 发布由 `v*` tag 触发 GitHub Actions 完成，Act
 ## 形式化边界
 
 该规则属于 procedural/cognitive governance：Harness 可以证明规则已配置并分发，但 Git commit 和 npm registry 无法可靠证明提交源自哪个 checkout。因此不得把它宣称为 worktree CLI 的确定性 enforcement。
+
+---
+
+# PRD: 一等公民的项目治理升级
+
+## 状态
+
+- Owner: zhichao
+- GitHub Issue: `realpkuasule/harness-automation#69`
+- 需求批准日期: 2026-09-01
+- 状态: 本节、配套设计和当前状态调研是下一轮 Harness intake 的批准输入；实施完成后必须由 owner 精确批准本仓库 update plan 的完整哈希
+- 前置条件: 保留并验证上文 TypeScript naming 自举修复，不得覆盖、回退或绕过其 baseline ratchet
+
+## 问题
+
+已经应用旧版 Harness 的项目没有正式升级入口。现有普通 `plan` 依赖调用方再次传入 profile 和各类 profiles，漏传会把已有显式选择编译为空；manifest 又只记录 `harness-automation@2`，无法判断项目最后由哪个精确包版本编译。项目因此只能冒险重新初始化、手工改 generated state，或无法证明升级历史和审批链连续。
+
+## 正式接口
+
+只提供一个正式 CLI 入口：
+
+```bash
+harness-automation update plan --project <absolute-path>
+```
+
+不同时提供 `upgrade plan`、`plan --upgrade` 或 `plan --update`，不新增独立 apply、approval、receipt 或 rollback 命令。该命令由用户已经安装或构建好的当前 CLI 离线执行，不查询 registry，也不负责安装 npm 包。若 `.harness/policy.yaml` 不存在，必须返回 `HARNESS_INITIALIZATION_REQUIRED`。
+
+## 功能需求
+
+1. **PRD-UPG-001 — 原地继承**：升级规划必须读取现有 policy、manifest、intake 和 discovery，自动继承 owner、profile、stacks、deliveryProfiles、domainProfiles、qualityProfiles、phase、approved adoption baseline 及其他当前编译器理解的显式项目选择；调用方不得重新输入这些事实。
+2. **PRD-UPG-002 — 当前编译器重编译**：候选策略由当前 CLI 的同一个 policy compiler 基于当前仓库状态编译；命令不联网、不安装依赖、不运行项目命令。
+3. **PRD-UPG-003 — 计划阶段零副作用**：有变化时只可新增一个 `.harness/plans/` 下的 immutable policy update plan；当前版本且语义无变化时返回 `current`/no-op，不写 policy plan。普通 policy update 不得创建、删除、移动或切换 branch/worktree；companion workspace 状态或迁移要求不得迫使系统生成空 policy plan。
+4. **PRD-UPG-004 — 完整差异**：升级结果必须报告旧/新 compiler package version 与 policy schema version、按稳定 rule ID 对齐的 added/removed/changed、formalization、severity、verification argv、target adapter coverage、include/exclude、baseline、source/intake/discovery drift、worktree configuration 状态、warnings、migrationRequired，以及每个目标文件的 before/after SHA-256。所有可应用内容和差异元数据必须进入完整 plan hash。
+5. **PRD-UPG-005 — 单一应用路径**：升级计划必须由现有 `apply --plan ... --approve <full-sha256>` 应用，继续复用全部 precondition、事务写入、post-apply check、change receipt 和 rollback；不得隐式 apply，也不得建立第二套审批或回滚系统。
+6. **PRD-UPG-006 — 精确编译器身份**：新编译的 policy 和 manifest 都必须记录精确 npm package name 与 version。旧文件只有 major 标记或没有精确版本时状态为 `legacy-version-unknown`，不得猜测历史版本。
+7. **PRD-UPG-007 — Doctor 状态**：`doctor` 必须离线比较项目最后编译版本与当前本地 CLI，至少返回 `current`、`stale`、`legacy-version-unknown`、`unconfigured`；`current` 仅代表二者与本地安装版本一致。
+8. **PRD-UPG-008 — 来源漂移 fail-closed**：approved PRD、design、research、eval source 或 discovery 已漂移时，update plan 必须在写计划前失败，给出重新 intake/discover 的准确动作；不得自行批准来源。
+9. **PRD-UPG-009 — Baseline 单向 ratchet**：现有精确 TypeScript naming fingerprints 可以保留，已修复项自动收缩；新增、替换或扩张只能复用 fresh explicit owner adoption intake。parse error、万能 waiver、ignore、关闭规则或扩大排除均不得代替 adoption。
+10. **PRD-UPG-010 — Weakening 独立批准证据**：删除规则、降低 severity、deterministic→procedural/cognitive、procedural→cognitive、减少 verifier/target adapter、缩小 include、扩大 exclude、关闭 active rule、降低 eval threshold、移除 task/gating grader/traceability 或 known-bad control 都是 weakening。新 policy 必须持久化 canonical EDD semantic snapshot；legacy policy 无 snapshot 时只有旧 eval source hashes 与当前批准 source set 完全一致才可安全继承，否则 fail closed。weakening digest 必须绑定 before/after policy digest、semantic diff 和完整 rule ID 集合；只有 fresh owner intake 可批准。
+11. **PRD-UPG-011 — Worktree 配置正交升级**：存在 `.harness/worktree-delivery.json` 时只读检查 schema、host binding 和当前 CLI 兼容性，并只报告 `not-configured`、`compatible`、`configuration-plan-required` 或 `migration-required`。所有显式值必须逐值保留；可无损重写时复用现有 `workspace-plan` 生成独立 immutable configuration plan 和独立完整哈希。需要 legacy-flat→container-v1 或其他目录移动时只报告 `migrationRequired` 与精确 `worktree migrate` 后续命令，policy update plan/apply 不得执行拓扑迁移；无效 schema 直接 fail closed 且零计划。
+12. **PRD-UPG-012 — 引擎与配置状态分离**：输出必须区分“当前 CLI 执行算法已升级”“policy 已重编译”“worktree 配置已重写/仍待迁移”，不得把安装新 CLI 描述为项目配置已迁移。
+13. **PRD-UPG-013 — 自举闭环**：功能和测试完成后，本仓库必须执行真实 update plan，展示完整哈希并等待 zhichao 精确批准；批准后执行现有 apply、`check` 和 `drift`，证明不会重现自举死锁。
+14. **PRD-UPG-014 — 发布边界**：Issue #69 不自动发布 npm，不为 npm 发布创建 worktree。是否发布必须在全部功能、自举和 prepublish 验证通过后另行决定。
+
+## 非目标
+
+- 不删除或重新初始化 `.harness`，不删除 managed blocks，不清空 baseline。
+- 不查询 npm registry，不比较远端 latest，不安装或升级 CLI 本身。
+- 不在 update plan/apply 中执行 worktree topology migration。
+- 不为升级创建另一套 policy compiler、plan schema、审批数据库、receipt 或 rollback executor。
+- 不把未知旧 compiler version 猜成 `2.0.0`、最新 major 或当前本地版本。
+- 不在第一版增加 MCP transport；CLI 是唯一正式接口，service 层保持可复用。
+
+## 最低验收测试
+
+1. 缺少 `.harness/policy.yaml`：精确返回 `HARNESS_INITIALIZATION_REQUIRED`，零计划。
+2. 当前精确版本且候选语义/输出哈希相同：返回 no-op/current，除可能独立生成的 companion workspace plan 外不写 policy plan。
+3. 只有 `harness-automation@2` 的 legacy manifest：使用当前 compiler 生成可复现 update plan，并报告旧版本 unknown。
+4. 旧 policy 的 owner、profile、stacks、delivery/domain/quality profiles 和 phase 全部继承；调用方没有相应 flags 也不丢失。
+5. 当前 compiler 新增规则：diff 报告 added rule，exact-hash apply 后规则进入 policy 和生成输出。
+6. 任一 weakening 精确列出 rule IDs；无 fresh matching owner intake 时 apply 被拒绝。
+7. 任一 approved source 或 discovery drift：计划文件不产生，并要求重新 intake/discover。
+8. TypeScript adoption baseline 只保留或收缩；扩张继续要求 fresh explicit adoption intake。
+9. 错误完整哈希、计划篡改、source/intake/discovery/target 漂移均在任何目标写入前失败；中途失败由现有事务回滚且不留半成品。
+10. 现有 rollback 恢复更新前 policy、manifest、generated files 与 managed blocks。
+11. worktree 显式配置值逐值不变；policy update plan/apply 前后 `git worktree list --porcelain` 集合不变。
+12. 必须移动目录的 topology 只报告 migrationRequired 和现有 `worktree migrate` 动作，不移动目录。
+13. `doctor` 覆盖 current、stale、legacy-version-unknown、unconfigured，且全程不联网。
+14. eval threshold 降低或 known-bad control 移除被列为带 rule IDs 的 weakening，并由 fresh intake 独立批准。
+15. harness-automation 本仓库完成真实 update plan → exact-hash apply → check → drift 闭环。

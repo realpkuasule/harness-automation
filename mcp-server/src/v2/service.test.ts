@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, parse } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { discoverProject } from "./discovery.js";
 import {
@@ -11,14 +11,18 @@ import {
   driftProject,
   intakeProject,
   planProject,
+  planProjectUpdate,
+  planProjectUpgrade,
   researchGitHub,
   rollbackChange,
   hasExecutableFileHeader,
   runTrustedChecks,
 } from "./service.js";
 import { planWorkspaceConfiguration } from "../worktree/service.js";
+import { hashObject, sha256 } from "./fs.js";
 
 const roots: string[] = [];
+const compilerVersion = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version as string;
 
 function temporaryProject(): string {
   const root = mkdtempSync(join(tmpdir(), "harness-v2-"));
@@ -101,6 +105,34 @@ function hardenedEvaluationContract(root: string, positiveExitCode = 0, negative
       },
     }],
   }));
+}
+
+function applyCurrentPolicy(root: string, options: Parameters<typeof planProject>[0] = { projectRoot: root }): void {
+  intakeProject({ projectRoot: root, owner: "owner", approveSources: true, now: new Date("2026-01-01T00:00:00Z") });
+  write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root, new Date("2026-01-01T00:00:01Z")), null, 2)}\n`);
+  const planned = planProject({ ...options, projectRoot: root, now: new Date("2026-01-01T00:00:02Z") });
+  applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash, now: new Date("2026-01-01T00:00:03Z") });
+}
+
+function rewriteAppliedPolicy(root: string, mutate: (policy: Record<string, unknown>) => void): string {
+  const policyPath = join(root, ".harness/policy.yaml");
+  const manifestPath = join(root, ".harness/manifest.json");
+  const policy = JSON.parse(readFileSync(policyPath, "utf8")) as Record<string, unknown>;
+  mutate(policy);
+  const content = `${JSON.stringify(policy, null, 2)}\n`;
+  write(root, ".harness/policy.yaml", content);
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+    compiler: unknown;
+    policyDigest: string;
+    outputs: Array<{ path: string; sha256: string }>;
+  };
+  manifest.compiler = "harness-automation@2";
+  manifest.policyDigest = hashObject(policy);
+  const output = manifest.outputs.find((item) => item.path === ".harness/policy.yaml");
+  if (!output) throw new Error("test fixture manifest is missing policy output");
+  output.sha256 = sha256(content);
+  write(root, ".harness/manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+  return content;
 }
 
 afterEach(() => {
@@ -1123,5 +1155,527 @@ describe("v2 plan/apply/check/rollback", () => {
     };
     expect(result.skillInstallations.skills.find((skill) => skill.name === "harness-automation")?.targets[0].status)
       .toBe("blocked");
+  });
+});
+
+describe("v2 project governance upgrade", () => {
+  it("requires an existing policy before planning an update", () => {
+    const root = temporaryProject();
+    expect(() => planProjectUpdate({ projectRoot: root })).toThrow(/HARNESS_INITIALIZATION_REQUIRED/u);
+  });
+
+  it("returns a zero-write current result and reports the exact compiler", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    applyCurrentPolicy(root);
+    const planDirectory = join(root, ".harness/plans");
+    const before = readdirSync(planDirectory).sort();
+
+    const result = planProjectUpgrade({ projectRoot: root, now: new Date("2026-01-02T00:00:00Z") });
+
+    expect(result).toMatchObject({ status: "current", planPath: null, planHash: null });
+    expect(readdirSync(planDirectory).sort()).toEqual(before);
+    expect((doctorProject(root) as { compiler: { status: string; current: { version: string } } }).compiler)
+      .toMatchObject({ status: "current", current: { version: compilerVersion } });
+  });
+
+  it("reports all four offline compiler states", () => {
+    const unconfigured = temporaryProject();
+    expect((doctorProject(unconfigured) as { compiler: { status: string } }).compiler.status).toBe("unconfigured");
+
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    applyCurrentPolicy(root);
+    expect((doctorProject(root) as { compiler: { status: string } }).compiler.status).toBe("current");
+    rewriteAppliedPolicy(root, (policy) => { delete policy.compiler; });
+    expect((doctorProject(root) as { compiler: { status: string } }).compiler.status).toBe("legacy-version-unknown");
+
+    const stale = { package: "@realpkuasule/harness-automation", version: "0.0.1" };
+    const policy = JSON.parse(readFileSync(join(root, ".harness/policy.yaml"), "utf8"));
+    const manifest = JSON.parse(readFileSync(join(root, ".harness/manifest.json"), "utf8"));
+    policy.compiler = stale;
+    manifest.compiler = stale;
+    write(root, ".harness/policy.yaml", `${JSON.stringify(policy, null, 2)}\n`);
+    write(root, ".harness/manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+    expect((doctorProject(root) as { compiler: { status: string } }).compiler.status).toBe("stale");
+
+    const policyCompiler = { package: "@realpkuasule/harness-automation", version: "2.8.0" };
+    const manifestCompiler = { package: "@realpkuasule/harness-automation", version: "2.8.1" };
+    rewriteAppliedPolicy(root, (value) => { value.compiler = policyCompiler; });
+    const mismatchedManifest = JSON.parse(readFileSync(join(root, ".harness/manifest.json"), "utf8"));
+    mismatchedManifest.compiler = manifestCompiler;
+    write(root, ".harness/manifest.json", `${JSON.stringify(mismatchedManifest, null, 2)}\n`);
+    expect(planProjectUpgrade({ projectRoot: root }).plan?.update?.from).toMatchObject({
+      compiler: null,
+      policyCompiler,
+      manifestCompiler,
+      compilerStatus: "stale",
+    });
+
+    rewriteAppliedPolicy(root, (value) => { value.compiler = policyCompiler; });
+    expect(planProjectUpgrade({ projectRoot: root }).plan?.update?.from).toMatchObject({
+      policyCompiler,
+      manifestCompiler: null,
+      compilerStatus: "legacy-version-unknown",
+    });
+    rewriteAppliedPolicy(root, (value) => { delete value.compiler; });
+    const exactManifest = JSON.parse(readFileSync(join(root, ".harness/manifest.json"), "utf8"));
+    exactManifest.compiler = manifestCompiler;
+    write(root, ".harness/manifest.json", `${JSON.stringify(exactManifest, null, 2)}\n`);
+    expect(planProjectUpgrade({ projectRoot: root }).plan?.update?.from).toMatchObject({
+      policyCompiler: null,
+      manifestCompiler,
+      compilerStatus: "legacy-version-unknown",
+    });
+  });
+
+  it("writes update metadata and still applies a legacy upgrade envelope", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    applyCurrentPolicy(root);
+    rewriteAppliedPolicy(root, (policy) => { delete policy.compiler; });
+    const planned = planProjectUpdate({ projectRoot: root, now: new Date("2026-01-02T00:00:00Z") });
+    expect(planned.plan?.update).toBeDefined();
+    expect(planned.plan?.upgrade).toBeUndefined();
+    const legacy = JSON.parse(readFileSync(join(root, planned.planPath!), "utf8"));
+    legacy.upgrade = legacy.update;
+    delete legacy.update;
+    const unsigned = { ...legacy };
+    delete unsigned.planHash;
+    legacy.planHash = hashObject(unsigned);
+    const legacyPath = ".harness/plans/legacy-upgrade-envelope.json";
+    write(root, legacyPath, `${JSON.stringify(legacy, null, 2)}\n`);
+
+    applyPlan({ projectRoot: root, planPath: legacyPath, approval: legacy.planHash });
+
+    expect(checkProject(root).ok).toBe(true);
+  });
+
+  it("deterministically upgrades a legacy compiler, inherits every profile, applies, and rolls back", () => {
+    const root = temporaryProject();
+    approvedSources(root);
+    evaluationContract(root);
+    write(root, "package.json", JSON.stringify({ dependencies: { typescript: "1" } }));
+    write(root, "package-lock.json", "{}\n");
+    write(root, "tsconfig.json", "{}\n");
+    write(root, "src/service.ts", "export const userId = 1;\n");
+    applyCurrentPolicy(root, {
+      projectRoot: root,
+      profile: "custom",
+      stacks: ["typescript"],
+      deliveryProfiles: ["worktree-delivery"],
+      domainProfiles: ["game-development"],
+      qualityProfiles: ["eval-driven-development"],
+    });
+    intakeProject({
+      projectRoot: root,
+      owner: "replacement-owner",
+      approveSources: true,
+      now: new Date("2026-01-01T00:00:03Z"),
+    });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root, new Date("2026-01-01T00:00:04Z")), null, 2)}\n`);
+    const originalPolicy = rewriteAppliedPolicy(root, (policy) => {
+      delete policy.compiler;
+      const project = policy.project as Record<string, unknown>;
+      delete project.profile;
+      project.phase = "maintenance";
+      policy.policies = (policy.policies as Array<{ id: string }>).filter((rule) => rule.id !== "eval-judge-calibration");
+    });
+    const originalAgents = readFileSync(join(root, "AGENTS.md"), "utf8");
+    const now = new Date("2026-01-02T00:00:00Z");
+
+    const first = planProjectUpgrade({ projectRoot: root, now });
+    const second = planProjectUpgrade({ projectRoot: root, now });
+
+    expect(first.planHash).toBe(second.planHash);
+    expect(first.plan?.update).toMatchObject({
+      from: { compiler: null, compilerStatus: "legacy-version-unknown" },
+      inherited: {
+        profile: "custom",
+        owner: "owner",
+        stacks: ["typescript"],
+        deliveryProfiles: ["worktree-delivery"],
+        domainProfiles: ["game-development"],
+        qualityProfiles: ["eval-driven-development"],
+        phase: "maintenance",
+      },
+      rules: { added: ["eval-judge-calibration"] },
+      adapterCoverage: {
+        before: expect.any(Array),
+        after: expect.any(Array),
+        added: expect.any(Array),
+        removed: expect.any(Array),
+      },
+      weakening: { detected: false, approved: true },
+    });
+    expect(first.policy.project.owner).toBe("owner");
+    expect(first.policy.policies.every((rule) => rule.owner === "owner")).toBe(true);
+    expect(() => applyPlan({ projectRoot: root, planPath: first.planPath!, approval: "0".repeat(64) }))
+      .toThrow(/APPROVAL_MISMATCH/u);
+    const tamperedPath = ".harness/plans/tampered-upgrade.json";
+    const tampered = JSON.parse(readFileSync(join(root, first.planPath!), "utf8"));
+    tampered.warnings.push("tampered");
+    write(root, tamperedPath, `${JSON.stringify(tampered, null, 2)}\n`);
+    expect(() => applyPlan({ projectRoot: root, planPath: tamperedPath, approval: first.planHash! }))
+      .toThrow(/PLAN_TAMPERED/u);
+    const falseMetadataPath = ".harness/plans/false-update-metadata.json";
+    const falseMetadata = JSON.parse(readFileSync(join(root, first.planPath!), "utf8"));
+    falseMetadata.update.from.policyDigest = "0".repeat(64);
+    const unsigned = { ...falseMetadata };
+    delete unsigned.planHash;
+    falseMetadata.planHash = hashObject(unsigned);
+    write(root, falseMetadataPath, `${JSON.stringify(falseMetadata, null, 2)}\n`);
+    expect(() => applyPlan({ projectRoot: root, planPath: falseMetadataPath, approval: falseMetadata.planHash }))
+      .toThrow(/UPDATE_METADATA_INVALID/u);
+    for (const path of ["docs/PRD.md", ".harness/intake.json", ".harness/discovery.json"]) {
+      const content = readFileSync(join(root, path), "utf8");
+      write(root, path, `${content}\n`);
+      expect(() => applyPlan({ projectRoot: root, planPath: first.planPath!, approval: first.planHash! }))
+        .toThrow(/STALE_PRECONDITION/u);
+      write(root, path, content);
+      expect(readFileSync(join(root, ".harness/policy.yaml"), "utf8")).toBe(originalPolicy);
+    }
+    write(root, "AGENTS.md", "concurrent target edit\n");
+    expect(() => applyPlan({ projectRoot: root, planPath: first.planPath!, approval: first.planHash! }))
+      .toThrow(/STALE_PRECONDITION/u);
+    write(root, "AGENTS.md", originalAgents);
+    const change = applyPlan({ projectRoot: root, planPath: first.planPath!, approval: first.planHash! });
+    expect(applyPlan({ projectRoot: root, planPath: first.planPath!, approval: first.planHash! })).toEqual(change);
+    expect(checkProject(root).ok).toBe(true);
+    expect(JSON.parse(readFileSync(join(root, ".harness/policy.yaml"), "utf8")).project).toMatchObject({
+      profile: "custom",
+      phase: "maintenance",
+      deliveryProfiles: ["worktree-delivery"],
+      domainProfiles: ["game-development"],
+      qualityProfiles: ["eval-driven-development"],
+    });
+    rollbackChange({ projectRoot: root, changeId: change.id });
+    expect(readFileSync(join(root, ".harness/policy.yaml"), "utf8")).toBe(originalPolicy);
+    expect(readFileSync(join(root, "AGENTS.md"), "utf8")).toBe(originalAgents);
+  });
+
+  it("blocks weakening until a fresh owner intake approves its digest and exact rule IDs", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    applyCurrentPolicy(root);
+    rewriteAppliedPolicy(root, (policy) => {
+      const template = (policy.policies as Array<Record<string, unknown>>)[0];
+      template.formalization = "deterministic";
+      template.scope = {
+        ...(template.scope as Record<string, unknown>),
+        include: ["**/*", "legacy/**/*"],
+        exclude: [],
+        boundaries: ["code", "api"],
+      };
+      template.targets = [
+        ...(template.targets as unknown[]),
+        { kind: "custom-command", adapter: "legacy", command: ["node", "legacy-check.mjs"] },
+      ];
+      template.verification = {
+        ...(template.verification as Record<string, unknown>),
+        commands: [
+          ...((template.verification as { commands: string[][] }).commands),
+          ["node", "legacy-check.mjs"],
+        ],
+      };
+      (policy.policies as Array<Record<string, unknown>>).push({
+        ...template,
+        id: "legacy-extra-rule",
+        title: "Legacy extra rule",
+      });
+    });
+    const unapproved = planProjectUpgrade({ projectRoot: root, now: new Date("2026-01-02T00:00:00Z") });
+    expect(unapproved.plan?.update?.weakening).toMatchObject({
+      detected: true,
+      approved: false,
+      ruleIds: ["legacy-extra-rule", "single-implementation-owner"],
+    });
+    expect(unapproved.plan?.update?.rules.changed.find((change) => change.ruleId === "single-implementation-owner")?.fields.map((field) => field.field))
+      .toEqual(expect.arrayContaining(["formalization", "scope.include", "scope.exclude", "scope.boundaries", "targets", "verification"]));
+    expect(() => applyPlan({ projectRoot: root, planPath: unapproved.planPath!, approval: unapproved.planHash! }))
+      .toThrow(/WEAKENING_APPROVAL_REQUIRED/u);
+
+    const weakening = unapproved.plan!.update!.weakening;
+    intakeProject({
+      projectRoot: root,
+      owner: "owner",
+      approveSources: true,
+      approveWeakening: weakening.digest,
+      weakeningRuleIds: weakening.ruleIds,
+      now: new Date("2026-01-02T00:00:01Z"),
+    });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root, new Date("2026-01-02T00:00:02Z")), null, 2)}\n`);
+    const approved = planProjectUpgrade({ projectRoot: root, now: new Date("2026-01-02T00:00:03Z") });
+    expect(approved.plan?.update?.weakening.approved).toBe(true);
+    applyPlan({ projectRoot: root, planPath: approved.planPath!, approval: approved.planHash! });
+    expect(checkProject(root).ok).toBe(true);
+  });
+
+  it("treats lower eval thresholds and removed known-bad controls as weakening", () => {
+    const root = temporaryProject();
+    approvedSources(root);
+    hardenedEvaluationContract(root);
+    write(root, "package.json", JSON.stringify({ dependencies: { typescript: "1" } }));
+    write(root, "package-lock.json", "{}\n");
+    write(root, "tsconfig.json", "{}\n");
+    write(root, "src/service.ts", "export const userId = 1;\n");
+    applyCurrentPolicy(root, {
+      projectRoot: root,
+      profile: "custom",
+      stacks: ["typescript"],
+      qualityProfiles: ["eval-driven-development"],
+    });
+    const contract = JSON.parse(readFileSync(join(root, "evals/evals.json"), "utf8"));
+    contract.schemaVersion = "1.0";
+    contract.suites[0].target.threshold = 0.5;
+    delete contract.suites[0].negativeControl;
+    write(root, "evals/evals.json", `${JSON.stringify(contract, null, 2)}\n`);
+    intakeProject({
+      projectRoot: root,
+      owner: "owner",
+      approveSources: true,
+      now: new Date("2026-01-02T00:00:00Z"),
+    });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root, new Date("2026-01-02T00:00:01Z")), null, 2)}\n`);
+
+    const result = planProjectUpdate({ projectRoot: root, now: new Date("2026-01-02T00:00:02Z") });
+
+    expect(result.plan?.update?.evaluations.changed).toEqual([
+      expect.objectContaining({ suiteId: "representative-quality" }),
+    ]);
+    expect(result.plan?.update?.weakening).toMatchObject({
+      detected: true,
+      approved: false,
+      ruleIds: ["representative-quality-gate"],
+      reasons: expect.arrayContaining([
+        expect.stringContaining("target threshold"),
+        expect.stringContaining("known-bad control removed"),
+      ]),
+    });
+    expect(() => applyPlan({ projectRoot: root, planPath: result.planPath!, approval: result.planHash! }))
+      .toThrow(/WEAKENING_APPROVAL_REQUIRED/u);
+  });
+
+  it("rejects an unprovable legacy eval history and a false manifest policy digest", () => {
+    const legacy = temporaryProject();
+    approvedSources(legacy);
+    hardenedEvaluationContract(legacy);
+    write(legacy, "package.json", JSON.stringify({ dependencies: { typescript: "1" } }));
+    write(legacy, "package-lock.json", "{}\n");
+    write(legacy, "tsconfig.json", "{}\n");
+    write(legacy, "src/service.ts", "export const userId = 1;\n");
+    applyCurrentPolicy(legacy, {
+      projectRoot: legacy,
+      profile: "custom",
+      stacks: ["typescript"],
+      qualityProfiles: ["eval-driven-development"],
+    });
+    rewriteAppliedPolicy(legacy, (policy) => { delete policy.evaluations; });
+    const contract = JSON.parse(readFileSync(join(legacy, "evals/evals.json"), "utf8"));
+    contract.suites[0].target.threshold = 0.5;
+    write(legacy, "evals/evals.json", `${JSON.stringify(contract, null, 2)}\n`);
+    intakeProject({ projectRoot: legacy, owner: "owner", approveSources: true, now: new Date("2026-01-02T00:00:00Z") });
+    write(legacy, ".harness/discovery.json", `${JSON.stringify(discoverProject(legacy, new Date("2026-01-02T00:00:01Z")), null, 2)}\n`);
+    expect(() => planProjectUpdate({ projectRoot: legacy })).toThrow(/EVAL_SEMANTICS_HISTORY_REQUIRED/u);
+
+    const digest = temporaryProject();
+    fullTypeScriptProject(digest);
+    applyCurrentPolicy(digest);
+    const manifest = JSON.parse(readFileSync(join(digest, ".harness/manifest.json"), "utf8"));
+    manifest.policyDigest = "0".repeat(64);
+    write(digest, ".harness/manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+    expect(() => planProjectUpdate({ projectRoot: digest })).toThrow(/MANIFEST_POLICY_DIGEST_MISMATCH/u);
+  });
+
+  it("stops before writing a plan when approved sources or discovery facts drift", () => {
+    const sourceRoot = temporaryProject();
+    fullTypeScriptProject(sourceRoot);
+    applyCurrentPolicy(sourceRoot);
+    const sourcePlans = readdirSync(join(sourceRoot, ".harness/plans")).sort();
+    write(sourceRoot, "docs/PRD.md", "# drifted\n");
+    expect(() => planProjectUpgrade({ projectRoot: sourceRoot })).toThrow(/SOURCE_DRIFT/u);
+    expect(readdirSync(join(sourceRoot, ".harness/plans")).sort()).toEqual(sourcePlans);
+
+    const discoveryRoot = temporaryProject();
+    fullTypeScriptProject(discoveryRoot);
+    applyCurrentPolicy(discoveryRoot);
+    const discoveryPlans = readdirSync(join(discoveryRoot, ".harness/plans")).sort();
+    const packageJson = JSON.parse(readFileSync(join(discoveryRoot, "package.json"), "utf8"));
+    packageJson.scripts.build = "tsc";
+    write(discoveryRoot, "package.json", JSON.stringify(packageJson));
+    expect(() => planProjectUpgrade({ projectRoot: discoveryRoot })).toThrow(/DISCOVERY_DRIFT/u);
+    expect(readdirSync(join(discoveryRoot, ".harness/plans")).sort()).toEqual(discoveryPlans);
+  });
+
+  it("never expands the TypeScript adoption baseline during an ordinary upgrade", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    write(root, "src/userService.ts", "export const legacy_name = 1;\n");
+    intakeProject({
+      projectRoot: root,
+      owner: "owner",
+      approveSources: true,
+      approveTypeScriptNamingAdoption: true,
+      now: new Date("2026-01-01T00:00:00Z"),
+    });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root, new Date("2026-01-01T00:00:01Z")), null, 2)}\n`);
+    const adopted = planProject({ projectRoot: root, adoptTypeScriptNaming: true, now: new Date("2026-01-01T00:00:02Z") });
+    applyPlan({ projectRoot: root, planPath: adopted.path, approval: adopted.plan.planHash });
+    write(root, "src/userService.ts", "export const userId = 1;\n");
+    const shrink = planProjectUpgrade({ projectRoot: root, now: new Date("2026-01-02T00:00:00Z") });
+    expect(shrink.plan?.update?.baseline).toMatchObject({ before: [expect.any(String)], after: [], added: [], removed: [expect.any(String)] });
+    applyPlan({ projectRoot: root, planPath: shrink.planPath!, approval: shrink.planHash! });
+    write(root, "src/userService.ts", "export const legacy_name = 1;\nexport const new_debt = 2;\n");
+
+    const upgrade = planProjectUpgrade({ projectRoot: root, now: new Date("2026-01-03T00:00:00Z") });
+
+    expect(upgrade).toMatchObject({ status: "current", plan: null, planPath: null });
+    expect(upgrade.policy.typescriptNamingBaseline?.fingerprints).toEqual([]);
+    expect(checkProject(root)).toMatchObject({ ok: false, violations: expect.arrayContaining([
+      expect.stringContaining("legacy_name"),
+      expect.stringContaining("new_debt"),
+    ]) });
+    expect(() => planProjectUpgrade({ projectRoot: root, adoptTypeScriptNaming: true }))
+      .toThrow(/TYPESCRIPT_NAMING_ADOPTION_DRIFT/u);
+  });
+
+  it("preserves legacy worktree values in a separate plan and never changes the worktree set", () => {
+    const root = realpathSync.native(temporaryProject());
+    fullTypeScriptProject(root);
+    execFileSync("git", ["init", "-b", "main"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "harness@example.test"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Harness Test"], { cwd: root });
+    execFileSync("git", ["add", "."], { cwd: root });
+    execFileSync("git", ["commit", "-m", "test: initialize fixture"], { cwd: root });
+    applyCurrentPolicy(root);
+    const legacyConfig = {
+      schemaVersion: "1.0",
+      mode: "audit-only",
+      managementBranch: "main",
+      maxPersistentWorktrees: 7,
+      leaseTtlHours: 101,
+      reviewTtlMinutes: 17,
+      remoteBranchRetentionDays: 9,
+      remoteBranchDeletion: false,
+      provider: { kind: "github", repository: "example/project" },
+      allowedRoots: [join(root, "..")],
+      protectedRoots: [root, join(root, ".git"), parse(root).root],
+    };
+    write(root, ".harness/worktree-delivery.json", `${JSON.stringify(legacyConfig, null, 2)}\n`);
+    const leaseDir = join(root, ".git/harness/worktree-delivery/leases");
+    mkdirSync(leaseDir, { recursive: true });
+    write(root, ".git/harness/worktree-delivery/leases/issue-24.json", `${JSON.stringify({
+      schemaVersion: "1.0",
+      workItem: "github:example/project#24",
+      branch: "main",
+      path: root,
+      owner: "owner",
+      acceptedCommit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      heartbeatAt: "2026-01-01T00:00:00.000Z",
+      status: "active",
+    }, null, 2)}\n`);
+    const marker = join(root, "network-command-called");
+    for (const command of ["gh", "npm", "npx", "curl"]) {
+      const executable = process.platform === "win32" ? `bin/${command}.cmd` : `bin/${command}`;
+      write(root, executable, process.platform === "win32"
+        ? "@echo called>>\"%HARNESS_NETWORK_MARKER%\"\r\n@exit /b 1\r\n"
+        : "#!/bin/sh\nprintf called >> \"$HARNESS_NETWORK_MARKER\"\nexit 1\n");
+      if (process.platform !== "win32") chmodSync(join(root, executable), 0o755);
+    }
+    const previousPath = process.env.PATH;
+    const previousMarker = process.env.HARNESS_NETWORK_MARKER;
+    process.env.PATH = `${join(root, "bin")}${delimiter}${previousPath ?? ""}`;
+    process.env.HARNESS_NETWORK_MARKER = marker;
+    const worktreesBefore = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: root, encoding: "utf8" });
+
+    let upgrade: ReturnType<typeof planProjectUpgrade>;
+    let workspacePlan: { planHash: string; operation: { content: string; hostBindingContent: string } };
+    try {
+      upgrade = planProjectUpgrade({ projectRoot: root, now: new Date("2026-01-02T00:00:00Z") });
+      workspacePlan = JSON.parse(readFileSync(join(root, upgrade.worktree.configurationPlanPath!), "utf8"));
+      applyPlan({
+        projectRoot: root,
+        planPath: upgrade.worktree.configurationPlanPath!,
+        approval: workspacePlan.planHash,
+      });
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousMarker === undefined) delete process.env.HARNESS_NETWORK_MARKER;
+      else process.env.HARNESS_NETWORK_MARKER = previousMarker;
+    }
+    const portable = { ...legacyConfig } as Record<string, unknown>;
+    delete portable.allowedRoots;
+    delete portable.protectedRoots;
+    expect(upgrade).toMatchObject({ status: "current", planPath: null, planHash: null });
+    expect(upgrade.worktree).toMatchObject({ status: "configuration-plan-required", configurationPlanHash: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+    expect(JSON.parse(workspacePlan.operation.content)).toEqual(portable);
+    expect(JSON.parse(workspacePlan.operation.hostBindingContent)).toMatchObject({
+      allowedRoots: legacyConfig.allowedRoots,
+      protectedRoots: legacyConfig.protectedRoots,
+      approval: { mode: "manual" },
+    });
+    expect(execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: root, encoding: "utf8" })).toBe(worktreesBefore);
+  });
+
+  it("reports an invalid worktree schema as blocked without writing either plan", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    execFileSync("git", ["init", "-b", "main"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "harness@example.test"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Harness Test"], { cwd: root });
+    execFileSync("git", ["add", "."], { cwd: root });
+    execFileSync("git", ["commit", "-m", "test: initialize fixture"], { cwd: root });
+    applyCurrentPolicy(root);
+    write(root, ".harness/worktree-delivery.json", '{"schemaVersion":"unknown"}\n');
+    const before = readdirSync(join(root, ".harness/plans")).sort();
+
+    expect(() => planProjectUpdate({ projectRoot: root, now: new Date("2026-01-02T00:00:00Z") }))
+      .toThrow(/WORKTREE_UPDATE_BLOCKED/u);
+    expect(readdirSync(join(root, ".harness/plans")).sort()).toEqual(before);
+  });
+
+  it("reports a topology migration boundary without moving directories", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    execFileSync("git", ["init", "-b", "main"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "harness@example.test"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Harness Test"], { cwd: root });
+    execFileSync("git", ["add", "."], { cwd: root });
+    execFileSync("git", ["commit", "-m", "test: initialize fixture"], { cwd: root });
+    applyCurrentPolicy(root);
+    const configuration = planWorkspaceConfiguration({ projectRoot: root, mode: "audit-only", managementBranch: "main", allowedRoots: [join(root, "..")] });
+    applyPlan({ projectRoot: root, planPath: configuration.path, approval: configuration.plan.planHash });
+    const container = temporaryProject();
+    write(root, ".git/harness/worktree-delivery/host-binding.json", `${JSON.stringify({
+      schemaVersion: "1.0",
+      allowedRoots: [join(container, "worktrees")],
+      protectedRoots: [join(container, "main"), join(container, "main/.git"), parse(container).root],
+      topology: {
+        kind: "container-v1",
+        workspaceContainer: container,
+        managementCheckout: join(container, "main"),
+        persistentWorktreeRoot: join(container, "worktrees"),
+      },
+      approval: { mode: "manual" },
+    }, null, 2)}\n`);
+    const before = readdirSync(container).sort();
+    const worktreesBefore = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: root, encoding: "utf8" });
+
+    const upgrade = planProjectUpgrade({ projectRoot: root, now: new Date("2026-01-02T00:00:00Z") });
+
+    expect(upgrade).toMatchObject({
+      status: "current",
+      planPath: null,
+      planHash: null,
+      worktree: {
+        status: "migration-required",
+        migrationCommand: ["harness-automation", "worktree", "migrate", "--workspace-container", "<absolute-path>", "--project", root],
+      },
+    });
+    expect(readdirSync(container).sort()).toEqual(before);
+    expect(execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: root, encoding: "utf8" })).toBe(worktreesBefore);
   });
 });

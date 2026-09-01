@@ -1,0 +1,212 @@
+{
+  "schemaVersion": "2.0",
+  "id": "2026-09-01T04-15-13-645Z-11f8c9d107b7",
+  "createdAt": "2026-09-01T04:15:13.645Z",
+  "projectDir": "/Users/zhichao/codex/harness-automation",
+  "intakeHash": "c23dfce099a252b3c926890b446be90e5e7bb900c9bd709fd2d5833a0e12e8ae",
+  "discoveryHash": "a2562c068430d957120f40c5270193f460195dc679ddb1404fea266f2d2c5cc6",
+  "sourceHashes": [
+    {
+      "path": "docs/PRD.md",
+      "sha256": "208d1bb972507a47d45bb805f3a229efd8e83173ef9a7ea5d042ef1261cee3f9"
+    },
+    {
+      "path": "docs/design/harness-automation-design-v2.0-backup.md",
+      "sha256": "9b27dc8b89be4d84d738e7c1e44ce5efcb4ddabe0f2c7c105f4b16a7fb942bfc"
+    },
+    {
+      "path": "docs/design/harness-automation-design.md",
+      "sha256": "be715a5787993196dd447b70d2db90d448957c54097082608ccb677c1289e507"
+    },
+    {
+      "path": "docs/design/harness-design-comparison.md",
+      "sha256": "1ad7263e9ad68012e8511f0a7b773d97a9c0144690de6b75c644e2e6b97ca0bb"
+    },
+    {
+      "path": "docs/design/harness-skill-v2.md",
+      "sha256": "37448fa527133a99b3dad892f6ba1000493befe64d91c3f06c1a177f98761ab2"
+    },
+    {
+      "path": "docs/design/project-governance-upgrade.md",
+      "sha256": "21ac75e04939e206c86bba9f75c0e7ca2fb45ef3a49f9e38e3b7d4762c432b33"
+    },
+    {
+      "path": "docs/design/typescript-naming-adoption-baseline.md",
+      "sha256": "40de35a515ae50b247d96bd26f031c8518197f87df4807e00655e480022ba42a"
+    },
+    {
+      "path": "docs/design/worktree-delivery.md",
+      "sha256": "aaa32ed7b25f4870c8e8a0ca61a0f6fdd68698a85d8f2134c47d4c3e4f89a641"
+    },
+    {
+      "path": "docs/research/github-wheels-2026-08-31.json",
+      "sha256": "2ae5dbd6bb795fef6ea10a32cf85159e4e4b2557338c06cc7e40efd9802d87b0"
+    },
+    {
+      "path": "docs/research/github-wheels-2026-08-31.md",
+      "sha256": "e4d10b984d423a6b9b62029954059cb03952939f210e6a3ad118357c9f8d02e3"
+    },
+    {
+      "path": "docs/research/npm-release-worktree.md",
+      "sha256": "83bc604d765cad9b055e6594ceeab292f0cbe439854be006792484e601a523b6"
+    },
+    {
+      "path": "docs/research/project-governance-upgrade-current-state.md",
+      "sha256": "0182b780f8d331ea2121a7ea73e3e39725e890d1e6300381114cc499a4c7a015"
+    },
+    {
+      "path": "evals/baselines/npm-release-worktree-pre-implementation.json",
+      "sha256": "299a5bea6ff72f88e31a805a6b6f7e67d7fcf492ec11da2493f3f96a8f87dd60"
+    },
+    {
+      "path": "evals/evals.json",
+      "sha256": "aefc091356b5b5f23e14945ab48d1468599fc51cda211f94c07956d89022b794"
+    },
+    {
+      "path": "evals/fixtures/known-bad-npm-release-policy.md",
+      "sha256": "172a210a2f2f59bdd177ca635e937255559dbd22515b1224e633dd776de3bb9f"
+    },
+    {
+      "path": "evals/run_npm_release_policy.mjs",
+      "sha256": "715d3320bf661d48b1d477592da4a077ef025eb8a41f48704dbfae032c54847a"
+    },
+    {
+      "path": "evals/tasks/npm-release-worktree.jsonl",
+      "sha256": "3710cc36bcfbb96ee9d76abe997cc56d16e69b997247b2dc9ce566e7326d9cd9"
+    }
+  ],
+  "operations": [
+    {
+      "id": "write-harness-policy-yaml",
+      "kind": "write",
+      "path": ".harness/policy.yaml",
+      "beforeHash": "4b908501d4b8c7edded4ba6a8b593b04dab8d3f93b3f3429de74909e327892c2",
+      "afterHash": "6a15a324234da75034adf5bf0b226844faeac3017db53b90aae065427d59b946",
+      "content": "{\n  \"schemaVersion\": \"2.0\",\n  \"project\": {\n    \"name\": \"harness-automation\",\n    \"owner\": \"zhichao\",\n    \"phase\": \"design-approved\",\n    \"stacks\": [\n      \"typescript\"\n    ],\n    \"deliveryProfiles\": [],\n    \"domainProfiles\": [],\n    \"qualityProfiles\": [\n      \"eval-driven-development\"\n    ]\n  },\n  \"sources\": [\n    {\n      \"id\": \"prd\",\n      \"kind\": \"prd\",\n      \"path\": \"docs/PRD.md\",\n      \"sha256\": \"208d1bb972507a47d45bb805f3a229efd8e83173ef9a7ea5d042ef1261cee3f9\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-harness-automation-design-v2-0-backup\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/harness-automation-design-v2.0-backup.md\",\n      \"sha256\": \"9b27dc8b89be4d84d738e7c1e44ce5efcb4ddabe0f2c7c105f4b16a7fb942bfc\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-harness-automation-design\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/harness-automation-design.md\",\n      \"sha256\": \"be715a5787993196dd447b70d2db90d448957c54097082608ccb677c1289e507\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-harness-design-comparison\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/harness-design-comparison.md\",\n      \"sha256\": \"1ad7263e9ad68012e8511f0a7b773d97a9c0144690de6b75c644e2e6b97ca0bb\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-harness-skill-v2\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/harness-skill-v2.md\",\n      \"sha256\": \"37448fa527133a99b3dad892f6ba1000493befe64d91c3f06c1a177f98761ab2\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-project-governance-upgrade\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/project-governance-upgrade.md\",\n      \"sha256\": \"21ac75e04939e206c86bba9f75c0e7ca2fb45ef3a49f9e38e3b7d4762c432b33\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-typescript-naming-adoption-baseline\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/typescript-naming-adoption-baseline.md\",\n      \"sha256\": \"40de35a515ae50b247d96bd26f031c8518197f87df4807e00655e480022ba42a\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-worktree-delivery\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/worktree-delivery.md\",\n      \"sha256\": \"aaa32ed7b25f4870c8e8a0ca61a0f6fdd68698a85d8f2134c47d4c3e4f89a641\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"research-github-wheels-2026-08-31\",\n      \"kind\": \"research\",\n      \"path\": \"docs/research/github-wheels-2026-08-31.json\",\n      \"sha256\": \"2ae5dbd6bb795fef6ea10a32cf85159e4e4b2557338c06cc7e40efd9802d87b0\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"research-github-wheels-2026-08-31-2\",\n      \"kind\": \"research\",\n      \"path\": \"docs/research/github-wheels-2026-08-31.md\",\n      \"sha256\": \"e4d10b984d423a6b9b62029954059cb03952939f210e6a3ad118357c9f8d02e3\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"research-npm-release-worktree\",\n      \"kind\": \"research\",\n      \"path\": \"docs/research/npm-release-worktree.md\",\n      \"sha256\": \"83bc604d765cad9b055e6594ceeab292f0cbe439854be006792484e601a523b6\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"research-project-governance-upgrade-current-state\",\n      \"kind\": \"research\",\n      \"path\": \"docs/research/project-governance-upgrade-current-state.md\",\n      \"sha256\": \"0182b780f8d331ea2121a7ea73e3e39725e890d1e6300381114cc499a4c7a015\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"eval-npm-release-worktree-pre-implementation\",\n      \"kind\": \"eval\",\n      \"path\": \"evals/baselines/npm-release-worktree-pre-implementation.json\",\n      \"sha256\": \"299a5bea6ff72f88e31a805a6b6f7e67d7fcf492ec11da2493f3f96a8f87dd60\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"eval-evals\",\n      \"kind\": \"eval\",\n      \"path\": \"evals/evals.json\",\n      \"sha256\": \"aefc091356b5b5f23e14945ab48d1468599fc51cda211f94c07956d89022b794\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"eval-known-bad-npm-release-policy\",\n      \"kind\": \"eval\",\n      \"path\": \"evals/fixtures/known-bad-npm-release-policy.md\",\n      \"sha256\": \"172a210a2f2f59bdd177ca635e937255559dbd22515b1224e633dd776de3bb9f\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"eval-run-npm-release-policy\",\n      \"kind\": \"eval\",\n      \"path\": \"evals/run_npm_release_policy.mjs\",\n      \"sha256\": \"715d3320bf661d48b1d477592da4a077ef025eb8a41f48704dbfae032c54847a\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"eval-npm-release-worktree\",\n      \"kind\": \"eval\",\n      \"path\": \"evals/tasks/npm-release-worktree.jsonl\",\n      \"sha256\": \"3710cc36bcfbb96ee9d76abe997cc56d16e69b997247b2dc9ce566e7326d9cd9\",\n      \"approved\": true\n    }\n  ],\n  \"agents\": {\n    \"portableInstructionFile\": \"AGENTS.md\",\n    \"adapters\": [\n      {\n        \"id\": \"portable\",\n        \"capabilities\": [\n          \"root-instructions\",\n          \"scoped-instructions\",\n          \"structured-output\"\n        ]\n      },\n      {\n        \"id\": \"claude-code\",\n        \"capabilities\": [\n          \"root-instructions\",\n          \"scoped-instructions\",\n          \"instruction-imports\",\n          \"session-hooks\",\n          \"mcp\"\n        ]\n      },\n      {\n        \"id\": \"codex\",\n        \"capabilities\": [\n          \"root-instructions\",\n          \"scoped-instructions\",\n          \"mcp\",\n          \"structured-output\"\n        ]\n      }\n    ]\n  },\n  \"policies\": [\n    {\n      \"id\": \"single-implementation-owner\",\n      \"title\": \"Single implementation owner\",\n      \"statement\": \"Before implementation, search for an existing implementation and record the owning module; do not create a parallel implementation of the same capability.\",\n      \"rationale\": \"Parallel AI sessions otherwise duplicate the same capability and split maintenance ownership.\",\n      \"scope\": {\n        \"include\": [\n          \"**/*\"\n        ],\n        \"exclude\": [\n          \".harness/**\",\n          \"**/generated/**\"\n        ],\n        \"boundaries\": [\n          \"code\"\n        ]\n      },\n      \"formalization\": \"procedural\",\n      \"severity\": \"error\",\n      \"targets\": [\n        {\n          \"kind\": \"agent-instruction\",\n          \"adapter\": \"portable\",\n          \"configPath\": \"AGENTS.md\"\n        }\n      ],\n      \"verification\": {\n        \"commands\": [\n          [\n            \"harness-automation\",\n            \"context\",\n            \"--project\",\n            \".\"\n          ]\n        ],\n        \"passCriteria\": \"The session receipt records policy digest and implementation ownership review.\"\n      },\n      \"owner\": \"zhichao\",\n      \"sourceRefs\": [\n        \"prd\",\n        \"design-harness-automation-design-v2-0-backup\",\n        \"design-harness-automation-design\",\n        \"design-harness-design-comparison\",\n        \"design-harness-skill-v2\",\n        \"design-project-governance-upgrade\",\n        \"design-typescript-naming-adoption-baseline\",\n        \"design-worktree-delivery\",\n        \"research-github-wheels-2026-08-31\",\n        \"research-github-wheels-2026-08-31-2\",\n        \"research-npm-release-worktree\",\n        \"research-project-governance-upgrade-current-state\",\n        \"eval-npm-release-worktree-pre-implementation\",\n        \"eval-evals\",\n        \"eval-known-bad-npm-release-policy\",\n        \"eval-run-npm-release-policy\",\n        \"eval-npm-release-worktree\"\n      ],\n      \"status\": \"active\",\n      \"changeControl\": {\n        \"approvalRequired\": true,\n        \"migrationRequired\": false\n      }\n    },\n    {\n      \"id\": \"contract-first-change\",\n      \"title\": \"Contract-first interface changes\",\n      \"statement\": \"Change shared API, RPC, schema, database, or queue contracts before changing consumers; update compatibility tests in the same change.\",\n      \"rationale\": \"A stable source of truth prevents different sessions from implementing different interface assumptions.\",\n      \"scope\": {\n        \"include\": [\n          \"**/*\"\n        ],\n        \"exclude\": [\n          \".harness/**\"\n        ],\n        \"boundaries\": [\n          \"api\",\n          \"rpc\",\n          \"database\",\n          \"queue\"\n        ]\n      },\n      \"formalization\": \"cognitive\",\n      \"severity\": \"error\",\n      \"targets\": [\n        {\n          \"kind\": \"agent-instruction\",\n          \"adapter\": \"portable\",\n          \"configPath\": \".harness/generated/effective-policy.md\"\n        }\n      ],\n      \"verification\": {\n        \"commands\": [],\n        \"passCriteria\": \"Review confirms that contract sources and consumers changed together.\"\n      },\n      \"owner\": \"zhichao\",\n      \"sourceRefs\": [\n        \"prd\",\n        \"design-harness-automation-design-v2-0-backup\",\n        \"design-harness-automation-design\",\n        \"design-harness-design-comparison\",\n        \"design-harness-skill-v2\",\n        \"design-project-governance-upgrade\",\n        \"design-typescript-naming-adoption-baseline\",\n        \"design-worktree-delivery\",\n        \"research-github-wheels-2026-08-31\",\n        \"research-github-wheels-2026-08-31-2\",\n        \"research-npm-release-worktree\",\n        \"research-project-governance-upgrade-current-state\",\n        \"eval-npm-release-worktree-pre-implementation\",\n        \"eval-evals\",\n        \"eval-known-bad-npm-release-policy\",\n        \"eval-run-npm-release-policy\",\n        \"eval-npm-release-worktree\"\n      ],\n      \"status\": \"active\",\n      \"changeControl\": {\n        \"approvalRequired\": true,\n        \"migrationRequired\": false\n      }\n    },\n    {\n      \"id\": \"generated-files-immutable\",\n      \"title\": \"Generated files are immutable\",\n      \"statement\": \"Never edit generated code or Harness compiler outputs directly; change their source and regenerate them.\",\n      \"rationale\": \"Direct edits are overwritten and create cross-session drift.\",\n      \"scope\": {\n        \"include\": [\n          \"**/generated/**\",\n          \".harness/generated/**\"\n        ],\n        \"exclude\": [],\n        \"boundaries\": [\n          \"generated-code\"\n        ]\n      },\n      \"formalization\": \"procedural\",\n      \"severity\": \"error\",\n      \"targets\": [\n        {\n          \"kind\": \"agent-instruction\",\n          \"adapter\": \"portable\",\n          \"configPath\": \"AGENTS.md\"\n        }\n      ],\n      \"verification\": {\n        \"commands\": [\n          [\n            \"harness-automation\",\n            \"drift\",\n            \"--project\",\n            \".\"\n          ]\n        ],\n        \"passCriteria\": \"Generated output hashes match the Harness manifest.\"\n      },\n      \"owner\": \"zhichao\",\n      \"sourceRefs\": [\n        \"prd\",\n        \"design-harness-automation-design-v2-0-backup\",\n        \"design-harness-automation-design\",\n        \"design-harness-design-comparison\",\n        \"design-harness-skill-v2\",\n        \"design-project-governance-upgrade\",\n        \"design-typescript-naming-adoption-baseline\",\n        \"design-worktree-delivery\",\n        \"research-github-wheels-2026-08-31\",\n        \"research-github-wheels-2026-08-31-2\",\n        \"research-npm-release-worktree\",\n        \"research-project-governance-upgrade-current-state\",\n        \"eval-npm-release-worktree-pre-implementation\",\n        \"eval-evals\",\n        \"eval-known-bad-npm-release-policy\",\n        \"eval-run-npm-release-policy\",\n        \"eval-npm-release-worktree\"\n      ],\n      \"status\": \"active\",\n      \"changeControl\": {\n        \"approvalRequired\": true,\n        \"migrationRequired\": false\n      }\n    },\n    {\n      \"id\": \"typescript-naming\",\n      \"title\": \"TypeScript naming\",\n      \"statement\": \"Use camelCase for variables, functions, parameters, methods, and local properties; PascalCase for classes, interfaces, types, enums, React components, and exported Zod schemas; UPPER_SNAKE_CASE is allowed for module constants, imported constants, and static readonly class constants. Node __dirname/__filename and the exact unused-parameter placeholder _ are allowed.\",\n      \"rationale\": \"A deterministic naming gate prevents fresh sessions from alternating between camelCase and snake_case.\",\n      \"scope\": {\n        \"include\": [\n          \"**/*.ts\",\n          \"**/*.tsx\"\n        ],\n        \"exclude\": [\n          \"**/*.d.ts\",\n          \"**/generated/**\",\n          \".harness/**\"\n        ],\n        \"boundaries\": [\n          \"code\"\n        ]\n      },\n      \"formalization\": \"deterministic\",\n      \"severity\": \"error\",\n      \"targets\": [\n        {\n          \"kind\": \"linter\",\n          \"adapter\": \"harness-typescript-ast\"\n        }\n      ],\n      \"verification\": {\n        \"commands\": [\n          [\n            \"harness-automation\",\n            \"check\",\n            \"--project\",\n            \".\"\n          ]\n        ],\n        \"passCriteria\": \"The AST naming verifier passes its invalid fixture and the repository contains no unapproved violations.\"\n      },\n      \"examples\": {\n        \"valid\": [\n          \"const userId = 1\",\n          \"class UserService {}\"\n        ],\n        \"invalid\": [\n          \"const user_id = 1\",\n          \"class user_service {}\"\n        ]\n      },\n      \"owner\": \"zhichao\",\n      \"sourceRefs\": [\n        \"prd\",\n        \"design-harness-automation-design-v2-0-backup\",\n        \"design-harness-automation-design\",\n        \"design-harness-design-comparison\",\n        \"design-harness-skill-v2\",\n        \"design-project-governance-upgrade\",\n        \"design-typescript-naming-adoption-baseline\",\n        \"design-worktree-delivery\",\n        \"research-github-wheels-2026-08-31\",\n        \"research-github-wheels-2026-08-31-2\",\n        \"research-npm-release-worktree\",\n        \"research-project-governance-upgrade-current-state\",\n        \"eval-npm-release-worktree-pre-implementation\",\n        \"eval-evals\",\n        \"eval-known-bad-npm-release-policy\",\n        \"eval-run-npm-release-policy\",\n        \"eval-npm-release-worktree\"\n      ],\n      \"status\": \"active\",\n      \"changeControl\": {\n        \"approvalRequired\": true,\n        \"migrationRequired\": true\n      }\n    },\n    {\n      \"id\": \"eval-contract-before-implementation\",\n      \"title\": \"Evaluation contract before implementation\",\n      \"statement\": \"Define Requirement/rule traceability, representative tasks, graders, an honest pre-implementation or adoption baseline, a known-bad control, and an explicit target in evals/evals.json before enforcing an evaluated capability.\",\n      \"rationale\": \"An approved evaluation contract turns ambiguous success criteria into stable cross-session development evidence.\",\n      \"scope\": {\n        \"include\": [\n          \"evals/**/*\",\n          \"docs/evals/**/*\"\n        ],\n        \"exclude\": [],\n        \"boundaries\": [\n          \"evaluation\"\n        ]\n      },\n      \"formalization\": \"procedural\",\n      \"severity\": \"error\",\n      \"targets\": [\n        {\n          \"kind\": \"agent-instruction\",\n          \"adapter\": \"portable\",\n          \"configPath\": \".harness/generated/effective-policy.md\"\n        }\n      ],\n      \"verification\": {\n        \"commands\": [],\n        \"passCriteria\": \"The approved eval contract and every referenced source exist and match intake hashes.\"\n      },\n      \"owner\": \"zhichao\",\n      \"sourceRefs\": [\n        \"prd\",\n        \"design-harness-automation-design-v2-0-backup\",\n        \"design-harness-automation-design\",\n        \"design-harness-design-comparison\",\n        \"design-harness-skill-v2\",\n        \"design-project-governance-upgrade\",\n        \"design-typescript-naming-adoption-baseline\",\n        \"design-worktree-delivery\",\n        \"research-github-wheels-2026-08-31\",\n        \"research-github-wheels-2026-08-31-2\",\n        \"research-npm-release-worktree\",\n        \"research-project-governance-upgrade-current-state\",\n        \"eval-npm-release-worktree-pre-implementation\",\n        \"eval-evals\",\n        \"eval-known-bad-npm-release-policy\",\n        \"eval-run-npm-release-policy\",\n        \"eval-npm-release-worktree\"\n      ],\n      \"status\": \"active\",\n      \"changeControl\": {\n        \"approvalRequired\": true,\n        \"migrationRequired\": false\n      }\n    },\n    {\n      \"id\": \"eval-regression-gate\",\n      \"title\": \"Evaluation regression gate\",\n      \"statement\": \"Run every approved evaluation suite and project-owned known-bad control in CI; passing and enforcement are independent and delivery is rejected unless both succeed.\",\n      \"rationale\": \"A repeatable project runner makes quality regressions visible across model, prompt, tool, and implementation changes.\",\n      \"scope\": {\n        \"include\": [\n          \"evals/**/*\",\n          \"**/*\"\n        ],\n        \"exclude\": [\n          \".harness/eval-runs/**\"\n        ],\n        \"boundaries\": [\n          \"evaluation\"\n        ]\n      },\n      \"formalization\": \"deterministic\",\n      \"severity\": \"error\",\n      \"targets\": [\n        {\n          \"kind\": \"evaluation\",\n          \"adapter\": \"project-eval-1\",\n          \"command\": [\n            \"node\",\n            \"evals/run_npm_release_policy.mjs\"\n          ]\n        }\n      ],\n      \"verification\": {\n        \"commands\": [\n          [\n            \"node\",\n            \"evals/run_npm_release_policy.mjs\"\n          ]\n        ],\n        \"passCriteria\": \"Every approved evaluation runner exits successfully in `check --mode ci`.\"\n      },\n      \"owner\": \"zhichao\",\n      \"sourceRefs\": [\n        \"prd\",\n        \"design-harness-automation-design-v2-0-backup\",\n        \"design-harness-automation-design\",\n        \"design-harness-design-comparison\",\n        \"design-harness-skill-v2\",\n        \"design-project-governance-upgrade\",\n        \"design-typescript-naming-adoption-baseline\",\n        \"design-worktree-delivery\",\n        \"research-github-wheels-2026-08-31\",\n        \"research-github-wheels-2026-08-31-2\",\n        \"research-npm-release-worktree\",\n        \"research-project-governance-upgrade-current-state\",\n        \"eval-npm-release-worktree-pre-implementation\",\n        \"eval-evals\",\n        \"eval-known-bad-npm-release-policy\",\n        \"eval-run-npm-release-policy\",\n        \"eval-npm-release-worktree\"\n      ],\n      \"status\": \"active\",\n      \"changeControl\": {\n        \"approvalRequired\": true,\n        \"migrationRequired\": false\n      }\n    },\n    {\n      \"id\": \"eval-evidence-provenance\",\n      \"title\": \"Evaluation evidence provenance\",\n      \"statement\": \"Keep evaluation tasks, baselines, and grader calibration evidence in approved repository sources protected by SHA-256 drift checks.\",\n      \"rationale\": \"Changing the measurement while changing the implementation makes quality comparisons unreliable.\",\n      \"scope\": {\n        \"include\": [\n          \"evals/**/*\",\n          \"docs/evals/**/*\"\n        ],\n        \"exclude\": [\n          \".harness/eval-runs/**\"\n        ],\n        \"boundaries\": [\n          \"evaluation\"\n        ]\n      },\n      \"formalization\": \"procedural\",\n      \"severity\": \"error\",\n      \"targets\": [\n        {\n          \"kind\": \"agent-instruction\",\n          \"adapter\": \"portable\"\n        }\n      ],\n      \"verification\": {\n        \"commands\": [],\n        \"passCriteria\": \"All referenced evidence remains inside the repository and matches its approved intake hash.\"\n      },\n      \"owner\": \"zhichao\",\n      \"sourceRefs\": [\n        \"prd\",\n        \"design-harness-automation-design-v2-0-backup\",\n        \"design-harness-automation-design\",\n        \"design-harness-design-comparison\",\n        \"design-harness-skill-v2\",\n        \"design-project-governance-upgrade\",\n        \"design-typescript-naming-adoption-baseline\",\n        \"design-worktree-delivery\",\n        \"research-github-wheels-2026-08-31\",\n        \"research-github-wheels-2026-08-31-2\",\n        \"research-npm-release-worktree\",\n        \"research-project-governance-upgrade-current-state\",\n        \"eval-npm-release-worktree-pre-implementation\",\n        \"eval-evals\",\n        \"eval-known-bad-npm-release-policy\",\n        \"eval-run-npm-release-policy\",\n        \"eval-npm-release-worktree\"\n      ],\n      \"status\": \"active\",\n      \"changeControl\": {\n        \"approvalRequired\": true,\n        \"migrationRequired\": false\n      }\n    },\n    {\n      \"id\": \"eval-judge-calibration\",\n      \"title\": \"Model grader calibration\",\n      \"statement\": \"Treat model graders as guidance unless human calibration evidence is recorded; only calibrated model graders may participate in a hard gate.\",\n      \"rationale\": \"Uncalibrated model judgments are stochastic opinions, not sound deterministic enforcement.\",\n      \"scope\": {\n        \"include\": [\n          \"evals/**/*\",\n          \"docs/evals/**/*\"\n        ],\n        \"exclude\": [],\n        \"boundaries\": [\n          \"evaluation\"\n        ]\n      },\n      \"formalization\": \"cognitive\",\n      \"severity\": \"error\",\n      \"targets\": [\n        {\n          \"kind\": \"agent-instruction\",\n          \"adapter\": \"portable\"\n        }\n      ],\n      \"verification\": {\n        \"commands\": [],\n        \"passCriteria\": \"Human review confirms that every gating model grader cites calibration evidence.\"\n      },\n      \"owner\": \"zhichao\",\n      \"sourceRefs\": [\n        \"prd\",\n        \"design-harness-automation-design-v2-0-backup\",\n        \"design-harness-automation-design\",\n        \"design-harness-design-comparison\",\n        \"design-harness-skill-v2\",\n        \"design-project-governance-upgrade\",\n        \"design-typescript-naming-adoption-baseline\",\n        \"design-worktree-delivery\",\n        \"research-github-wheels-2026-08-31\",\n        \"research-github-wheels-2026-08-31-2\",\n        \"research-npm-release-worktree\",\n        \"research-project-governance-upgrade-current-state\",\n        \"eval-npm-release-worktree-pre-implementation\",\n        \"eval-evals\",\n        \"eval-known-bad-npm-release-policy\",\n        \"eval-run-npm-release-policy\",\n        \"eval-npm-release-worktree\"\n      ],\n      \"status\": \"active\",\n      \"changeControl\": {\n        \"approvalRequired\": true,\n        \"migrationRequired\": false\n      }\n    }\n  ],\n  \"typescriptNamingBaseline\": {\n    \"ruleId\": \"typescript-naming\",\n    \"approvedIntakeHash\": \"c23dfce099a252b3c926890b446be90e5e7bb900c9bd709fd2d5833a0e12e8ae\",\n    \"fingerprints\": [\n      \"5f7d5836abc203bf0bc8e469dafa452611d1b2f22af030dc7c41f1cd6070244c\",\n      \"c63722c4fe9610ffa13ca9c13e6b0a212bf9fb980cba84077842f1832d549705\",\n      \"d1da6976a067caecbdd7d4085f4fa5e401ae929da2ad3537a0a4e29624f7196e\",\n      \"d48c569c7513dfd05795414f874862161e782994288f356351ba940e1d66fe52\"\n    ]\n  }\n}\n",
+      "managed": true
+    },
+    {
+      "id": "write-harness-generated-effective-policy-md",
+      "kind": "write",
+      "path": ".harness/generated/effective-policy.md",
+      "beforeHash": "46e9495c1e5f5e1f65793cd53d69faae353b5fd117a76fe3615a1a5e24a34d3d",
+      "afterHash": "6ea357cae2b31d1355ac9e2b6b327c69bc27a8eaf7bb9e77a522904f5a4496b1",
+      "content": "# Effective Engineering Policy\n\nPolicy digest: `e0324dabea6ff12927d13b519040d55771424ea03e636deca1c3a7bb0dba5cf8`\nOwner: zhichao\nStack: typescript\n\nThis file is generated. Change `.harness/policy.yaml`, obtain owner approval, and recompile instead of editing this file.\n\n## Stack adapter coverage\n\n- `typescript`: built-in deterministic support.\n\n## 1. Single implementation owner (single-implementation-owner)\n\nBefore implementation, search for an existing implementation and record the owning module; do not create a parallel implementation of the same capability.\n\n- Severity: error\n- Formalization: procedural\n- Verify with: `harness-automation context --project .`\n## 2. Contract-first interface changes (contract-first-change)\n\nChange shared API, RPC, schema, database, or queue contracts before changing consumers; update compatibility tests in the same change.\n\n- Severity: error\n- Formalization: cognitive\n- Verify with: owner review\n## 3. Generated files are immutable (generated-files-immutable)\n\nNever edit generated code or Harness compiler outputs directly; change their source and regenerate them.\n\n- Severity: error\n- Formalization: procedural\n- Verify with: `harness-automation drift --project .`\n## 4. TypeScript naming (typescript-naming)\n\nUse camelCase for variables, functions, parameters, methods, and local properties; PascalCase for classes, interfaces, types, enums, React components, and exported Zod schemas; UPPER_SNAKE_CASE is allowed for module constants, imported constants, and static readonly class constants. Node __dirname/__filename and the exact unused-parameter placeholder _ are allowed.\n\n- Severity: error\n- Formalization: deterministic\n- Verify with: `harness-automation check --project .`\n## 5. Evaluation contract before implementation (eval-contract-before-implementation)\n\nDefine Requirement/rule traceability, representative tasks, graders, an honest pre-implementation or adoption baseline, a known-bad control, and an explicit target in evals/evals.json before enforcing an evaluated capability.\n\n- Severity: error\n- Formalization: procedural\n- Verify with: owner review\n## 6. Evaluation regression gate (eval-regression-gate)\n\nRun every approved evaluation suite and project-owned known-bad control in CI; passing and enforcement are independent and delivery is rejected unless both succeed.\n\n- Severity: error\n- Formalization: deterministic\n- Verify with: `node evals/run_npm_release_policy.mjs`\n## 7. Evaluation evidence provenance (eval-evidence-provenance)\n\nKeep evaluation tasks, baselines, and grader calibration evidence in approved repository sources protected by SHA-256 drift checks.\n\n- Severity: error\n- Formalization: procedural\n- Verify with: owner review\n## 8. Model grader calibration (eval-judge-calibration)\n\nTreat model graders as guidance unless human calibration evidence is recorded; only calibrated model graders may participate in a hard gate.\n\n- Severity: error\n- Formalization: cognitive\n- Verify with: owner review\n",
+      "managed": true
+    },
+    {
+      "id": "write-agents-md",
+      "kind": "write",
+      "path": "AGENTS.md",
+      "beforeHash": "2f6669f6ee330167c7733b6a56af6a08278591875fd3b20994c13073a9243634",
+      "afterHash": "9f8e15d294bccb772fe0e2934efbe597fc2da6d0baf312e753762706ad9b4c6f",
+      "content": "# Harness Automation Repository Workflow\n\nThis repository now uses GitHub Issues and one configured GitHub Project as the\nactive development source of truth.\n\n## Source Of Truth\n\n- GitHub Issues track every non-trivial development task.\n- The configured GitHub Project tracks workflow state as `Todo`,\n  `In Progress`, and `Done`, plus `critical`, `high`, `medium`, and `low`\n  priority.\n- `TASK.json` is a historical archive only. Do not add new entries or treat it\n  as the active tracker for this repository.\n\n## Repo Commands\n\nUse these commands instead of `scripts/task.py` for repository work:\n\n```bash\npython3 scripts/github_tracker.py doctor\npython3 scripts/github_tracker.py summary\npython3 scripts/github_tracker.py list --state open\npython3 scripts/github_tracker.py show 123\npython3 scripts/github_tracker.py create --title \"Title\" --body \"Details\" --priority high\npython3 scripts/github_tracker.py status 123 \"In Progress\"\npython3 scripts/github_tracker.py priority 123 critical\npython3 scripts/github_tracker.py close 123 --comment \"Done\"\n```\n\nThe tracker reads `.github/project-workflow.json`. Set the GitHub Project number\nthere once the repository project exists.\n\n## Changelog\n\nKeep using `scripts/changelog.py`, but reference GitHub issues instead of local\ntask IDs:\n\n```bash\npython3 scripts/changelog.py add feat 11 \"Implement x\" --issue realpkuasule/harness-automation#123\n```\n\n## Workflow\n\n1. Create or identify the GitHub Issue before starting meaningful work.\n2. Move the issue into the configured GitHub Project and set its status.\n3. Implement the change.\n4. Record user-facing or repository-significant changes in `CHANGELOG.jsonl`.\n5. Close the issue and update the project status when done.\n\nCompatibility note: the product still ships legacy `task-board` support for\nexisting users. That compatibility layer is not the source of truth for this\nrepository's own development workflow.\n\n<!-- harness-automation:v2:start -->\n## Harness engineering continuity\n\nEffective policy digest: `e0324dabea6ff12927d13b519040d55771424ea03e636deca1c3a7bb0dba5cf8`\n\nBefore editing code in a new session:\n\n1. Run `harness-automation context --project .` and read `.harness/generated/effective-policy.md`.\n2. Search for the existing implementation and identify the owning module before adding a new one.\n3. Treat shared APIs, RPC, database schemas, queues, and generated code as contracts.\n4. Run `harness-automation check --project .` before declaring work complete.\n5. Never edit `.harness/generated/**` or this managed block directly.\n\n<!-- harness-automation:v2:end -->\n",
+      "managed": true
+    },
+    {
+      "id": "write-claude-md",
+      "kind": "write",
+      "path": "CLAUDE.md",
+      "beforeHash": "15ec25f60a0309e79f54499a52ca8324722bbc325f7139a3746289149bda57e1",
+      "afterHash": "cf374702c40cf3e3e6a59d8dea2f1ac50c09e01c5179133d015df5d505054e8f",
+      "content": "# Harness Automation System\n\n## 项目概述\n\nHarness Automation System 是一个基于 MCP (Model Context Protocol) 的自动化约束配置工具。它通过评估项目规则、生成配置文件、验证配置完整性，帮助项目建立有效的约束体系。\n\n**v1.2.0** 新增：GitLab CI/CD 支持、团队协作模式（MR 模板、AI Code Review、Onboarding）、Gitleaks 密钥扫描、双远程（GitHub + GitLab）支持。支持 23 条内置规则和 6 个预设模板。\n\n## 技术栈\n\n- **TypeScript** (ES2022, strict mode)\n- **Node.js** >= 18\n- **MCP SDK** (@modelcontextprotocol/sdk ^1.8.0)\n- **Zod** (输入校验)\n- **Vitest** (测试框架)\n- **ESLint + typescript-eslint** (代码规范)\n\n## 协作\n\n- 开发事实源: GitHub Issues + 配置好的 GitHub Project。\n- `TASK.json` 仅保留为历史归档，不再新增或更新。\n- 变更记录: \"CHANGELOG.jsonl\"\n\n## 项目管理脚本\n\n```bash\n# GitHub Issue / Project 操作 (scripts/github_tracker.py)\npython3 scripts/github_tracker.py doctor\npython3 scripts/github_tracker.py summary\npython3 scripts/github_tracker.py list --state open\npython3 scripts/github_tracker.py show 123\npython3 scripts/github_tracker.py create --title \"标题\" --body \"描述\"\npython3 scripts/github_tracker.py status 123 \"In Progress\"\npython3 scripts/github_tracker.py close 123 --comment \"Done\"\n\n# 变更记录操作 (scripts/changelog.py)\npython3 scripts/changelog.py add feat 11 \"实现某功能\" --issue realpkuasule/harness-automation#123\npython3 scripts/changelog.py add fix 11 \"修复某问题\" --issue realpkuasule/harness-automation#123\npython3 scripts/changelog.py list [n]           # 查看最近 n 条\npython3 scripts/changelog.py search <keyword>   # 搜索变更\n```\n\nGitHub Project 配置文件: `.github/project-workflow.json`\n\n## 目录结构\n\n```\nmcp-server/\n├── src/\n│   ├── index.ts              # MCP Server 入口（工具注册、处理）\n│   ├── engine.ts             # 决策引擎（四问题判定流）\n│   ├── state.ts              # 状态管理（.harness/state.json）\n│   ├── types.ts              # 类型定义 + Zod Schema\n│   ├── deps.ts               # 依赖管理检查\n│   ├── generators/           # 配置生成器（v1.2.0: 9 → 15 个）\n│   │   ├── claude_md.ts      # CLAUDE.md 生成（含 Team Collaboration 章节）\n│   │   ├── eslint.ts         # ESLint 配置生成\n│   │   ├── settings_json.ts  # settings.json 生成\n│   │   ├── gitignore.ts      # .gitignore 追加\n│   │   ├── husky.ts          # Husky hook 生成（含 gitleaks + branch check）\n│   │   ├── ci.ts             # GitHub Actions CI 生成（支持 gitProvider）\n│   │   ├── gitlab_ci.ts      # GitLab CI/CD 生成（NEW: 5 stages + security templates）\n│   │   ├── ai_review.ts      # AI Code Review CI job（NEW）\n│   │   ├── gitleaks.ts       # Gitleaks .toml + pre-commit hook（NEW）\n│   │   ├── gitlab_mr_template.ts  # MR 模板（NEW）\n│   │   ├── gitlab_settings.ts     # GitLab 项目设置 script + doc（NEW）\n│   │   ├── team_onboarding.ts     # scripts/onboard.sh（NEW）\n│   │   ├── package_json.ts   # package.json 依赖合并\n│   │   └── scripts_deployment.ts  # legacy task.py / changelog.py 部署\n│   ├── scanners/             # 代码扫描器\n│   ├── validators/           # 配置验证器\n│   ├── analytics/            # 规则效果统计\n│   ├── adapters/             # 自适应调整\n│   └── io/                   # 规则导入/导出（v1.2.0: 6 presets）\n├── eslint.config.js          # 项目 ESLint 配置\n├── package.json\n└── tsconfig.json\n```\n\n## 常用命令\n\n```bash\nnpm run build    # TypeScript 编译\nnpm run dev      # 开发模式（tsx watch）\nnpm run lint     # ESLint 检查\nnpm run test     # 运行测试\nnpm run test:watch  # 监听模式\nnpx vitest run --coverage  # 覆盖率报告\n```\n\n## 架构原则\n\n1. **Skill + MCP 双层架构**: Skill 负责用户交互和流程引导，MCP 层负责计算和文件操作\n2. **工具不直接与用户交互**: MCP 工具不输出交互式问题，所有用户交互在 Skill 层处理\n3. **Zod 校验输入**: 所有 MCP 工具输入通过 Zod Schema 校验\n4. **状态驱动**: 通过 `.harness/state.json` 持久化状态，支持断点续做\n5. **测试覆盖**: 单元测试 + 集成测试，所有模块必须有测试覆盖\n\n## 仓库开发约束\n\n1. 每个非琐碎改动都应绑定 GitHub Issue。\n2. Issue 的流程状态由 GitHub Project 管理。\n3. `TASK.json` 是只读历史，不再作为当前开发真相源。\n4. `CHANGELOG.jsonl` 记录重大变更时优先写入 `issueRef`。\n\n## v1.2.0 团队协作新增\n\n### 新参数（init_harness）\n\n| 参数 | 类型 | 默认值 | 说明 |\n|------|------|--------|------|\n| `gitProvider` | `\"github\"` \\| `\"gitlab\"` \\| `\"both\"` | `\"github\"` | Git 平台选择。`\"both\"` 用于 GitHub + GitLab 双远程 |\n| `collaborationMode` | `\"solo\"` \\| `\"team\"` | `\"solo\"` | 团队模式启用 MR 模板、onboarding 等。`teamSize ∈ {medium,large}` 时自动为 `\"team\"` |\n\n### 新规则（R019-R023）\n\n- **R019** branch-naming-convention → hook\n- **R020** mr-template-required → claude_md\n- **R021** ai-code-review → ci\n- **R022** secret-detection → linter_error\n- **R023** team-onboarding → settings\n\n### 新 Preset\n\n- `team-gitlab-ts` — TypeScript 团队 + GitLab 完整 Harness 配置（23 条规则）\n\n<!-- harness-automation:v2:start -->\n## Harness engineering continuity\n\nEffective policy digest: `e0324dabea6ff12927d13b519040d55771424ea03e636deca1c3a7bb0dba5cf8`\n\nBefore editing code in a new session:\n\n1. Run `harness-automation context --project .` and read `.harness/generated/effective-policy.md`.\n2. Search for the existing implementation and identify the owning module before adding a new one.\n3. Treat shared APIs, RPC, database schemas, queues, and generated code as contracts.\n4. Run `harness-automation check --project .` before declaring work complete.\n5. Never edit `.harness/generated/**` or this managed block directly.\n\n<!-- harness-automation:v2:end -->\n",
+      "managed": true
+    },
+    {
+      "id": "write-harness-gitignore",
+      "kind": "write",
+      "path": ".harness/.gitignore",
+      "beforeHash": "848edfa49c00887f16ed7d92410f639701dd0f5685d4051057c52e1d28b1db73",
+      "afterHash": "848edfa49c00887f16ed7d92410f639701dd0f5685d4051057c52e1d28b1db73",
+      "content": "sessions/*\n!sessions/.gitkeep\neval-runs/*\n",
+      "managed": true
+    },
+    {
+      "id": "write-harness-manifest-json",
+      "kind": "write",
+      "path": ".harness/manifest.json",
+      "beforeHash": "f2fc27004fe940d2198f5df5dd4d2772c354514554bbd20dca6ce12e8e22a8f5",
+      "afterHash": "2dc783eb64ff913ee3f3dcec09da3b2e7f88da40abcaeee71e575729860f53a8",
+      "content": "{\n  \"schemaVersion\": \"2.0\",\n  \"compiler\": \"harness-automation@2\",\n  \"policyDigest\": \"e0324dabea6ff12927d13b519040d55771424ea03e636deca1c3a7bb0dba5cf8\",\n  \"outputs\": [\n    {\n      \"path\": \".harness/policy.yaml\",\n      \"sha256\": \"6a15a324234da75034adf5bf0b226844faeac3017db53b90aae065427d59b946\"\n    },\n    {\n      \"path\": \".harness/generated/effective-policy.md\",\n      \"sha256\": \"6ea357cae2b31d1355ac9e2b6b327c69bc27a8eaf7bb9e77a522904f5a4496b1\"\n    },\n    {\n      \"path\": \"AGENTS.md\",\n      \"sha256\": \"9f8e15d294bccb772fe0e2934efbe597fc2da6d0baf312e753762706ad9b4c6f\"\n    },\n    {\n      \"path\": \"CLAUDE.md\",\n      \"sha256\": \"cf374702c40cf3e3e6a59d8dea2f1ac50c09e01c5179133d015df5d505054e8f\"\n    },\n    {\n      \"path\": \".harness/.gitignore\",\n      \"sha256\": \"848edfa49c00887f16ed7d92410f639701dd0f5685d4051057c52e1d28b1db73\"\n    }\n  ]\n}\n",
+      "managed": true
+    }
+  ],
+  "commands": [
+    [
+      "harness-automation",
+      "context",
+      "--project",
+      "."
+    ],
+    [
+      "harness-automation",
+      "drift",
+      "--project",
+      "."
+    ],
+    [
+      "harness-automation",
+      "check",
+      "--project",
+      "."
+    ],
+    [
+      "node",
+      "evals/run_npm_release_policy.mjs"
+    ],
+    [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "build"
+    ],
+    [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "lint"
+    ],
+    [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "test"
+    ],
+    [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "test:watch"
+    ],
+    [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "test:coverage"
+    ],
+    [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "test:ci"
+    ],
+    [
+      "node",
+      "evals/run_npm_release_policy.mjs",
+      "evals/fixtures/known-bad-npm-release-policy.md"
+    ]
+  ],
+  "warnings": [
+    "No preset stack profile matched exactly; owner-approved custom stacks are required.",
+    "contract-first-change: guidance requires owner/reviewer judgment",
+    "eval-judge-calibration: guidance requires owner/reviewer judgment",
+    "Owner-approved intake adopts 4 existing TypeScript naming violation(s) as a ratcheted baseline."
+  ],
+  "planHash": "b69b5e4f4665a1628715f430c02b1309c9b3ac4f8667eb5bf373c0191dbe8a70"
+}

@@ -1223,9 +1223,10 @@ export function planWorkspaceConfiguration(args: {
   workspaceContainer?: string;
   approval?: WorktreeApprovalPolicy;
   provider?: WorktreeDeliveryConfig["provider"];
+  providerObservation?: ProviderObservation;
   now?: Date;
 }): { plan: WorkspacePlan; path: string } {
-  const status = workspaceStatus(args.projectRoot);
+  const status = workspaceStatus(args.projectRoot, { providerObservation: args.providerObservation });
   if (args.topology && args.topology !== "container-v1") {
     throw new Error("WORKTREE_TOPOLOGY_INVALID: choose container-v1");
   }
@@ -1321,6 +1322,10 @@ export function planWorkspaceConfiguration(args: {
     afterHostBindingHash: sha256(hostBindingContent),
     hostBindingContent,
     topology,
+    ...(args.providerObservation ? {
+      providerObservationBound: true as const,
+      providerObservation: args.providerObservation,
+    } : {}),
     ...(allowedRoot ? { allowedRoot } : {}),
   };
   return savePlan(status.projectDir, planDraft({ status, operation, now: args.now }));
@@ -3137,7 +3142,9 @@ function appliedReceipt(plan: WorkspacePlan): WorkspaceReceipt | null {
     const current = workspaceStatus(plan.projectDir, {
       adoptionSafe: plan.operation.kind === "adopt",
       providerObservation:
-        (plan.operation.kind === "allocate" || plan.operation.kind === "adopt") &&
+        plan.operation.kind === "configure" && plan.operation.providerObservationBound
+          ? plan.operation.providerObservation
+          : (plan.operation.kind === "allocate" || plan.operation.kind === "adopt") &&
         plan.operation.providerObservationBound
           ? receipt.after.provider
           : undefined,
@@ -3688,6 +3695,9 @@ export function applyWorkspacePlan(args: {
         plan.operation.providerObservationBound
       ? [plan.operation.lease.workItem]
       : undefined,
+    providerObservation: plan.operation.kind === "configure" && plan.operation.providerObservationBound
+      ? plan.operation.providerObservation
+      : undefined,
   });
   validateWorkspacePlan(before, plan, args.approval);
   const postCloseRoot = plan.operation.kind === "close" && samePath(root, plan.operation.lease.path)
@@ -3699,6 +3709,9 @@ export function applyWorkspacePlan(args: {
       providerWorkItems: plan.operation.kind === "allocate" &&
           plan.operation.providerObservationBound
         ? [plan.operation.lease.workItem]
+        : undefined,
+      providerObservation: plan.operation.kind === "configure" && plan.operation.providerObservationBound
+        ? plan.operation.providerObservation
         : undefined,
     });
     validateWorkspacePlan(before, plan, args.approval);
@@ -3985,10 +3998,11 @@ export function applyWorkspacePlan(args: {
     receipt.status = "applied";
     receipt.completedAt = (args.now ?? new Date()).toISOString();
     receipt.after = workspaceStatus(postCloseRoot, {
-      providerObservation: plan.operation.kind === "allocate" &&
-          plan.operation.providerObservationBound
-        ? before.provider
-        : undefined,
+      providerObservation: plan.operation.kind === "configure" && plan.operation.providerObservationBound
+        ? plan.operation.providerObservation
+        : plan.operation.kind === "allocate" && plan.operation.providerObservationBound
+          ? before.provider
+          : undefined,
     });
     writeReceipt(receiptPath, receipt);
     return receipt;
@@ -4291,7 +4305,11 @@ export function rollbackWorkspaceChange(args: {
     });
   }
   if (receipt.status === "rolled-back") return receipt;
-  const status = workspaceStatus(root);
+  const status = workspaceStatus(root, {
+    providerObservation: plan.operation.kind === "configure" && plan.operation.providerObservationBound
+      ? plan.operation.providerObservation
+      : undefined,
+  });
   if (receipt.status !== "applied" || !receipt.after) {
     throw new Error(`WORKSPACE_ROLLBACK_UNAVAILABLE: ${receipt.status}`);
   }
@@ -4416,7 +4434,11 @@ export function rollbackWorkspaceChange(args: {
     }
     receipt.status = "rolled-back";
     receipt.completedAt = (args.now ?? new Date()).toISOString();
-    receipt.after = workspaceStatus(status.projectDir);
+    receipt.after = workspaceStatus(status.projectDir, {
+      providerObservation: plan.operation.kind === "configure" && plan.operation.providerObservationBound
+        ? plan.operation.providerObservation
+        : undefined,
+    });
     writeReceipt(path, receipt);
     return receipt;
   } finally {

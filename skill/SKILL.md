@@ -95,6 +95,28 @@ node <skill目录>/scripts/run.mjs plan --project <项目绝对路径> --profile
 
 向负责人展示：选定 stack、未在仓库中观察到的 stack 警告、将修改的路径、每个旧/新哈希、建议验证命令、未自动形式化的 guidance 和计划哈希。计划不得安装依赖、运行迁移、修改仓库设置或覆盖既有 CI。preset 不接受 `--stack` 裁剪；需要裁剪时改用 `custom` 并显式列出 stack。
 
+### 已应用项目升级
+
+项目已由旧版 Harness apply 过时，只使用一个正式入口，并传绝对路径：
+
+```bash
+node <skill目录>/scripts/run.mjs update plan --project <项目绝对路径>
+```
+
+更新自动继承现有 owner、profile、stacks、delivery/domain/quality profiles、phase 和 adoption baseline；不得让用户重新填写，也不得用新版默认值覆盖。命令离线使用当前 CLI 的同一 compiler，只生成普通 immutable policy plan；`apply`、receipt、rollback 和完整哈希批准路径不变。`current` 不写 policy plan。命令不得安装 npm、执行项目命令或创建/移动 worktree。worktree 只报告 `not-configured`、`compatible`、`configuration-plan-required` 或 `migration-required`；独立 companion plan 不得制造空 policy plan。
+
+若 semantic diff 标记 weakening，普通 plan hash 批准不够。先向负责人展示 weakening digest 和完整 rule ID 集合，取得明确批准后重新执行：
+
+```bash
+node <skill目录>/scripts/run.mjs intake --project <项目绝对路径> --owner <负责人> --approve-sources \
+  --approve-weakening <完整 weakening sha256> \
+  --weakening-rule <rule-id>
+node <skill目录>/scripts/run.mjs discover --project <项目绝对路径>
+node <skill目录>/scripts/run.mjs update plan --project <项目绝对路径>
+```
+
+`doctor` 离线报告 `current`、`stale`、`legacy-version-unknown` 或 `unconfigured`；不得猜测 legacy compiler 的历史 patch 版本。
+
 ### 6. 精确批准后应用
 
 只有负责人明确批准当前计划哈希后才运行：

@@ -296,6 +296,8 @@ export type WorkspaceOperation =
       afterHostBindingHash: string;
       hostBindingContent: string;
       topology: WorkspaceTopology;
+      providerObservationBound?: true;
+      providerObservation?: ProviderObservation;
       allowedRoot?: { path: string; before: "absent" | "empty" };
     }
   | {

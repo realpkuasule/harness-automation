@@ -1,6 +1,6 @@
 {
   "schemaVersion": "2.0",
-  "generatedAt": "2026-09-01T03:33:51.930Z",
+  "generatedAt": "2026-09-01T06:34:55.307Z",
   "profile": "custom",
   "stacks": [
     "typescript"
@@ -161,6 +161,7 @@
     "configured": true,
     "valid": true,
     "contractPath": "evals/evals.json",
+    "schemaVersion": "1.1",
     "suites": [
       {
         "id": "npm-release-worktree-policy",
@@ -169,12 +170,32 @@
           "node",
           "evals/run_npm_release_policy.mjs"
         ],
+        "tasks": [
+          "evals/tasks/npm-release-worktree.jsonl"
+        ],
         "baseline": {
           "score": 0,
           "trials": 1,
           "evidence": "evals/baselines/npm-release-worktree-pre-implementation.json",
           "origin": "pre-implementation"
         },
+        "target": {
+          "metric": "pass-all-trials",
+          "threshold": 1,
+          "trials": 1
+        },
+        "graders": [
+          {
+            "id": "policy-text-check",
+            "kind": "code",
+            "role": "gate"
+          },
+          {
+            "id": "agent-behavior-review",
+            "kind": "model",
+            "role": "guidance"
+          }
+        ],
         "runnerSources": [
           "evals/run_npm_release_policy.mjs"
         ],

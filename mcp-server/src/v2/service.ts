@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, delimiter, join, relative, resolve } from "node:path";
+import { basename, delimiter, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { discoverProject } from "./discovery.js";
 import {
@@ -26,6 +26,8 @@ import {
 import type {
   AppliedChange,
   ChangePlan,
+  CompilerIdentity,
+  CompilerVersionStatus,
   Discovery,
   DeliveryProfile,
   DomainProfile,
@@ -33,7 +35,11 @@ import type {
   FileOperation,
   Intake,
   PolicyDocument,
+  PolicyEvaluationSnapshot,
+  PolicyRule,
+  PolicyUpdateMetadata,
   QualityProfile,
+  SemanticFieldChange,
   SourceSnapshot,
   Stack,
   StackAdapterResult,
@@ -46,15 +52,28 @@ import { checkGo, checkPython, checkTypeScript, inspectTypeScript } from "./veri
 import {
   applyWorkspacePlan,
   auditWorkspace,
+  loadConfig,
+  planWorkspaceConfiguration,
   rollbackWorkspaceChange,
+  workspaceStatus,
 } from "../worktree/service.js";
-import type { WorkspaceAudit, WorkspaceReceipt } from "../worktree/types.js";
+import type { ProviderObservation, WorkspaceAudit, WorkspacePlan, WorkspaceReceipt } from "../worktree/types.js";
 
 const HARNESS_DIR = ".harness";
 const PACKAGE_ROOT = resolve(join(fileURLToPath(new URL(".", import.meta.url)), "../.."));
+const COMPILER_PACKAGE = "@realpkuasule/harness-automation" as const;
 const SKILL_NAMES = ["harness-automation", "manage-worktree-delivery"] as const;
 
 export type SkillName = typeof SKILL_NAMES[number];
+
+function currentCompilerIdentity(packagePath = PACKAGE_ROOT): CompilerIdentity {
+  const metadata = readJson<{ name?: string; version?: string }>(join(resolve(packagePath), "package.json"));
+  if (metadata.name !== COMPILER_PACKAGE || !metadata.version ||
+    !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(metadata.version)) {
+    throw new Error(`COMPILER_IDENTITY_INVALID: expected ${COMPILER_PACKAGE} with an exact semantic version`);
+  }
+  return { package: COMPILER_PACKAGE, version: metadata.version };
+}
 
 export function packagedSkillPath(packagePath: string, name: SkillName): string {
   const built = join(packagePath, "dist", name === "harness-automation" ? "skill" : name);
@@ -234,6 +253,8 @@ export function intakeProject(args: {
   owner: string;
   approveSources: boolean;
   approveTypeScriptNamingAdoption?: boolean;
+  approveWeakening?: string;
+  weakeningRuleIds?: string[];
   now?: Date;
 }): Intake {
   if (!args.owner.trim()) throw new Error("OWNER_REQUIRED: provide the project owner's stable name or handle");
@@ -256,6 +277,16 @@ export function intakeProject(args: {
       ruleId: TYPESCRIPT_NAMING_RULE_ID,
       fingerprints: observed.map((violation) => violation.fingerprint!).sort(),
     };
+  }
+  if (args.approveWeakening) {
+    const ruleIds = [...new Set(args.weakeningRuleIds ?? [])].sort();
+    if (!/^[a-f0-9]{64}$/u.test(args.approveWeakening) || ruleIds.length === 0 ||
+      ruleIds.some((id) => !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(id))) {
+      throw new Error("WEAKENING_APPROVAL_INVALID: provide the exact digest and every affected --weakening-rule id");
+    }
+    intake.policyWeakeningApproval = { digest: args.approveWeakening, ruleIds };
+  } else if ((args.weakeningRuleIds?.length ?? 0) > 0) {
+    throw new Error("WEAKENING_APPROVAL_DIGEST_REQUIRED: pass --approve-weakening with the exact digest");
   }
   atomicWrite(harnessPath(root, "intake.json"), prettyJson(intake));
   return intake;
@@ -366,16 +397,332 @@ function intersectFingerprints(left: readonly string[], right: readonly string[]
   });
 }
 
-export function planProject(args: {
+function exactCompilerIdentity(input: unknown): CompilerIdentity | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const candidate = input as Record<string, unknown>;
+  return candidate.package === COMPILER_PACKAGE && typeof candidate.version === "string" &&
+    /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(candidate.version)
+    ? { package: COMPILER_PACKAGE, version: candidate.version }
+    : null;
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return hashObject(left) === hashObject(right);
+}
+
+function sortedStrings(values: readonly string[]): string[] {
+  return [...new Set(values)].sort();
+}
+
+function normalizedTargets(rule: PolicyRule): unknown[] {
+  return rule.targets.map((target) => ({
+    kind: target.kind,
+    adapter: target.adapter,
+    configPath: target.configPath ?? null,
+    command: target.command ?? null,
+  })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+}
+
+function normalizedCommands(commands: string[][]): string[][] {
+  return [...commands].sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+}
+
+function adapterCoverage(policy: PolicyDocument): string[] {
+  return sortedStrings(policy.policies.flatMap((rule) => rule.targets.map((target) => `${target.kind}:${target.adapter}`)));
+}
+
+function semanticEvalSuite(suite: PolicyEvaluationSnapshot["suites"][number]): Record<string, unknown> {
+  return {
+    kind: suite.kind,
+    command: suite.command,
+    tasks: sortedStrings(suite.tasks),
+    baseline: suite.baseline,
+    target: suite.target,
+    graders: [...suite.graders].sort((left, right) => left.id.localeCompare(right.id)),
+    runnerSources: sortedStrings(suite.runnerSources ?? []),
+    traceability: [...(suite.traceability ?? [])]
+      .map((trace) => ({ requirementId: trace.requirementId, ruleIds: sortedStrings(trace.ruleIds) }))
+      .sort((left, right) => left.requirementId.localeCompare(right.requirementId)),
+    negativeControl: suite.negativeControl ?? null,
+  };
+}
+
+function evaluationRuleIds(suite: PolicyEvaluationSnapshot["suites"][number]): string[] {
+  const ids = sortedStrings((suite.traceability ?? []).flatMap((trace) => trace.ruleIds));
+  return ids.length > 0 ? ids : ["eval-regression-gate"];
+}
+
+function evaluationDifference(
+  before: PolicyEvaluationSnapshot | undefined,
+  after: PolicyEvaluationSnapshot | undefined,
+): {
+  changes: PolicyUpdateMetadata["evaluations"];
+  weakeningReasons: string[];
+} {
+  const oldSuites = new Map((before?.suites ?? []).map((suite) => [suite.id, suite]));
+  const newSuites = new Map((after?.suites ?? []).map((suite) => [suite.id, suite]));
+  const added = [...newSuites.keys()].filter((id) => !oldSuites.has(id)).sort();
+  const removed = [...oldSuites.keys()].filter((id) => !newSuites.has(id)).sort();
+  const changed: PolicyUpdateMetadata["evaluations"]["changed"] = [];
+  const weakeningReasons: string[] = [];
+  const weaken = (suite: PolicyEvaluationSnapshot["suites"][number], reason: string): void => {
+    for (const ruleId of evaluationRuleIds(suite)) weakeningReasons.push(`${ruleId}: eval suite ${suite.id} ${reason}`);
+  };
+  for (const id of removed) weaken(oldSuites.get(id)!, "removed");
+  for (const id of [...oldSuites.keys()].filter((value) => newSuites.has(value)).sort()) {
+    const oldSuite = oldSuites.get(id)!;
+    const newSuite = newSuites.get(id)!;
+    const oldFields = semanticEvalSuite(oldSuite);
+    const newFields = semanticEvalSuite(newSuite);
+    const fields = Object.keys(oldFields).flatMap((field) =>
+      sameJson(oldFields[field], newFields[field]) ? [] : [{ field, before: oldFields[field], after: newFields[field] }]);
+    if (fields.length > 0) changed.push({ suiteId: id, fields });
+    if (newSuite.target.metric !== oldSuite.target.metric) weaken(oldSuite, `target metric changed from ${oldSuite.target.metric} to ${newSuite.target.metric}`);
+    if (newSuite.target.threshold < oldSuite.target.threshold) weaken(oldSuite, `target threshold decreased from ${oldSuite.target.threshold} to ${newSuite.target.threshold}`);
+    if (newSuite.target.trials < oldSuite.target.trials) weaken(oldSuite, `target trials decreased from ${oldSuite.target.trials} to ${newSuite.target.trials}`);
+    if (oldSuite.tasks.some((task) => !newSuite.tasks.includes(task))) weaken(oldSuite, "task removed");
+    if (oldSuite.negativeControl && !newSuite.negativeControl) weaken(oldSuite, "known-bad control removed");
+    else if (oldSuite.negativeControl && !sameJson(oldSuite.negativeControl, newSuite.negativeControl)) weaken(oldSuite, "known-bad control changed");
+    const newGraders = new Map(newSuite.graders.map((grader) => [grader.id, grader]));
+    if (oldSuite.graders.some((grader) => grader.role === "gate" && newGraders.get(grader.id)?.role !== "gate")) weaken(oldSuite, "gate grader removed or demoted");
+    const oldTraceRuleIds = sortedStrings((oldSuite.traceability ?? []).flatMap((trace) => trace.ruleIds));
+    const newTraceRuleIds = new Set((newSuite.traceability ?? []).flatMap((trace) => trace.ruleIds));
+    if (oldTraceRuleIds.some((ruleId) => !newTraceRuleIds.has(ruleId))) weaken(oldSuite, "traceability rule ID removed");
+  }
+  return { changes: { added, removed, changed }, weakeningReasons };
+}
+
+function weakeningDigest(
+  before: PolicyDocument,
+  after: PolicyDocument,
+  rules: PolicyUpdateMetadata["rules"],
+  evaluations: PolicyUpdateMetadata["evaluations"],
+  ruleIds: string[],
+  reasons: string[],
+): string {
+  return hashObject({
+    beforePolicyDigest: hashObject(before),
+    afterPolicyDigest: hashObject(after),
+    rules,
+    evaluations,
+    ruleIds,
+    reasons,
+  });
+}
+
+function semanticRule(rule: PolicyRule): Record<string, unknown> {
+  return {
+    status: rule.status,
+    severity: rule.severity,
+    formalization: rule.formalization,
+    "scope.include": sortedStrings(rule.scope.include),
+    "scope.exclude": sortedStrings(rule.scope.exclude),
+    "scope.boundaries": sortedStrings(rule.scope.boundaries),
+    targets: normalizedTargets(rule),
+    verification: {
+      commands: normalizedCommands(rule.verification.commands),
+      passCriteria: rule.verification.passCriteria,
+      timeoutSeconds: rule.verification.timeoutSeconds ?? null,
+    },
+    title: rule.title,
+    statement: rule.statement,
+    rationale: rule.rationale,
+    owner: rule.owner,
+    sourceRefs: sortedStrings(rule.sourceRefs),
+    examples: rule.examples ?? null,
+    changeControl: rule.changeControl,
+  };
+}
+
+function removedJsonValues(before: unknown[], after: unknown[]): boolean {
+  const remaining = new Map<string, number>();
+  for (const value of after) {
+    const key = JSON.stringify(value);
+    remaining.set(key, (remaining.get(key) ?? 0) + 1);
+  }
+  return before.some((value) => {
+    const key = JSON.stringify(value);
+    const count = remaining.get(key) ?? 0;
+    if (count === 0) return true;
+    remaining.set(key, count - 1);
+    return false;
+  });
+}
+
+function ruleWeakeningReasons(before: PolicyRule, after: PolicyRule): string[] {
+  const reasons: string[] = [];
+  const severity = { info: 0, warn: 1, error: 2 } as const;
+  const formalization = { cognitive: 0, procedural: 1, deterministic: 2 } as const;
+  if (before.status === "active" && after.status !== "active") reasons.push(`${before.id}: active rule became ${after.status}`);
+  if (severity[after.severity] < severity[before.severity]) reasons.push(`${before.id}: severity ${before.severity} -> ${after.severity}`);
+  if (formalization[after.formalization] < formalization[before.formalization]) {
+    reasons.push(`${before.id}: formalization ${before.formalization} -> ${after.formalization}`);
+  }
+  if (removedJsonValues(normalizedCommands(before.verification.commands), normalizedCommands(after.verification.commands))) {
+    reasons.push(`${before.id}: verification command removed`);
+  }
+  if (removedJsonValues(normalizedTargets(before), normalizedTargets(after))) reasons.push(`${before.id}: target adapter removed`);
+  if (before.scope.include.some((value) => !after.scope.include.includes(value))) reasons.push(`${before.id}: include scope narrowed`);
+  if (after.scope.exclude.some((value) => !before.scope.exclude.includes(value))) reasons.push(`${before.id}: exclude scope expanded`);
+  if (before.scope.boundaries.some((value) => !after.scope.boundaries.includes(value))) reasons.push(`${before.id}: boundary removed`);
+  if (before.changeControl.approvalRequired && !after.changeControl.approvalRequired) {
+    reasons.push(`${before.id}: approval requirement removed`);
+  }
+  return reasons;
+}
+
+function policyDifference(
+  before: PolicyDocument,
+  after: PolicyDocument,
+  beforeEvaluations = before.evaluations,
+): {
+  rules: PolicyUpdateMetadata["rules"];
+  evaluations: PolicyUpdateMetadata["evaluations"];
+  weakening: Omit<PolicyUpdateMetadata["weakening"], "approved">;
+} {
+  const oldRules = new Map(before.policies.map((rule) => [rule.id, rule]));
+  const newRules = new Map(after.policies.map((rule) => [rule.id, rule]));
+  const added = [...newRules.keys()].filter((id) => !oldRules.has(id)).sort();
+  const removed = [...oldRules.keys()].filter((id) => !newRules.has(id)).sort();
+  const changed: PolicyUpdateMetadata["rules"]["changed"] = [];
+  const weakeningReasons = removed.flatMap((id) => oldRules.get(id)?.status === "active" ? [`${id}: active rule removed`] : []);
+  for (const id of [...oldRules.keys()].filter((value) => newRules.has(value)).sort()) {
+    const oldRule = oldRules.get(id)!;
+    const newRule = newRules.get(id)!;
+    const oldFields = semanticRule(oldRule);
+    const newFields = semanticRule(newRule);
+    const fields: SemanticFieldChange[] = Object.keys(oldFields).flatMap((field) =>
+      sameJson(oldFields[field], newFields[field]) ? [] : [{ field, before: oldFields[field], after: newFields[field] }]);
+    if (fields.length > 0) changed.push({ ruleId: id, fields });
+    weakeningReasons.push(...ruleWeakeningReasons(oldRule, newRule));
+  }
+  const evaluations = evaluationDifference(beforeEvaluations, after.evaluations);
+  weakeningReasons.push(...evaluations.weakeningReasons);
+  const rules = { added, removed, changed };
+  const ruleIds = sortedStrings(weakeningReasons.map((reason) => reason.split(":", 1)[0]));
+  const reasons = sortedStrings(weakeningReasons);
+  return {
+    rules,
+    evaluations: evaluations.changes,
+    weakening: {
+      detected: reasons.length > 0,
+      ruleIds,
+      reasons,
+      digest: weakeningDigest(before, after, rules, evaluations.changes, ruleIds, reasons),
+    },
+  };
+}
+
+function baselineDifference(before: PolicyDocument, after: PolicyDocument): PolicyUpdateMetadata["baseline"] {
+  const oldBaseline = typeScriptNamingBaseline(before.typescriptNamingBaseline);
+  const newBaseline = typeScriptNamingBaseline(after.typescriptNamingBaseline);
+  if (!oldBaseline && !newBaseline) return null;
+  const oldFingerprints = oldBaseline?.fingerprints ?? [];
+  const newFingerprints = newBaseline?.fingerprints ?? [];
+  return {
+    before: oldFingerprints,
+    after: newFingerprints,
+    added: subtractFingerprints(newFingerprints, oldFingerprints),
+    removed: subtractFingerprints(oldFingerprints, newFingerprints),
+  };
+}
+
+function inheritedEvaluationSnapshot(
+  before: PolicyDocument,
+  after: PolicyDocument,
+): PolicyEvaluationSnapshot | undefined {
+  if (before.evaluations || !after.evaluations) return before.evaluations;
+  const oldSources = before.sources.filter((source) => source.kind === "eval")
+    .map(({ path, sha256: sourceHash }) => ({ path, sha256: sourceHash }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const newSources = after.sources.filter((source) => source.kind === "eval")
+    .map(({ path, sha256: sourceHash }) => ({ path, sha256: sourceHash }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  if (oldSources.length > 0 && sameJson(oldSources, newSources)) return after.evaluations;
+  throw new Error("EVAL_SEMANTICS_HISTORY_REQUIRED: legacy policy has no eval snapshot and approved eval sources changed; restore the old sources or perform an owner-reviewed migration");
+}
+
+function inheritedPolicyConfiguration(
+  policy: PolicyDocument,
+  discovery: Discovery,
+): PolicyUpdateMetadata["inherited"] {
+  const project = policy.project;
+  const profile = project.profile ?? discovery.profile;
+  if (!["full-typescript", "python-data-ai", "go-performance", "custom"].includes(profile)) {
+    throw new Error("UPDATE_PROFILE_UNKNOWN: rerun intake and discover before updating");
+  }
+  return {
+    owner: project.owner,
+    profile,
+    stacks: [...project.stacks],
+    deliveryProfiles: [...(project.deliveryProfiles ?? [])],
+    domainProfiles: [...(project.domainProfiles ?? [])],
+    qualityProfiles: [...(project.qualityProfiles ?? [])],
+    phase: project.phase,
+  };
+}
+
+function previousCompilerMetadata(
+  policy: PolicyDocument,
+  manifest: Manifest,
+  policyDigest: string,
+): PolicyUpdateMetadata["from"] {
+  const policyCompiler = exactCompilerIdentity(policy.compiler);
+  const manifestCompiler = exactCompilerIdentity(manifest.compiler);
+  const compiler = policyCompiler && manifestCompiler && sameJson(policyCompiler, manifestCompiler)
+    ? policyCompiler
+    : null;
+  return {
+    compiler,
+    policyCompiler,
+    manifestCompiler,
+    compilerStatus: compiler ? "exact" : policyCompiler && manifestCompiler ? "stale" : "legacy-version-unknown",
+    schemaVersion: policy.schemaVersion ?? null,
+    policyDigest,
+  };
+}
+
+function updateDriftMetadata(
+  root: string,
+  manifest: Manifest,
+  intake: Intake,
+  intakeHash: string,
+  discoveryHash: string,
+): PolicyUpdateMetadata["drift"] {
+  return {
+    intake: {
+      expected: manifest.intakeHash ?? intakeHash,
+      actual: intakeHash,
+      clean: (manifest.intakeHash ?? intakeHash) === intakeHash,
+    },
+    discovery: {
+      expected: manifest.discoveryHash ?? discoveryHash,
+      actual: discoveryHash,
+      clean: (manifest.discoveryHash ?? discoveryHash) === discoveryHash,
+    },
+    sources: intake.sources.map((source) => {
+      const actual = fileHash(safePath(root, source.path));
+      return { path: source.path, expected: source.sha256, actual, clean: actual === source.sha256 };
+    }),
+  };
+}
+
+interface ProjectPlanArgs {
   projectRoot: string;
+  owner?: string;
+  projectName?: string;
+  phase?: PolicyDocument["project"]["phase"];
   profile?: StackProfile;
   stacks?: Stack[];
+  inheritedStacks?: Stack[];
   deliveryProfiles?: DeliveryProfile[];
   domainProfiles?: DomainProfile[];
   qualityProfiles?: QualityProfile[];
   adoptTypeScriptNaming?: boolean;
   now?: Date;
-}): { plan: ChangePlan; path: string; policy: PolicyDocument } {
+}
+
+function compileProjectPlan(args: ProjectPlanArgs & { writePlan: boolean }): { plan: ChangePlan; path: string; policy: PolicyDocument } {
   const root = resolve(args.projectRoot);
   const intakeFile = harnessPath(root, "intake.json");
   const discoveryFile = harnessPath(root, "discovery.json");
@@ -400,11 +747,15 @@ export function planProject(args: {
   }
   const policy = compilePolicy({
     projectRoot: root,
-    owner: intake.owner,
+    compiler: currentCompilerIdentity(),
+    projectName: args.projectName,
+    phase: args.phase,
+    owner: args.owner ?? intake.owner,
     intake,
     discovery,
     profile: args.profile,
     stacks: args.stacks,
+    inheritedStacks: args.inheritedStacks,
     deliveryProfiles: args.deliveryProfiles,
     domainProfiles: args.domainProfiles,
     qualityProfiles,
@@ -438,7 +789,7 @@ export function planProject(args: {
   } else if (policy.project.stacks.includes("typescript")) {
     policy.typescriptNamingBaseline = {
       ruleId: TYPESCRIPT_NAMING_RULE_ID,
-      approvedIntakeHash: intakeHash,
+      approvedIntakeHash: currentBaseline?.approvedIntakeHash ?? intakeHash,
       fingerprints: currentBaseline
         ? intersectFingerprints(currentBaseline.fingerprints, observedFingerprints)
         : [],
@@ -464,8 +815,10 @@ export function planProject(args: {
 
   const manifest = {
     schemaVersion: "2.0",
-    compiler: "harness-automation@2",
+    compiler: currentCompilerIdentity(),
     policyDigest,
+    intakeHash,
+    discoveryHash: fileHash(discoveryFile) ?? "",
     outputs: operations.map(({ path, afterHash }) => ({ path, sha256: afterHash })),
   };
   operations.push(operation(root, ".harness/manifest.json", prettyJson(manifest)));
@@ -476,6 +829,7 @@ export function planProject(args: {
     discovery: fileHash(discoveryFile),
     profile: args.profile ?? discovery.profile,
     stacks: args.stacks ?? null,
+    inheritedStacks: args.inheritedStacks ?? null,
     deliveryProfiles: args.deliveryProfiles ?? [],
     domainProfiles: args.domainProfiles ?? [],
     qualityProfiles,
@@ -515,9 +869,307 @@ export function planProject(args: {
   };
   draft.planHash = hashObject(withoutHash(draft));
   const path = `.harness/plans/${id}.json`;
-  atomicWrite(safePath(root, path), prettyJson(draft));
+  if (args.writePlan) atomicWrite(safePath(root, path), prettyJson(draft));
   return { plan: draft, path, policy };
 }
+
+export function planProject(args: ProjectPlanArgs): { plan: ChangePlan; path: string; policy: PolicyDocument } {
+  return compileProjectPlan({ ...args, writePlan: true });
+}
+
+function compilerVersionReport(root: string, packagePath = PACKAGE_ROOT): {
+  status: CompilerVersionStatus;
+  current: CompilerIdentity;
+  policy: CompilerIdentity | null;
+  manifest: CompilerIdentity | null;
+} {
+  const current = currentCompilerIdentity(packagePath);
+  const policyPath = harnessPath(root, "policy.yaml");
+  const manifestPath = harnessPath(root, "manifest.json");
+  if (!existsSync(policyPath) || !existsSync(manifestPath)) {
+    return { status: "unconfigured", current, policy: null, manifest: null };
+  }
+  const policy = readJson<{ compiler?: unknown }>(policyPath);
+  const manifest = readJson<{ compiler?: unknown }>(manifestPath);
+  const policyCompiler = exactCompilerIdentity(policy.compiler);
+  const manifestCompiler = exactCompilerIdentity(manifest.compiler);
+  if (!policyCompiler || !manifestCompiler) {
+    return { status: "legacy-version-unknown", current, policy: policyCompiler, manifest: manifestCompiler };
+  }
+  const status = sameJson(policyCompiler, manifestCompiler) && sameJson(policyCompiler, current) ? "current" : "stale";
+  return { status, current, policy: policyCompiler, manifest: manifestCompiler };
+}
+
+function currentDiscovery(root: string, stored: Discovery): { expected: string; actual: string; clean: boolean } {
+  const generatedAt = new Date(stored.generatedAt);
+  if (Number.isNaN(generatedAt.valueOf())) throw new Error("DISCOVERY_INVALID: generatedAt is not a valid timestamp");
+  const observed = discoverProject(root, generatedAt);
+  observed.agents = observed.agents.filter((agent) => {
+    if (stored.agents.some((item) => item.id === agent.id)) return true;
+    if (agent.id === "codex" && agent.evidence.every((path) => path === "AGENTS.md")) return false;
+    if (agent.id === "claude-code" && agent.evidence.every((path) => path === "CLAUDE.md")) return false;
+    return true;
+  });
+  const actual = hashObject(observed);
+  const expected = hashObject(stored);
+  return { expected, actual, clean: expected === actual };
+}
+
+function observeWorktreeUpdate(root: string): PolicyUpdateMetadata["worktree"] {
+  const configPath = join(root, ".harness", "worktree-delivery.json");
+  if (!existsSync(configPath)) {
+    return { status: "not-configured", configurationPlanPath: null, configurationPlanHash: null, migrationCommand: null, error: null };
+  }
+  try {
+    const loaded = loadConfig(root);
+    const providerObservation: ProviderObservation = {
+      kind: loaded.config.provider.kind,
+      configured: loaded.config.provider.kind !== "none",
+      available: true,
+      items: [],
+    };
+    workspaceStatus(root, { providerObservation });
+    return {
+      status: loaded.legacyBinding ? "configuration-plan-required" : "compatible",
+      configurationPlanPath: null,
+      configurationPlanHash: null,
+      migrationCommand: null,
+      error: null,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/^(?:WORKTREE_TOPOLOGY_INVALID|WORKTREE_MANAGEMENT_CHECKOUT_REQUIRED|WORKTREE_MANAGEMENT_CHECKOUT_INVALID|WORKTREE_CONTAINER_|WORKTREE_ALLOWED_ROOT_)/u.test(message)) {
+      return {
+        status: "migration-required",
+        configurationPlanPath: null,
+        configurationPlanHash: null,
+        migrationCommand: ["harness-automation", "worktree", "migrate", "--workspace-container", "<absolute-path>", "--project", root],
+        error: message,
+      };
+    }
+    throw new Error(`WORKTREE_UPDATE_BLOCKED: ${message}`);
+  }
+}
+
+function inspectWorktreeUpdate(root: string, now?: Date): PolicyUpdateMetadata["worktree"] {
+  const observed = observeWorktreeUpdate(root);
+  if (observed.status !== "configuration-plan-required") return observed;
+  const loaded = loadConfig(root);
+  if (!loaded.legacyBinding) throw new Error("WORKTREE_UPDATE_BLOCKED: legacy host binding disappeared during planning");
+  const config = loaded.config;
+  const providerObservation: ProviderObservation = {
+    kind: config.provider.kind,
+    configured: config.provider.kind !== "none",
+    available: true,
+    items: [],
+  };
+  const plansDirectory = harnessPath(root, "plans");
+  const existingPlans = new Set(existsSync(plansDirectory) ? readdirSync(plansDirectory) : []);
+  const planned = planWorkspaceConfiguration({
+    projectRoot: root,
+    mode: config.mode,
+    managementBranch: config.managementBranch,
+    maxPersistentWorktrees: config.maxPersistentWorktrees,
+    leaseTtlHours: config.leaseTtlHours,
+    reviewTtlMinutes: config.reviewTtlMinutes,
+    remoteBranchRetentionDays: config.remoteBranchRetentionDays,
+    remoteBranchDeletion: config.remoteBranchDeletion,
+    allowedRoots: loaded.legacyBinding.allowedRoots,
+    protectedRoots: loaded.legacyBinding.protectedRoots,
+    approval: loaded.legacyBinding.approval,
+    provider: config.provider,
+    providerObservation,
+    now,
+  });
+  const operation = planned.plan.operation;
+  if (operation.kind !== "configure" || !sameJson(JSON.parse(operation.content), config) ||
+    !sameJson(JSON.parse(operation.hostBindingContent), loaded.legacyBinding)) {
+    const filename = basename(planned.path);
+    if (!existingPlans.has(filename)) rmSync(safePath(root, planned.path), { force: true });
+    throw new Error("WORKTREE_UPDATE_BLOCKED: explicit values changed while planning the schema rewrite");
+  }
+  return {
+    ...observed,
+    configurationPlanPath: planned.path,
+    configurationPlanHash: planned.plan.planHash,
+  };
+}
+
+function validateWorktreeUpdateMetadata(root: string, expected: PolicyUpdateMetadata["worktree"]): void {
+  const observed = observeWorktreeUpdate(root);
+  if (observed.status !== expected.status) {
+    throw new Error("UPDATE_METADATA_INVALID: worktree update status drifted after planning");
+  }
+  if (expected.status !== "configuration-plan-required") {
+    if (!sameJson(expected, observed)) throw new Error("UPDATE_METADATA_INVALID: worktree update metadata is false");
+    return;
+  }
+  if (!expected.configurationPlanPath || !expected.configurationPlanHash || expected.migrationCommand || expected.error) {
+    throw new Error("UPDATE_METADATA_INVALID: companion workspace plan metadata is incomplete");
+  }
+  const companion = readJson<WorkspacePlan>(safePath(root, expected.configurationPlanPath));
+  if (companion.kind !== "workspace-plan" || companion.operation.kind !== "configure" ||
+    companion.planHash !== expected.configurationPlanHash || hashObject(withoutHash(companion)) !== companion.planHash) {
+    throw new Error("UPDATE_METADATA_INVALID: companion workspace plan hash is invalid");
+  }
+  const loaded = loadConfig(root);
+  if (!loaded.legacyBinding || !sameJson(JSON.parse(companion.operation.content), loaded.config) ||
+    !sameJson(JSON.parse(companion.operation.hostBindingContent), loaded.legacyBinding)) {
+    throw new Error("UPDATE_METADATA_INVALID: companion workspace plan does not preserve current explicit values");
+  }
+}
+
+export interface ProjectUpdatePlanResult {
+  status: "current" | "planned";
+  planPath: string | null;
+  planHash: string | null;
+  plan: ChangePlan | null;
+  policy: PolicyDocument;
+  worktree: PolicyUpdateMetadata["worktree"];
+}
+
+export function planProjectUpdate(args: {
+  projectRoot: string;
+  adoptTypeScriptNaming?: boolean;
+  now?: Date;
+}): ProjectUpdatePlanResult {
+  if (!isAbsolute(args.projectRoot)) throw new Error("UPDATE_PROJECT_ABSOLUTE_REQUIRED: --project must be an absolute path");
+  const root = resolve(args.projectRoot);
+  const policyPath = harnessPath(root, "policy.yaml");
+  const manifestPath = harnessPath(root, "manifest.json");
+  const intakePath = harnessPath(root, "intake.json");
+  const discoveryPath = harnessPath(root, "discovery.json");
+  if (!existsSync(policyPath)) throw new Error("HARNESS_INITIALIZATION_REQUIRED: run intake, discover, plan, and apply before update plan");
+  if (![manifestPath, intakePath, discoveryPath].every(existsSync)) {
+    throw new Error("HARNESS_APPLIED_STATE_INCOMPLETE: manifest, intake, and discovery are required for update plan");
+  }
+  const oldPolicy = readJson<PolicyDocument>(policyPath);
+  const oldManifest = readJson<Manifest>(manifestPath);
+  const intake = readJson<Intake>(intakePath);
+  const discovery = readJson<Discovery>(discoveryPath);
+  const oldPolicyDigest = hashObject(oldPolicy);
+  if (oldManifest.policyDigest && oldManifest.policyDigest !== oldPolicyDigest) {
+    throw new Error("MANIFEST_POLICY_DIGEST_MISMATCH: manifest policyDigest does not match .harness/policy.yaml");
+  }
+  ensureApprovedSources(root, intake);
+  if (new Date(discovery.generatedAt).valueOf() < new Date(intake.approvedAt).valueOf()) {
+    throw new Error("DISCOVERY_STALE: run discover after the approved intake");
+  }
+  const discoveryDrift = currentDiscovery(root, discovery);
+  if (!discoveryDrift.clean) throw new Error("DISCOVERY_DRIFT: repository facts changed; run intake if sources changed, then discover again");
+  const outputDrift = oldManifest.outputs.flatMap((output) => {
+    const actual = fileHash(safePath(root, output.path));
+    return actual === output.sha256 ? [] : [output.path];
+  });
+  if (outputDrift.length > 0) throw new Error(`TARGET_DRIFT: ${outputDrift.join(", ")} changed after the last apply`);
+
+  const knownPolicyFields = new Set(["schemaVersion", "compiler", "typescriptNamingBaseline", "evaluations", "project", "sources", "agents", "policies"]);
+  const unknownPolicyFields = Object.keys(oldPolicy).filter((field) => !knownPolicyFields.has(field));
+  if (unknownPolicyFields.length > 0) {
+    throw new Error(`UPDATE_EXPLICIT_CONFIG_UNKNOWN: cannot safely inherit ${unknownPolicyFields.sort().join(", ")}`);
+  }
+  const project = oldPolicy.project as PolicyDocument["project"] & Record<string, unknown>;
+  const knownProjectFields = new Set(["name", "owner", "phase", "profile", "stacks", "deliveryProfiles", "domainProfiles", "qualityProfiles"]);
+  const unknownProjectFields = Object.keys(project).filter((field) => !knownProjectFields.has(field));
+  if (unknownProjectFields.length > 0) {
+    throw new Error(`UPDATE_EXPLICIT_CONFIG_UNKNOWN: cannot safely inherit project.${unknownProjectFields.sort().join(", project.")}`);
+  }
+  const inherited = inheritedPolicyConfiguration(oldPolicy, discovery);
+  const candidate = compileProjectPlan({
+    projectRoot: root,
+    owner: inherited.owner,
+    projectName: project.name,
+    phase: project.phase,
+    profile: inherited.profile,
+    inheritedStacks: inherited.stacks,
+    deliveryProfiles: inherited.deliveryProfiles,
+    domainProfiles: inherited.domainProfiles,
+    qualityProfiles: inherited.qualityProfiles,
+    adoptTypeScriptNaming: args.adoptTypeScriptNaming,
+    now: args.now,
+    writePlan: false,
+  });
+  const oldEvaluations = inheritedEvaluationSnapshot(oldPolicy, candidate.policy);
+  const differences = policyDifference(oldPolicy, candidate.policy, oldEvaluations);
+  const baseline = baselineDifference(oldPolicy, candidate.policy);
+  if ((baseline?.added.length ?? 0) > 0) {
+    differences.weakening.detected = true;
+    differences.weakening.ruleIds = sortedStrings([...differences.weakening.ruleIds, TYPESCRIPT_NAMING_RULE_ID]);
+    differences.weakening.reasons = sortedStrings([...differences.weakening.reasons, `${TYPESCRIPT_NAMING_RULE_ID}: baseline fingerprints added`]);
+    differences.weakening.digest = weakeningDigest(
+      oldPolicy,
+      candidate.policy,
+      differences.rules,
+      differences.evaluations,
+      differences.weakening.ruleIds,
+      differences.weakening.reasons,
+    );
+  }
+  const intakeHash = fileHash(intakePath)!;
+  const weakeningApproval = intake.policyWeakeningApproval;
+  const approved = !differences.weakening.detected || Boolean(weakeningApproval &&
+    weakeningApproval.digest === differences.weakening.digest &&
+    sameFingerprints(weakeningApproval.ruleIds, differences.weakening.ruleIds) &&
+    oldManifest.intakeHash !== intakeHash);
+  const worktree = inspectWorktreeUpdate(root, args.now);
+  const discoveryHash = fileHash(discoveryPath)!;
+  const localCompiler = currentCompilerIdentity();
+  const metadata: PolicyUpdateMetadata = {
+    from: previousCompilerMetadata(oldPolicy, oldManifest, oldPolicyDigest),
+    to: { compiler: localCompiler, schemaVersion: candidate.policy.schemaVersion, policyDigest: hashObject(candidate.policy) },
+    inherited,
+    drift: updateDriftMetadata(root, oldManifest, intake, intakeHash, discoveryHash),
+    rules: differences.rules,
+    evaluations: differences.evaluations,
+    adapterCoverage: {
+      before: adapterCoverage(oldPolicy),
+      after: adapterCoverage(candidate.policy),
+      added: subtractFingerprints(adapterCoverage(candidate.policy), adapterCoverage(oldPolicy)),
+      removed: subtractFingerprints(adapterCoverage(oldPolicy), adapterCoverage(candidate.policy)),
+    },
+    baseline,
+    targets: candidate.plan.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash })),
+    weakening: { ...differences.weakening, approved },
+    worktree,
+    migrationRequired: worktree.status === "migration-required",
+  };
+  const version = compilerVersionReport(root);
+  const targetChanged = candidate.plan.operations.some((item) => item.beforeHash !== item.afterHash);
+  const semanticChanged = metadata.rules.added.length > 0 || metadata.rules.removed.length > 0 ||
+    metadata.rules.changed.length > 0 || metadata.evaluations.added.length > 0 ||
+    metadata.evaluations.removed.length > 0 || metadata.evaluations.changed.length > 0 || Boolean(metadata.baseline &&
+      (metadata.baseline.added.length > 0 || metadata.baseline.removed.length > 0));
+  if (!targetChanged && !semanticChanged && version.status === "current") {
+    return { status: "current", planPath: null, planHash: null, plan: null, policy: candidate.policy, worktree };
+  }
+  candidate.plan.update = metadata;
+  candidate.plan.warnings = [
+    ...candidate.plan.warnings,
+    ...(differences.weakening.detected && !approved
+      ? [`Policy weakening requires owner intake approval for digest ${differences.weakening.digest}.`]
+      : []),
+    ...(worktree.migrationCommand ? [`Worktree topology migration must be planned separately: ${worktree.migrationCommand.join(" ")}`] : []),
+  ];
+  candidate.plan.planHash = hashObject(withoutHash(candidate.plan));
+  const planTarget = safePath(root, candidate.path);
+  if (existsSync(planTarget) && readFileSync(planTarget, "utf8") !== prettyJson(candidate.plan)) {
+    throw new Error(`PLAN_ID_CONFLICT: ${candidate.path} already exists with different content`);
+  }
+  atomicWrite(planTarget, prettyJson(candidate.plan));
+  return {
+    status: "planned",
+    planPath: candidate.path,
+    planHash: candidate.plan.planHash,
+    plan: candidate.plan,
+    policy: candidate.policy,
+    worktree,
+  };
+}
+
+/** @deprecated Use planProjectUpdate. */
+export const planProjectUpgrade = planProjectUpdate;
+/** @deprecated Use ProjectUpdatePlanResult. */
+export type ProjectUpgradePlanResult = ProjectUpdatePlanResult;
 
 function validatePlan(root: string, plan: ChangePlan, approval: string): void {
   const computed = hashObject(withoutHash(plan));
@@ -527,6 +1179,75 @@ function validatePlan(root: string, plan: ChangePlan, approval: string): void {
   assertCurrentHash(harnessPath(root, "intake.json"), plan.intakeHash);
   assertCurrentHash(harnessPath(root, "discovery.json"), plan.discoveryHash);
   for (const source of plan.sourceHashes) assertCurrentHash(safePath(root, source.path), source.sha256);
+}
+
+function validateUpdateTransition(root: string, plan: ChangePlan): void {
+  if (plan.update && plan.upgrade) throw new Error("UPDATE_METADATA_INVALID: plan cannot contain both update and legacy upgrade metadata");
+  const update = plan.update ?? plan.upgrade;
+  if (!update) return;
+  const policyOperation = plan.operations.find((item) => item.path === ".harness/policy.yaml");
+  if (!policyOperation) throw new Error("UPDATE_POLICY_OPERATION_REQUIRED: update plan must contain the compiled policy");
+  const before = readJson<PolicyDocument>(harnessPath(root, "policy.yaml"));
+  const after = JSON.parse(policyOperation.content) as PolicyDocument;
+  const manifest = readJson<Manifest>(harnessPath(root, "manifest.json"));
+  const intake = readJson<Intake>(harnessPath(root, "intake.json"));
+  const discovery = readJson<Discovery>(harnessPath(root, "discovery.json"));
+  const beforeDigest = hashObject(before);
+  if (manifest.policyDigest && manifest.policyDigest !== beforeDigest) {
+    throw new Error("MANIFEST_POLICY_DIGEST_MISMATCH: manifest policyDigest does not match .harness/policy.yaml");
+  }
+  const afterCompiler = exactCompilerIdentity(after.compiler);
+  if (!afterCompiler) throw new Error("UPDATE_METADATA_INVALID: updated policy has no exact compiler identity");
+  const intakeHash = fileHash(harnessPath(root, "intake.json"))!;
+  const discoveryHash = fileHash(harnessPath(root, "discovery.json"))!;
+  const differences = policyDifference(before, after, inheritedEvaluationSnapshot(before, after));
+  const baseline = baselineDifference(before, after);
+  if ((baseline?.added.length ?? 0) > 0) {
+    differences.weakening.detected = true;
+    differences.weakening.ruleIds = sortedStrings([...differences.weakening.ruleIds, TYPESCRIPT_NAMING_RULE_ID]);
+    differences.weakening.reasons = sortedStrings([...differences.weakening.reasons, `${TYPESCRIPT_NAMING_RULE_ID}: baseline fingerprints added`]);
+    differences.weakening.digest = weakeningDigest(
+      before,
+      after,
+      differences.rules,
+      differences.evaluations,
+      differences.weakening.ruleIds,
+      differences.weakening.reasons,
+    );
+  }
+  const expectedTargets = plan.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash }));
+  const expectedFrom = previousCompilerMetadata(before, manifest, beforeDigest);
+  const expectedTo = { compiler: afterCompiler, schemaVersion: after.schemaVersion, policyDigest: hashObject(after) };
+  const expectedInherited = inheritedPolicyConfiguration(before, discovery);
+  const expectedDrift = updateDriftMetadata(root, manifest, intake, intakeHash, discoveryHash);
+  validateWorktreeUpdateMetadata(root, update.worktree);
+  if (!sameJson(update.from, expectedFrom) || !sameJson(update.to, expectedTo) ||
+    !sameJson(update.inherited, expectedInherited) || !sameJson(update.drift, expectedDrift) ||
+    update.migrationRequired !== (update.worktree.status === "migration-required") ||
+    !sameJson(update.rules, differences.rules) || !sameJson(update.baseline, baseline) ||
+    !sameJson(update.evaluations, differences.evaluations) ||
+    !sameJson(update.adapterCoverage, {
+      before: adapterCoverage(before),
+      after: adapterCoverage(after),
+      added: subtractFingerprints(adapterCoverage(after), adapterCoverage(before)),
+      removed: subtractFingerprints(adapterCoverage(before), adapterCoverage(after)),
+    }) ||
+    !sameJson(update.targets, expectedTargets) ||
+    update.weakening.digest !== differences.weakening.digest ||
+    !sameJson(update.weakening.ruleIds, differences.weakening.ruleIds) ||
+    !sameJson(update.weakening.reasons, differences.weakening.reasons)) {
+    throw new Error("UPDATE_METADATA_INVALID: semantic diff or weakening digest does not match the policy transition");
+  }
+  if (!currentDiscovery(root, discovery).clean) {
+    throw new Error("DISCOVERY_DRIFT: repository facts changed after update planning; run intake if sources changed, then discover and plan again");
+  }
+  if (!differences.weakening.detected) return;
+  const approval = intake.policyWeakeningApproval;
+  if (!approval || approval.digest !== differences.weakening.digest ||
+    !sameFingerprints(approval.ruleIds, differences.weakening.ruleIds) || !update.weakening.approved ||
+    update.drift.intake.expected === plan.intakeHash) {
+    throw new Error(`WEAKENING_APPROVAL_REQUIRED: owner must approve digest ${differences.weakening.digest} and rule IDs ${differences.weakening.ruleIds.join(", ")} in a fresh intake`);
+  }
 }
 
 function validateTypeScriptNamingTransition(root: string, plan: ChangePlan): void {
@@ -579,7 +1300,6 @@ function applyFilePlan(args: {
   const root = resolve(args.projectRoot);
   const plan = readJson<ChangePlan>(safePath(root, args.planPath));
   validatePlan(root, plan, args.approval);
-  validateTypeScriptNamingTransition(root, plan);
   const changeFile = harnessPath(root, `changes/${plan.id}/change.json`);
   if (existsSync(changeFile)) {
     const existing = readJson<AppliedChange>(changeFile);
@@ -588,6 +1308,8 @@ function applyFilePlan(args: {
     }
     throw new Error(`CHANGE_ID_CONFLICT: ${plan.id} was already applied but repository outputs have drifted`);
   }
+  validateUpdateTransition(root, plan);
+  validateTypeScriptNamingTransition(root, plan);
   for (const item of plan.operations) assertCurrentHash(safePath(root, item.path), item.beforeHash);
 
   const originals = plan.operations.map((item) => ({
@@ -682,7 +1404,10 @@ export function rollbackChange(args: {
 
 interface Manifest {
   schemaVersion: "2.0";
+  compiler?: unknown;
   policyDigest: string;
+  intakeHash?: string;
+  discoveryHash?: string;
   outputs: Array<{ path: string; sha256: string }>;
 }
 
@@ -1270,6 +1995,7 @@ export function doctorProject(projectRoot: string, options?: { packagePath?: str
     intake: existsSync(harnessPath(root, "intake.json")),
     discovery: existsSync(harnessPath(root, "discovery.json")),
     policy: existsSync(harnessPath(root, "policy.yaml")),
+    compiler: compilerVersionReport(root),
   };
 }
 

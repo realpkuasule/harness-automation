@@ -15,6 +15,15 @@
     "schemaVersion": {
       "const": "2.0"
     },
+    "compiler": {
+      "$ref": "#/$defs/compilerIdentity"
+    },
+    "typescriptNamingBaseline": {
+      "$ref": "#/$defs/typescriptNamingBaseline"
+    },
+    "evaluations": {
+      "$ref": "#/$defs/evaluationSnapshot"
+    },
     "project": {
       "type": "object",
       "additionalProperties": false,
@@ -30,6 +39,9 @@
         },
         "phase": {
           "enum": ["design-approved", "development", "maintenance"]
+        },
+        "profile": {
+          "enum": ["full-typescript", "python-data-ai", "go-performance", "custom"]
         },
         "stacks": {
           "type": "array",
@@ -142,6 +154,210 @@
     }
   },
   "$defs": {
+    "compilerIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["package", "version"],
+      "properties": {
+        "package": {
+          "const": "@realpkuasule/harness-automation"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+        }
+      }
+    },
+    "typescriptNamingBaseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ruleId", "approvedIntakeHash", "fingerprints"],
+      "properties": {
+        "ruleId": {
+          "const": "typescript-naming"
+        },
+        "approvedIntakeHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "fingerprints": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "evaluationSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "suites"],
+      "properties": {
+        "schemaVersion": {
+          "enum": ["1.0", "1.1"]
+        },
+        "suites": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evaluationSuiteSnapshot"
+          }
+        }
+      }
+    },
+    "evaluationSuiteSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "command", "tasks", "baseline", "target", "graders"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+        },
+        "kind": {
+          "enum": ["capability", "regression"]
+        },
+        "command": {
+          "$ref": "#/$defs/argv"
+        },
+        "tasks": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "baseline": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["origin", "score", "trials", "evidence"],
+          "properties": {
+            "origin": {
+              "enum": ["pre-implementation", "adoption", "legacy-unknown"]
+            },
+            "score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "trials": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["metric", "threshold", "trials"],
+          "properties": {
+            "metric": {
+              "enum": ["pass-rate", "pass-at-1", "pass-all-trials"]
+            },
+            "threshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "trials": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "graders": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "kind", "role"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+              },
+              "kind": {
+                "enum": ["code", "model", "human"]
+              },
+              "role": {
+                "enum": ["gate", "guidance"]
+              },
+              "calibrationEvidence": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "runnerSources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "traceability": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requirementId", "ruleIds"],
+            "properties": {
+              "requirementId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ruleIds": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+                }
+              }
+            }
+          }
+        },
+        "negativeControl": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command", "fixture", "expectedExitCode"],
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/argv"
+            },
+            "fixture": {
+              "type": "string",
+              "minLength": 1
+            },
+            "expectedExitCode": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 255
+            }
+          }
+        }
+      }
+    },
+    "argv": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
     "policy": {
       "type": "object",
       "additionalProperties": false,

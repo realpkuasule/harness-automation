@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   applyPlan,
@@ -21,6 +21,7 @@ import {
   intakeProject,
   packagedSkillPath,
   planProject,
+  planProjectUpdate,
   researchGitHub,
   rollbackChange,
   runTrustedChecks,
@@ -596,12 +597,13 @@ Usage:
   harness-automation install
   harness-automation doctor [--project .]
   harness-automation research github [--project .] [--query "..."]
-  harness-automation intake --owner <name> --approve-sources [--approve-typescript-naming-adoption] [--project .]
+  harness-automation intake --owner <name> --approve-sources [--approve-typescript-naming-adoption] [--approve-weakening <sha256> --weakening-rule <id>...] [--project .]
   harness-automation discover [--project .]
   harness-automation plan [--project .] [--profile full-typescript|python-data-ai|go-performance]
   harness-automation plan --profile custom --stack <stack> [--stack <stack>...] [--project .]
   harness-automation plan [--delivery-profile worktree-delivery] [--domain-profile game-development] [--project .]
   harness-automation plan [--quality-profile eval-driven-development] [--adopt-typescript-naming] [--project .]
+  harness-automation update plan --project <absolute-path> [--adopt-typescript-naming]
   harness-automation apply --plan <relative-path> --approve <sha256> [--project .]
   harness-automation context [--project .]
   harness-automation check [--project .] [--mode session|commit|ci]
@@ -655,12 +657,17 @@ function runWorkflow(argv: string[]): void {
         owner: required(args, "owner"),
         approveSources: args.flags.has("approve-sources"),
         approveTypeScriptNamingAdoption: args.flags.has("approve-typescript-naming-adoption"),
+        approveWeakening: value(args, "approve-weakening"),
+        weakeningRuleIds: args.values.get("weakening-rule"),
       }));
       return;
     case "discover":
       printJson(discoverAndSave(root));
       return;
     case "plan": {
+      if (["upgrade", "update"].some((name) => args.flags.has(name) || args.values.has(name))) {
+        throw new Error("UPDATE_INTERFACE_INVALID: use `harness-automation update plan --project <absolute-path>`");
+      }
       const result = planProject({
         projectRoot: root,
         profile: profile(args),
@@ -683,6 +690,43 @@ function runWorkflow(argv: string[]): void {
         adoptTypeScriptNaming: args.flags.has("adopt-typescript-naming"),
       });
       printJson({ planPath: result.path, planHash: result.plan.planHash, stacks: result.policy.project.stacks, qualityProfiles: result.policy.project.qualityProfiles ?? [], operations: result.plan.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash })), commands: result.plan.commands, warnings: result.plan.warnings });
+      return;
+    }
+    case "upgrade":
+      throw new Error("UPDATE_INTERFACE_INVALID: use `harness-automation update plan --project <absolute-path>`");
+    case "update": {
+      if (args.positionals[0] !== "plan") throw new Error("UPDATE_COMMAND_REQUIRED: only `update plan` is available");
+      const replacementOptions = ["profile", "stack", "delivery-profile", "domain-profile", "quality-profile"]
+        .filter((name) => args.flags.has(name) || args.values.has(name));
+      if (replacementOptions.length > 0) {
+        throw new Error(`UPDATE_CONFIG_INHERITED: remove ${replacementOptions.map((name) => `--${name}`).join(", ")}; update inherits applied project configuration`);
+      }
+      const requestedProject = value(args, "project");
+      if (!requestedProject || !isAbsolute(requestedProject)) {
+        throw new Error("UPDATE_PROJECT_ABSOLUTE_REQUIRED: --project must be an absolute path");
+      }
+      const result = planProjectUpdate({
+        projectRoot: root,
+        adoptTypeScriptNaming: args.flags.has("adopt-typescript-naming"),
+      });
+      printJson({
+        status: result.status,
+        planPath: result.planPath,
+        planHash: result.planHash,
+        compiler: result.plan?.update
+          ? { from: result.plan.update.from, to: result.plan.update.to }
+          : { from: result.policy.compiler ?? null, to: result.policy.compiler ?? null },
+        rules: result.plan?.update?.rules ?? { added: [], removed: [], changed: [] },
+        evaluations: result.plan?.update?.evaluations ?? { added: [], removed: [], changed: [] },
+        adapterCoverage: result.plan?.update?.adapterCoverage ?? null,
+        baseline: result.plan?.update?.baseline ?? null,
+        targets: result.plan?.update?.targets ?? [],
+        drift: result.plan?.update?.drift ?? null,
+        weakening: result.plan?.update?.weakening ?? null,
+        worktree: result.worktree,
+        migrationRequired: result.worktree.status === "migration-required",
+        warnings: result.plan?.warnings ?? [],
+      });
       return;
     }
     case "apply":

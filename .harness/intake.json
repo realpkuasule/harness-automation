@@ -1,13 +1,13 @@
 {
   "schemaVersion": "2.0",
   "owner": "zhichao",
-  "approvedAt": "2026-09-01T03:33:44.836Z",
+  "approvedAt": "2026-09-01T06:34:42.864Z",
   "sources": [
     {
       "id": "prd",
       "kind": "prd",
       "path": "docs/PRD.md",
-      "sha256": "bdff07ea53335ce52829bd8e5d3c2b270b694580d76b5a526695296e21bbea3b",
+      "sha256": "579ce16f28e13a9719ae0928138ec0125c04175d5a2826d07a14e26913bc623b",
       "approved": true
     },
     {
@@ -36,6 +36,13 @@
       "kind": "design",
       "path": "docs/design/harness-skill-v2.md",
       "sha256": "37448fa527133a99b3dad892f6ba1000493befe64d91c3f06c1a177f98761ab2",
+      "approved": true
+    },
+    {
+      "id": "design-project-governance-upgrade",
+      "kind": "design",
+      "path": "docs/design/project-governance-upgrade.md",
+      "sha256": "dd21190a9794e5a116edf024617ba81d156da03b8dd7123823cd567d4a9958fa",
       "approved": true
     },
     {
@@ -70,7 +77,14 @@
       "id": "research-npm-release-worktree",
       "kind": "research",
       "path": "docs/research/npm-release-worktree.md",
-      "sha256": "4b81aafce1d7840407ba906b44f0d7a5a1c82451f549674a3a916b8e8aef407a",
+      "sha256": "83bc604d765cad9b055e6594ceeab292f0cbe439854be006792484e601a523b6",
+      "approved": true
+    },
+    {
+      "id": "research-project-governance-upgrade-current-state",
+      "kind": "research",
+      "path": "docs/research/project-governance-upgrade-current-state.md",
+      "sha256": "352d12c89b8fc2155608c32701b0035cdd485d05d72ec926c3ffb2cda79fa0e2",
       "approved": true
     },
     {
@@ -108,14 +122,5 @@
       "sha256": "3710cc36bcfbb96ee9d76abe997cc56d16e69b997247b2dc9ce566e7326d9cd9",
       "approved": true
     }
-  ],
-  "typescriptNamingAdoption": {
-    "ruleId": "typescript-naming",
-    "fingerprints": [
-      "5f7d5836abc203bf0bc8e469dafa452611d1b2f22af030dc7c41f1cd6070244c",
-      "c63722c4fe9610ffa13ca9c13e6b0a212bf9fb980cba84077842f1832d549705",
-      "d1da6976a067caecbdd7d4085f4fa5e401ae929da2ad3537a0a4e29624f7196e",
-      "d48c569c7513dfd05795414f874862161e782994288f356351ba940e1d66fe52"
-    ]
-  }
+  ]
 }

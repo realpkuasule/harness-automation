@@ -201,7 +201,7 @@ export function inspectEvaluations(root: string): EvaluationDiscovery {
     }
   })();
   if (!existsSync(safePath(root, EVAL_CONTRACT_PATH))) {
-    return { configured: false, valid: false, contractPath: null, suites: [], errors: [], unmanagedCandidates };
+    return { configured: false, valid: false, contractPath: null, schemaVersion: null, suites: [], errors: [], unmanagedCandidates };
   }
   try {
     const contract = readEvalContract(root);
@@ -209,11 +209,15 @@ export function inspectEvaluations(root: string): EvaluationDiscovery {
       configured: true,
       valid: true,
       contractPath: EVAL_CONTRACT_PATH,
-      suites: contract.suites.map(({ id, kind, command, baseline, runnerSources, traceability, negativeControl }) => ({
+      schemaVersion: contract.schemaVersion,
+      suites: contract.suites.map(({ id, kind, command, tasks, baseline, target, graders, runnerSources, traceability, negativeControl }) => ({
         id,
         kind,
         command,
+        tasks,
         baseline,
+        target,
+        graders,
         runnerSources,
         traceability,
         negativeControl,
@@ -226,6 +230,7 @@ export function inspectEvaluations(root: string): EvaluationDiscovery {
       configured: true,
       valid: false,
       contractPath: EVAL_CONTRACT_PATH,
+      schemaVersion: null,
       suites: [],
       errors: [error instanceof Error ? error.message : String(error)],
       unmanagedCandidates,

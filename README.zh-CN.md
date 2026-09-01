@@ -142,6 +142,18 @@ harness-automation drift --project .
 
 `plan` 的 JSON 输出包含最终 stack、目标文件、变更前后哈希、验证命令、warning 和完整 `planHash`。项目负责人必须审阅这些内容后，才能把该哈希交给 `apply`。
 
+### 更新已应用 Harness 的项目
+
+使用当前已安装 CLI 和项目绝对路径；命令会继承已应用的 owner、profile、stacks、正交 profiles、phase 与 adoption baseline：
+
+```bash
+harness-automation update plan --project /absolute/path/to/project
+```
+
+`current` 表示精确本地 compiler 身份一致且候选语义、目标哈希均无变化，因此不写 policy plan。非空结果仍走现有 immutable plan、完整哈希 `apply`、receipt 与 rollback。缺少 `.harness/policy.yaml` 时返回 `HARNESS_INITIALIZATION_REQUIRED`。该命令不查询或安装 npm、不执行项目命令，也不创建或移动 worktree；worktree 只报告 `not-configured`、`compatible`、`configuration-plan-required` 或 `migration-required`，独立 companion plan 不会迫使系统生成空 policy plan。
+
+若结果报告 weakening，负责人必须先把完整 weakening digest 和全部 rule ID 绑定到 fresh intake，再 `discover` 和重新规划；普通 plan hash 批准不能替代 weakening 批准。`doctor` 离线报告 `current`、`stale`、`legacy-version-unknown` 或 `unconfigured`。
+
 ## 会话交接（v2.2.0）
 
 长会话该切就切，恢复成本靠交接物落盘趋近于零。`session` 命令组确定性执行交接、校验、回执与 issue 状态流转，全程无 AI 参与。协议见[会话交接设计](docs/designs/session-handoff.md)与 [session workflow 参考](skill/references/session-workflow.md)。
@@ -310,7 +322,7 @@ harness-automation context --project . --agent codex
 
 ## CLI 与 MCP
 
-v2 CLI 命令：`doctor`、`research github`、`intake`、`discover`、`plan`、`apply`、`context`、`check`、`drift`、`explain`、`rollback`，以及 `worktree configure|allocate|adopt|review|status|audit|close|retention-audit` 和 `session handoff|status|seed`。`plan` 支持正交的 `deliveryProfile`、`domainProfile` 和 `qualityProfile`。`check --mode commit|ci` 会执行计划中可见的可信项目 gate；EDD runner 只在 CI mode 执行，缺失运行时明确返回 `blocked`。CI 无法观察宿主机 worktree 时会如实报告 workspace enforcement 不可用。
+v2 CLI 命令：`doctor`、`research github`、`intake`、`discover`、`plan`、`update plan`、`apply`、`context`、`check`、`drift`、`explain`、`rollback`，以及 `worktree configure|allocate|adopt|review|status|audit|close|retention-audit` 和 `session handoff|status|seed`。`plan` 支持正交的 `deliveryProfile`、`domainProfile` 和 `qualityProfile`。`check --mode commit|ci` 会执行计划中可见的可信项目 gate；EDD runner 只在 CI mode 执行，缺失运行时明确返回 `blocked`。CI 无法观察宿主机 worktree 时会如实报告 workspace enforcement 不可用。
 
 MCP 暴露同一 service layer，包括核心 `harness_*` 工具和对应的 `harness_worktree_*` 工具。CLI 仍是 Claude Code、Codex、DeepSeek/GLM 等 Agent 的 portable 基线。
 

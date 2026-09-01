@@ -150,6 +150,28 @@ harness-automation drift --project .
 
 The `plan` JSON output contains the final stacks, target files, before/after hashes, verification commands, warnings, and the complete `planHash`. The project owner must review all of it before handing that hash to `apply`.
 
+### Update an applied Harness project
+
+Run the currently installed CLI against the existing project; it inherits the applied owner, profile, stacks, orthogonal profiles, phase, and adoption baseline:
+
+```bash
+harness-automation update plan --project /absolute/path/to/project
+```
+
+`current` means the policy and manifest contain the same exact local compiler version and no semantic or target hash changes are needed. A non-empty result is a normal immutable plan and uses the existing exact-hash `apply`, receipt, and rollback commands. The update command does not query npm, install a package, run project commands, or create/move worktrees. Missing `.harness/policy.yaml` returns `HARNESS_INITIALIZATION_REQUIRED`. Worktree status is one of `not-configured`, `compatible`, `configuration-plan-required`, or `migration-required`; a companion workspace plan has its own hash and never forces an empty policy plan.
+
+If the plan reports weakening, the owner must bind the exact weakening digest and every listed rule ID into a fresh intake, rediscover, and plan again before the ordinary plan-hash gate can apply it:
+
+```bash
+harness-automation intake --project /absolute/path/to/project --owner <owner> --approve-sources \
+  --approve-weakening <weakening-sha256> \
+  --weakening-rule <rule-id>
+harness-automation discover --project /absolute/path/to/project
+harness-automation update plan --project /absolute/path/to/project
+```
+
+`doctor` reports the offline compiler state as `current`, `stale`, `legacy-version-unknown`, or `unconfigured`.
+
 ## Session handoff (v2.2.0)
 
 Long sessions should be cut when they should be cut — the recovery cost is near zero because the handoff artifacts are on disk. The `session` command group executes handoffs, receipts, and issue transitions deterministically, with no AI involvement. Protocol: [Session Handoff design](docs/designs/session-handoff.md), [session workflow reference](skill/references/session-workflow.md).
@@ -329,7 +351,7 @@ The command never fetches, writes GitHub settings, changes token scopes, or modi
 
 ## CLI and MCP
 
-v2 CLI commands: `doctor`, `research github`, `github audit`, `intake`, `discover`, `plan`, `apply`, `context`, `check`, `drift`, `explain`, `rollback`, plus `worktree configure|allocate|adopt|review|status|audit|close|retention-audit|integration-check` and `session handoff|status|seed`. `plan` supports orthogonal `deliveryProfile`, `domainProfile`, and `qualityProfile`. `check --mode commit|ci` runs the trusted project gates visible in the plan; EDD runners execute only in CI mode and report `blocked` when a runtime is missing. When CI cannot observe host-local worktrees, workspace enforcement is reported honestly as unavailable.
+v2 CLI commands: `doctor`, `research github`, `github audit`, `intake`, `discover`, `plan`, `update plan`, `apply`, `context`, `check`, `drift`, `explain`, `rollback`, plus `worktree configure|allocate|adopt|review|status|audit|close|retention-audit|integration-check` and `session handoff|status|seed`. `plan` supports orthogonal `deliveryProfile`, `domainProfile`, and `qualityProfile`. `check --mode commit|ci` runs the trusted project gates visible in the plan; EDD runners execute only in CI mode and report `blocked` when a runtime is missing. When CI cannot observe host-local worktrees, workspace enforcement is reported honestly as unavailable.
 
 The MCP server exposes the same service layer, including the core `harness_*` tools and the matching `harness_worktree_*` tools. The CLI remains the portable baseline for Claude Code, Codex, and DeepSeek/GLM agents.
 

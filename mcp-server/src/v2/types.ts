@@ -57,6 +57,13 @@ export type DeliveryProfile = typeof DELIVERY_PROFILES[number];
 export type DomainProfile = typeof DOMAIN_PROFILES[number];
 export type QualityProfile = typeof QUALITY_PROFILES[number];
 
+export interface CompilerIdentity {
+  package: "@realpkuasule/harness-automation";
+  version: string;
+}
+
+export type CompilerVersionStatus = "current" | "stale" | "legacy-version-unknown" | "unconfigured";
+
 export interface SourceSnapshot {
   id: string;
   kind: "prd" | "design" | "research" | "eval" | "existing-policy";
@@ -72,6 +79,10 @@ export interface Intake {
   typescriptNamingAdoption?: {
     ruleId: typeof TYPESCRIPT_NAMING_RULE_ID;
     fingerprints: string[];
+  };
+  policyWeakeningApproval?: {
+    digest: string;
+    ruleIds: string[];
   };
 }
 
@@ -160,9 +171,15 @@ export interface EvaluationDiscovery {
   configured: boolean;
   valid: boolean;
   contractPath: string | null;
-  suites: Array<Pick<EvalSuite, "id" | "kind" | "command" | "baseline" | "runnerSources" | "traceability" | "negativeControl">>;
+  schemaVersion: EvalContract["schemaVersion"] | null;
+  suites: Array<Pick<EvalSuite, "id" | "kind" | "command" | "tasks" | "baseline" | "target" | "graders" | "runnerSources" | "traceability" | "negativeControl">>;
   errors: string[];
   unmanagedCandidates: string[];
+}
+
+export interface PolicyEvaluationSnapshot {
+  schemaVersion: EvalContract["schemaVersion"];
+  suites: EvaluationDiscovery["suites"];
 }
 
 export type PolicyTargetKind =
@@ -218,12 +235,18 @@ export interface TypeScriptNamingBaseline {
 
 export interface PolicyDocument {
   schemaVersion: "2.0";
+  /** Optional while reading legacy policies; every newly compiled policy records it. */
+  compiler?: CompilerIdentity;
   /** Rule-bound TypeScript naming debt explicitly adopted through intake and an immutable plan. */
   typescriptNamingBaseline?: TypeScriptNamingBaseline;
+  /** Canonical EDD semantics used to detect policy weakening across compiler updates. */
+  evaluations?: PolicyEvaluationSnapshot;
   project: {
     name: string;
     owner: string;
     phase: "design-approved" | "development" | "maintenance";
+    /** Optional while reading legacy policies; every newly compiled policy records it. */
+    profile?: StackProfile;
     stacks: Stack[];
     deliveryProfiles: DeliveryProfile[];
     domainProfiles: DomainProfile[];
@@ -235,6 +258,78 @@ export interface PolicyDocument {
     adapters: Array<{ id: string; capabilities: AgentDiscovery["capabilities"] }>;
   };
   policies: PolicyRule[];
+}
+
+export interface SemanticFieldChange {
+  field: string;
+  before: unknown;
+  after: unknown;
+}
+
+export interface WorktreeUpdateStatus {
+  status: "not-configured" | "compatible" | "configuration-plan-required" | "migration-required";
+  configurationPlanPath: string | null;
+  configurationPlanHash: string | null;
+  migrationCommand: string[] | null;
+  error: string | null;
+}
+
+export interface PolicyUpdateMetadata {
+  from: {
+    compiler: CompilerIdentity | null;
+    policyCompiler: CompilerIdentity | null;
+    manifestCompiler: CompilerIdentity | null;
+    compilerStatus: "exact" | "stale" | "legacy-version-unknown";
+    schemaVersion: string | null;
+    policyDigest: string | null;
+  };
+  to: { compiler: CompilerIdentity; schemaVersion: "2.0"; policyDigest: string };
+  inherited: {
+    owner: string;
+    profile: StackProfile;
+    stacks: Stack[];
+    deliveryProfiles: DeliveryProfile[];
+    domainProfiles: DomainProfile[];
+    qualityProfiles: QualityProfile[];
+    phase: PolicyDocument["project"]["phase"];
+  };
+  drift: {
+    intake: { expected: string; actual: string; clean: boolean };
+    discovery: { expected: string; actual: string; clean: boolean };
+    sources: Array<{ path: string; expected: string; actual: string | null; clean: boolean }>;
+  };
+  rules: {
+    added: string[];
+    removed: string[];
+    changed: Array<{ ruleId: string; fields: SemanticFieldChange[] }>;
+  };
+  evaluations: {
+    added: string[];
+    removed: string[];
+    changed: Array<{ suiteId: string; fields: SemanticFieldChange[] }>;
+  };
+  adapterCoverage: {
+    before: string[];
+    after: string[];
+    added: string[];
+    removed: string[];
+  };
+  baseline: {
+    before: string[];
+    after: string[];
+    added: string[];
+    removed: string[];
+  } | null;
+  targets: Array<{ path: string; beforeHash: string | null; afterHash: string }>;
+  weakening: {
+    detected: boolean;
+    ruleIds: string[];
+    reasons: string[];
+    digest: string;
+    approved: boolean;
+  };
+  worktree: WorktreeUpdateStatus;
+  migrationRequired: boolean;
 }
 
 export interface FileOperation {
@@ -258,8 +353,16 @@ export interface ChangePlan {
   operations: FileOperation[];
   commands: string[][];
   warnings: string[];
+  update?: PolicyUpdateMetadata;
+  /** Read-only compatibility for plans created by the 2.8.1 preview. New plans never write this field. */
+  upgrade?: PolicyUpdateMetadata;
   planHash: string;
 }
+
+/** @deprecated Use PolicyUpdateMetadata. */
+export type PolicyUpgradeMetadata = PolicyUpdateMetadata;
+/** @deprecated Use WorktreeUpdateStatus. */
+export type WorktreeUpgradeStatus = WorktreeUpdateStatus;
 
 export interface AppliedChange {
   schemaVersion: "2.0";

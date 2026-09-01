@@ -1,91 +1,9 @@
 {
   "schemaVersion": "2.0",
-  "compiler": {
-    "package": "@realpkuasule/harness-automation",
-    "version": "2.8.1"
-  },
-  "evaluations": {
-    "schemaVersion": "1.1",
-    "suites": [
-      {
-        "id": "npm-release-worktree-policy",
-        "kind": "capability",
-        "command": [
-          "node",
-          "evals/run_npm_release_policy.mjs"
-        ],
-        "tasks": [
-          "evals/tasks/npm-release-worktree.jsonl"
-        ],
-        "baseline": {
-          "score": 0,
-          "trials": 1,
-          "evidence": "evals/baselines/npm-release-worktree-pre-implementation.json",
-          "origin": "pre-implementation"
-        },
-        "target": {
-          "metric": "pass-all-trials",
-          "threshold": 1,
-          "trials": 1
-        },
-        "graders": [
-          {
-            "id": "policy-text-check",
-            "kind": "code",
-            "role": "gate"
-          },
-          {
-            "id": "agent-behavior-review",
-            "kind": "model",
-            "role": "guidance"
-          }
-        ],
-        "runnerSources": [
-          "evals/run_npm_release_policy.mjs"
-        ],
-        "traceability": [
-          {
-            "requirementId": "PRD-REL-001",
-            "ruleIds": [
-              "npm-release-primary-checkout"
-            ]
-          },
-          {
-            "requirementId": "PRD-REL-002",
-            "ruleIds": [
-              "npm-release-no-linked-worktree"
-            ]
-          },
-          {
-            "requirementId": "PRD-REL-003",
-            "ruleIds": [
-              "npm-release-fail-closed"
-            ]
-          },
-          {
-            "requirementId": "PRD-REL-004",
-            "ruleIds": [
-              "development-worktrees-preserved"
-            ]
-          }
-        ],
-        "negativeControl": {
-          "command": [
-            "node",
-            "evals/run_npm_release_policy.mjs",
-            "evals/fixtures/known-bad-npm-release-policy.md"
-          ],
-          "fixture": "evals/fixtures/known-bad-npm-release-policy.md",
-          "expectedExitCode": 1
-        }
-      }
-    ]
-  },
   "project": {
     "name": "harness-automation",
     "owner": "zhichao",
     "phase": "design-approved",
-    "profile": "custom",
     "stacks": [
       "typescript"
     ],
@@ -100,7 +18,7 @@
       "id": "prd",
       "kind": "prd",
       "path": "docs/PRD.md",
-      "sha256": "579ce16f28e13a9719ae0928138ec0125c04175d5a2826d07a14e26913bc623b",
+      "sha256": "bdff07ea53335ce52829bd8e5d3c2b270b694580d76b5a526695296e21bbea3b",
       "approved": true
     },
     {
@@ -129,13 +47,6 @@
       "kind": "design",
       "path": "docs/design/harness-skill-v2.md",
       "sha256": "37448fa527133a99b3dad892f6ba1000493befe64d91c3f06c1a177f98761ab2",
-      "approved": true
-    },
-    {
-      "id": "design-project-governance-upgrade",
-      "kind": "design",
-      "path": "docs/design/project-governance-upgrade.md",
-      "sha256": "dd21190a9794e5a116edf024617ba81d156da03b8dd7123823cd567d4a9958fa",
       "approved": true
     },
     {
@@ -170,14 +81,7 @@
       "id": "research-npm-release-worktree",
       "kind": "research",
       "path": "docs/research/npm-release-worktree.md",
-      "sha256": "83bc604d765cad9b055e6594ceeab292f0cbe439854be006792484e601a523b6",
-      "approved": true
-    },
-    {
-      "id": "research-project-governance-upgrade-current-state",
-      "kind": "research",
-      "path": "docs/research/project-governance-upgrade-current-state.md",
-      "sha256": "352d12c89b8fc2155608c32701b0035cdd485d05d72ec926c3ffb2cda79fa0e2",
+      "sha256": "4b81aafce1d7840407ba906b44f0d7a5a1c82451f549674a3a916b8e8aef407a",
       "approved": true
     },
     {
@@ -293,13 +197,11 @@
         "design-harness-automation-design",
         "design-harness-design-comparison",
         "design-harness-skill-v2",
-        "design-project-governance-upgrade",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",
         "research-github-wheels-2026-08-31-2",
         "research-npm-release-worktree",
-        "research-project-governance-upgrade-current-state",
         "eval-npm-release-worktree-pre-implementation",
         "eval-evals",
         "eval-known-bad-npm-release-policy",
@@ -351,13 +253,11 @@
         "design-harness-automation-design",
         "design-harness-design-comparison",
         "design-harness-skill-v2",
-        "design-project-governance-upgrade",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",
         "research-github-wheels-2026-08-31-2",
         "research-npm-release-worktree",
-        "research-project-governance-upgrade-current-state",
         "eval-npm-release-worktree-pre-implementation",
         "eval-evals",
         "eval-known-bad-npm-release-policy",
@@ -412,13 +312,11 @@
         "design-harness-automation-design",
         "design-harness-design-comparison",
         "design-harness-skill-v2",
-        "design-project-governance-upgrade",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",
         "research-github-wheels-2026-08-31-2",
         "research-npm-release-worktree",
-        "research-project-governance-upgrade-current-state",
         "eval-npm-release-worktree-pre-implementation",
         "eval-evals",
         "eval-known-bad-npm-release-policy",
@@ -486,13 +384,11 @@
         "design-harness-automation-design",
         "design-harness-design-comparison",
         "design-harness-skill-v2",
-        "design-project-governance-upgrade",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",
         "research-github-wheels-2026-08-31-2",
         "research-npm-release-worktree",
-        "research-project-governance-upgrade-current-state",
         "eval-npm-release-worktree-pre-implementation",
         "eval-evals",
         "eval-known-bad-npm-release-policy",
@@ -540,13 +436,11 @@
         "design-harness-automation-design",
         "design-harness-design-comparison",
         "design-harness-skill-v2",
-        "design-project-governance-upgrade",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",
         "research-github-wheels-2026-08-31-2",
         "research-npm-release-worktree",
-        "research-project-governance-upgrade-current-state",
         "eval-npm-release-worktree-pre-implementation",
         "eval-evals",
         "eval-known-bad-npm-release-policy",
@@ -604,13 +498,11 @@
         "design-harness-automation-design",
         "design-harness-design-comparison",
         "design-harness-skill-v2",
-        "design-project-governance-upgrade",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",
         "research-github-wheels-2026-08-31-2",
         "research-npm-release-worktree",
-        "research-project-governance-upgrade-current-state",
         "eval-npm-release-worktree-pre-implementation",
         "eval-evals",
         "eval-known-bad-npm-release-policy",
@@ -659,13 +551,11 @@
         "design-harness-automation-design",
         "design-harness-design-comparison",
         "design-harness-skill-v2",
-        "design-project-governance-upgrade",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",
         "research-github-wheels-2026-08-31-2",
         "research-npm-release-worktree",
-        "research-project-governance-upgrade-current-state",
         "eval-npm-release-worktree-pre-implementation",
         "eval-evals",
         "eval-known-bad-npm-release-policy",
@@ -712,13 +602,11 @@
         "design-harness-automation-design",
         "design-harness-design-comparison",
         "design-harness-skill-v2",
-        "design-project-governance-upgrade",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",
         "research-github-wheels-2026-08-31-2",
         "research-npm-release-worktree",
-        "research-project-governance-upgrade-current-state",
         "eval-npm-release-worktree-pre-implementation",
         "eval-evals",
         "eval-known-bad-npm-release-policy",
@@ -734,7 +622,7 @@
   ],
   "typescriptNamingBaseline": {
     "ruleId": "typescript-naming",
-    "approvedIntakeHash": "c23dfce099a252b3c926890b446be90e5e7bb900c9bd709fd2d5833a0e12e8ae",
+    "approvedIntakeHash": "68f81e55f7d1ba6e0934bde564e9dfe81022dbed3f6187a1e554b80267d75a1c",
     "fingerprints": [
       "5f7d5836abc203bf0bc8e469dafa452611d1b2f22af030dc7c41f1cd6070244c",
       "c63722c4fe9610ffa13ca9c13e6b0a212bf9fb980cba84077842f1832d549705",

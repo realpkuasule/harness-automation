@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = join(here, "../..");
+const compilerVersion = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).version as string;
 const cli = join(packageRoot, "src/cli.ts");
 const projects: string[] = [];
 
@@ -93,7 +94,40 @@ describe("v2 CLI forward flow", () => {
     expect(checked.ok).toBe(true);
     expect((run(root, ["explain", "typescript-naming"]).id)).toBe("typescript-naming");
     expect(run(root, ["drift"]).clean).toBe(true);
+    expect(run(root, ["update", "plan"])).toMatchObject({ status: "current", planPath: null, planHash: null });
+    expect(run(root, ["doctor"]).compiler).toMatchObject({ status: "current", current: { version: compilerVersion } });
   }, 30_000);
+
+  it("exposes only the dedicated update plan interface", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-cli-update-interface-"));
+    projects.push(root);
+    for (const alias of [runResult(root, ["plan", "--upgrade"]), runResult(root, ["plan", "--update"]), runResult(root, ["upgrade", "plan"])]) {
+      expect(alias.status).not.toBe(0);
+      expect(alias.stderr).toMatch(/UPDATE_INTERFACE_INVALID/u);
+    }
+
+    const replacement = runResult(root, ["update", "plan", "--profile", "custom"]);
+    expect(replacement.status).not.toBe(0);
+    expect(replacement.stderr).toMatch(/UPDATE_CONFIG_INHERITED/u);
+
+    const relative = spawnSync(process.execPath, ["--import", "tsx", cli, "update", "plan", "--project", "."], {
+      cwd: packageRoot,
+      encoding: "utf8",
+      env: { ...process.env, HOME: join(root, ".test-home") },
+    });
+    expect(relative.status).not.toBe(0);
+    expect(relative.stderr).toMatch(/UPDATE_PROJECT_ABSOLUTE_REQUIRED/u);
+  });
+
+  it("requires initialization before planning an update", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-cli-update-unconfigured-"));
+    projects.push(root);
+
+    const result = runResult(root, ["update", "plan"]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/HARNESS_INITIALIZATION_REQUIRED/u);
+  });
 
   it("routes TypeScript naming adoption through intake and plan", () => {
     const root = mkdtempSync(join(tmpdir(), "harness-cli-naming-adoption-"));

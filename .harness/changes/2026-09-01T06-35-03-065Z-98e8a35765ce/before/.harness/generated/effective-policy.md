@@ -1,6 +1,6 @@
 # Effective Engineering Policy
 
-Policy digest: `83c535d6a9cb39cffe97788e156980926adee861d3ebc4e98c65f76f20c79789`
+Policy digest: `f111eafb26bbd12cccc22a0d3b36d3b08bad596a0ea24f48c018e1bf358957f9`
 Owner: zhichao
 Stack: typescript
 

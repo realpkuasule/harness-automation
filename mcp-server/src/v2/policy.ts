@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import type {
+  CompilerIdentity,
   Discovery,
   DeliveryProfile,
   DomainProfile,
@@ -363,11 +364,15 @@ function qualityProfileRules(
 
 export function compilePolicy(args: {
   projectRoot: string;
+  compiler: CompilerIdentity;
+  projectName?: string;
+  phase?: PolicyDocument["project"]["phase"];
   owner: string;
   intake: Intake;
   discovery: Discovery;
   profile?: StackProfile;
   stacks?: Stack[];
+  inheritedStacks?: Stack[];
   deliveryProfiles?: DeliveryProfile[];
   domainProfiles?: DomainProfile[];
   qualityProfiles?: QualityProfile[];
@@ -377,9 +382,9 @@ export function compilePolicy(args: {
     throw new Error("STACK_OVERRIDE_REQUIRES_CUSTOM_PROFILE: use --profile custom with explicit --stack values");
   }
   const stacks = normalizeStackIds(
-    profile === "custom"
+    args.inheritedStacks ?? (profile === "custom"
       ? args.stacks ?? []
-      : stacksForProfile(profile, args.discovery.stacks),
+      : stacksForProfile(profile, args.discovery.stacks)),
   );
   if (stacks.length === 0) {
     throw new Error("STACK_SELECTION_REQUIRED: use --profile custom with one or more explicit --stack values");
@@ -400,12 +405,21 @@ export function compilePolicy(args: {
     id: "codex",
     capabilities: ["root-instructions", "scoped-instructions", "mcp", "structured-output"],
   });
+  const evaluations = qualityProfiles.includes("eval-driven-development") && args.discovery.evaluations?.valid && args.discovery.evaluations.schemaVersion
+    ? {
+        schemaVersion: args.discovery.evaluations.schemaVersion,
+        suites: args.discovery.evaluations.suites,
+      }
+    : undefined;
   return {
     schemaVersion: "2.0",
+    compiler: args.compiler,
+    ...(evaluations ? { evaluations } : {}),
     project: {
-      name: basename(args.projectRoot),
+      name: args.projectName ?? basename(args.projectRoot),
       owner: args.owner,
-      phase: "design-approved",
+      phase: args.phase ?? "design-approved",
+      profile,
       stacks,
       deliveryProfiles,
       domainProfiles,

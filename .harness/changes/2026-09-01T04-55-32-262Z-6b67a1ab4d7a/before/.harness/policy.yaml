@@ -1,91 +1,9 @@
 {
   "schemaVersion": "2.0",
-  "compiler": {
-    "package": "@realpkuasule/harness-automation",
-    "version": "2.8.1"
-  },
-  "evaluations": {
-    "schemaVersion": "1.1",
-    "suites": [
-      {
-        "id": "npm-release-worktree-policy",
-        "kind": "capability",
-        "command": [
-          "node",
-          "evals/run_npm_release_policy.mjs"
-        ],
-        "tasks": [
-          "evals/tasks/npm-release-worktree.jsonl"
-        ],
-        "baseline": {
-          "score": 0,
-          "trials": 1,
-          "evidence": "evals/baselines/npm-release-worktree-pre-implementation.json",
-          "origin": "pre-implementation"
-        },
-        "target": {
-          "metric": "pass-all-trials",
-          "threshold": 1,
-          "trials": 1
-        },
-        "graders": [
-          {
-            "id": "policy-text-check",
-            "kind": "code",
-            "role": "gate"
-          },
-          {
-            "id": "agent-behavior-review",
-            "kind": "model",
-            "role": "guidance"
-          }
-        ],
-        "runnerSources": [
-          "evals/run_npm_release_policy.mjs"
-        ],
-        "traceability": [
-          {
-            "requirementId": "PRD-REL-001",
-            "ruleIds": [
-              "npm-release-primary-checkout"
-            ]
-          },
-          {
-            "requirementId": "PRD-REL-002",
-            "ruleIds": [
-              "npm-release-no-linked-worktree"
-            ]
-          },
-          {
-            "requirementId": "PRD-REL-003",
-            "ruleIds": [
-              "npm-release-fail-closed"
-            ]
-          },
-          {
-            "requirementId": "PRD-REL-004",
-            "ruleIds": [
-              "development-worktrees-preserved"
-            ]
-          }
-        ],
-        "negativeControl": {
-          "command": [
-            "node",
-            "evals/run_npm_release_policy.mjs",
-            "evals/fixtures/known-bad-npm-release-policy.md"
-          ],
-          "fixture": "evals/fixtures/known-bad-npm-release-policy.md",
-          "expectedExitCode": 1
-        }
-      }
-    ]
-  },
   "project": {
     "name": "harness-automation",
     "owner": "zhichao",
     "phase": "design-approved",
-    "profile": "custom",
     "stacks": [
       "typescript"
     ],
@@ -100,7 +18,7 @@
       "id": "prd",
       "kind": "prd",
       "path": "docs/PRD.md",
-      "sha256": "579ce16f28e13a9719ae0928138ec0125c04175d5a2826d07a14e26913bc623b",
+      "sha256": "208d1bb972507a47d45bb805f3a229efd8e83173ef9a7ea5d042ef1261cee3f9",
       "approved": true
     },
     {
@@ -135,7 +53,7 @@
       "id": "design-project-governance-upgrade",
       "kind": "design",
       "path": "docs/design/project-governance-upgrade.md",
-      "sha256": "dd21190a9794e5a116edf024617ba81d156da03b8dd7123823cd567d4a9958fa",
+      "sha256": "21ac75e04939e206c86bba9f75c0e7ca2fb45ef3a49f9e38e3b7d4762c432b33",
       "approved": true
     },
     {
@@ -177,7 +95,7 @@
       "id": "research-project-governance-upgrade-current-state",
       "kind": "research",
       "path": "docs/research/project-governance-upgrade-current-state.md",
-      "sha256": "352d12c89b8fc2155608c32701b0035cdd485d05d72ec926c3ffb2cda79fa0e2",
+      "sha256": "0182b780f8d331ea2121a7ea73e3e39725e890d1e6300381114cc499a4c7a015",
       "approved": true
     },
     {
