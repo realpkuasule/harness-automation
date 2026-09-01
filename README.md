@@ -180,7 +180,20 @@ If an older applied policy has no `evaluations` snapshot and its approved evalua
 harness-automation update legacy-eval-snapshot plan --project /absolute/path/to/project
 ```
 
-The immutable plan records the legacy policy digest, available old and current approved evaluation-source hashes, the candidate snapshot, and suite/Requirement/rule traceability. It states that historical pre-implementation continuity is unavailable; review its full hash and use the regular `apply` command to establish the snapshot. Later ordinary updates compare evaluation semantics and weakening from that snapshot onward. This is unrelated to worktree migration.
+The immutable plan records the legacy policy digest, available old and current approved evaluation-source hashes, the candidate snapshot, and suite/Requirement/rule traceability. It states that historical pre-implementation continuity is unavailable. The complete owner-reviewed sequence is:
+
+```bash
+harness-automation update plan --project /absolute/path/to/project
+# EVAL_SEMANTICS_HISTORY_REQUIRED: stop; do not edit .harness files
+harness-automation update legacy-eval-snapshot plan --project /absolute/path/to/project
+# review .harness/plans/<id>.json and its printed planHash
+harness-automation apply --project /absolute/path/to/project \
+  --plan .harness/plans/<id>.json --approve <exact-plan-sha256>
+cat .harness/changes/<id>/change.json
+harness-automation update plan --project /absolute/path/to/project
+```
+
+Apply rechecks every hash before writing. Its durable change receipt records the exact plan hash and time plus the migration owner, the prior absent snapshot, old/new policy digests, canonical snapshot SHA-256, and approved eval-source hashes. Later ordinary updates compare evaluation semantics and weakening from that snapshot onward. This is unrelated to worktree migration.
 
 ## Session handoff (v2.2.0)
 

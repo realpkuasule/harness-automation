@@ -386,6 +386,20 @@ export interface AppliedChange {
   id: string;
   planHash: string;
   appliedAt: string;
+  /** Present only for an owner-approved legacy evaluation snapshot adoption. */
+  legacyEvalSnapshotMigration?: {
+    kind: "legacy-eval-snapshot-adoption";
+    owner: string;
+    before: {
+      evaluationsSnapshot: "absent";
+      policyDigest: string;
+    };
+    after: {
+      policyDigest: string;
+      evaluationsSha256: string;
+      approvedEvalSources: Array<{ path: string; sha256: string }>;
+    };
+  };
   operations: Array<{
     path: string;
     beforeHash: string | null;

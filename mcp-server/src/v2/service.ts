@@ -694,6 +694,25 @@ function legacyEvalSnapshotMigration(
   };
 }
 
+function legacyEvalSnapshotMigrationReceipt(plan: ChangePlan, policy: PolicyDocument): AppliedChange["legacyEvalSnapshotMigration"] {
+  const migration = plan.legacyEvalSnapshotMigration;
+  if (!migration) return undefined;
+  if (!policy.evaluations) throw new Error("LEGACY_EVAL_SNAPSHOT_RECEIPT_INVALID: applied policy has no evaluations snapshot");
+  return {
+    kind: migration.kind,
+    owner: policy.project.owner,
+    before: {
+      evaluationsSnapshot: "absent",
+      policyDigest: migration.legacyPolicyDigest,
+    },
+    after: {
+      policyDigest: hashObject(policy),
+      evaluationsSha256: hashObject(policy.evaluations),
+      approvedEvalSources: migration.currentApprovedEvalSources,
+    },
+  };
+}
+
 function inheritedPolicyConfiguration(
   policy: PolicyDocument,
   discovery: Discovery,
@@ -1426,6 +1445,7 @@ function applyFilePlan(args: {
     id: plan.id,
     planHash: plan.planHash,
     appliedAt: (args.now ?? new Date()).toISOString(),
+    legacyEvalSnapshotMigration: legacyEvalSnapshotMigrationReceipt(plan, readJson<PolicyDocument>(harnessPath(root, "policy.yaml"))),
     operations: plan.operations.map((item) => ({
       path: item.path,
       beforeHash: item.beforeHash,

@@ -123,7 +123,7 @@ node <skill目录>/scripts/run.mjs update plan --project <项目绝对路径>
 node <skill目录>/scripts/run.mjs update legacy-eval-snapshot plan --project <项目绝对路径>
 ```
 
-它只写 immutable plan，并记录旧 policy digest、旧策略可获得的 eval 来源哈希、当前已批准来源哈希、候选快照及 suite/Requirement/rule traceability。计划明确声明历史连续性不可证明，不得伪称 pre-implementation 证据；仍须展示完整计划哈希并使用普通 `apply --approve <完整哈希>`。成功后，未来普通 `update plan` 以该快照检测 eval 语义变化和 weakening。此迁移与 worktree migration 完全独立。
+它只写 immutable plan，并记录旧 policy digest、旧策略可获得的 eval 来源哈希、当前已批准来源哈希、候选快照及 suite/Requirement/rule traceability。计划明确声明历史连续性不可证明，不得伪称 pre-implementation 证据；负责人审阅完整计划哈希后才可使用普通 `apply --plan .harness/plans/<id>.json --approve <完整哈希>`。apply 前重验全部来源，成功后的 `.harness/changes/<id>/change.json` 记录计划哈希和时间，以及 owner、旧快照缺失、旧/新 policy digest、候选快照 SHA-256 与批准来源哈希；然后才可再次运行普通 `update plan`。此迁移与 worktree migration 完全独立。
 
 ### 6. 精确批准后应用
 

@@ -1596,6 +1596,7 @@ describe("v2 project governance upgrade", () => {
     expect(() => applyPlan({ projectRoot: root, planPath: planned.planPath!, approval: "0".repeat(64) }))
       .toThrow(/APPROVAL_MISMATCH/u);
     expect(readFileSync(join(root, ".harness/policy.yaml"), "utf8")).toBe(legacyPolicy);
+    expect(existsSync(join(root, `.harness/changes/${planned.plan!.id}/change.json`))).toBe(false);
     const tampered = JSON.parse(readFileSync(join(root, planned.planPath!), "utf8"));
     tampered.legacyEvalSnapshotMigration.legacyPolicyDigest = "0".repeat(64);
     const unsigned = { ...tampered };
@@ -1622,8 +1623,34 @@ describe("v2 project governance upgrade", () => {
       .toThrow(/LEGACY_EVAL_SNAPSHOT_MIGRATION_INVALID: candidate evaluations/u);
     expect(readFileSync(join(root, ".harness/policy.yaml"), "utf8")).toBe(legacyPolicy);
 
-    applyPlan({ projectRoot: root, planPath: planned.planPath!, approval: planned.planHash! });
-    expect(JSON.parse(readFileSync(join(root, ".harness/policy.yaml"), "utf8")).evaluations).toMatchObject({ schemaVersion: "1.1" });
+    applyPlan({
+      projectRoot: root,
+      planPath: planned.planPath!,
+      approval: planned.planHash!,
+      now: new Date("2026-01-02T00:00:02Z"),
+    });
+    const migratedPolicy = JSON.parse(readFileSync(join(root, ".harness/policy.yaml"), "utf8"));
+    expect(migratedPolicy.evaluations).toMatchObject({ schemaVersion: "1.1" });
+    const receipt = JSON.parse(readFileSync(join(root, `.harness/changes/${planned.plan!.id}/change.json`), "utf8"));
+    expect(receipt).toMatchObject({
+      appliedAt: "2026-01-02T00:00:02.000Z",
+      planHash: planned.planHash,
+      legacyEvalSnapshotMigration: {
+        kind: "legacy-eval-snapshot-adoption",
+        owner: "owner",
+        before: {
+          evaluationsSnapshot: "absent",
+          policyDigest: planned.plan!.legacyEvalSnapshotMigration!.legacyPolicyDigest,
+        },
+        after: {
+          policyDigest: hashObject(migratedPolicy),
+          evaluationsSha256: hashObject(migratedPolicy.evaluations),
+          approvedEvalSources: planned.plan!.legacyEvalSnapshotMigration!.currentApprovedEvalSources,
+        },
+      },
+    });
+    expect(() => planProjectUpdate({ projectRoot: root, migrateLegacyEvalSnapshot: true }))
+      .toThrow(/LEGACY_EVAL_SNAPSHOT_MIGRATION_NOT_REQUIRED/u);
 
     contract.suites[0].target.threshold = 0.25;
     write(root, "evals/evals.json", `${JSON.stringify(contract, null, 2)}\n`);
