@@ -149,13 +149,19 @@ describe("generated Python naming checker", () => {
 import typing
 import typing_extensions
 import unittest
-from typing import TypeAlias
+from pathlib import Path
+from typing import Any, Callable, Sequence, TypeAlias
 from typing_extensions import TypeAlias as ExtensionsTypeAlias
+from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
 StageAction: TypeAlias = str
 OutputRetriever: ExtensionsTypeAlias = str
 Embedder: typing.TypeAlias = str
 CommandRunner: typing_extensions.TypeAlias = str
+ImplicitStageAction = Callable[[StageContext], list[dict[str, Any]]]
+ImplicitOutputRetriever = Callable[[str, str, Path], None]
+ImplicitCommandRunner = Callable[[Sequence[str]], str]
+ImplicitEmbedder = Callable[[str], np.ndarray]
 _TEMPLATES = {}
 _RUN_ID = "run"
 _private_value = 1
@@ -190,10 +196,11 @@ def discard(_):
     expect(spawnSync("python3", [checker, root], { encoding: "utf8" }).status).toBe(0);
     expect(spawnSync("python3", [checker, "--self-test"], { encoding: "utf8" }).status).toBe(1);
 
-    write(root, "invalid.py", "def badFunction(badParameter):\n    badVariable = badParameter\n");
+    write(root, "invalid.py", "UserName = \"value\"\ndef badFunction(badParameter):\n    badVariable = badParameter\n");
     const invalid = spawnSync("python3", [checker, root], { encoding: "utf8" });
     expect(invalid.status).toBe(1);
     expect(`${invalid.stderr}`).toContain("badFunction");
+    expect(`${invalid.stderr}`).toContain("UserName");
   });
 });
 

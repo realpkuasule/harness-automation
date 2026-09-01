@@ -524,10 +524,12 @@ UPPER = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$")
 PRIVATE_UPPER = re.compile(r"^_[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$")
 IGNORE = {"migrations", ".venv", "venv", "generated", ".harness", "node_modules"}
 TESTCASE_LIFECYCLE = {"setUp", "tearDown", "setUpClass", "tearDownClass"}
+TYPING_CONSTRUCTS = {"Annotated", "Callable", "ClassVar", "Concatenate", "Final", "Literal", "Never", "NewType", "NotRequired", "Optional", "Protocol", "Required", "Self", "Sequence", "Type", "TypeAlias", "TypeGuard", "TypeIs", "Union"}
 
 def imported_names(tree):
     type_aliases = set()
     typing_modules = set()
+    typing_names = set()
     test_cases = set()
     unittest_modules = set()
     for node in tree.body:
@@ -543,17 +545,28 @@ def imported_names(tree):
                 for alias in node.names:
                     if alias.name == "TypeAlias":
                         type_aliases.add(alias.asname or alias.name)
+                    if alias.name in TYPING_CONSTRUCTS:
+                        typing_names.add(alias.asname or alias.name)
             if node.module == "unittest":
                 for alias in node.names:
                     if alias.name == "TestCase":
                         test_cases.add(alias.asname or alias.name)
-    return type_aliases, typing_modules, test_cases, unittest_modules
+    return type_aliases, typing_modules, typing_names, test_cases, unittest_modules
 
 def type_alias_annotation(annotation, type_aliases, typing_modules):
     if isinstance(annotation, ast.Name):
         return annotation.id in type_aliases
     return (isinstance(annotation, ast.Attribute) and annotation.attr == "TypeAlias" and
         isinstance(annotation.value, ast.Name) and annotation.value.id in typing_modules)
+
+def typing_expression(value, typing_names, typing_modules):
+    if isinstance(value, ast.Name):
+        return value.id in typing_names
+    if isinstance(value, ast.Attribute):
+        return value.attr in TYPING_CONSTRUCTS and isinstance(value.value, ast.Name) and value.value.id in typing_modules
+    if isinstance(value, ast.Subscript):
+        return typing_expression(value.value, typing_names, typing_modules)
+    return False
 
 def test_case_base(base, test_cases, unittest_modules):
     if isinstance(base, ast.Name):
@@ -566,7 +579,7 @@ def check_source(source, name):
         tree = ast.parse(source, filename=name)
     except SyntaxError as exc:
         return [f"{name}:{exc.lineno}: syntax error: {exc.msg}"]
-    type_aliases, typing_modules, test_cases, unittest_modules = imported_names(tree)
+    type_aliases, typing_modules, typing_names, test_cases, unittest_modules = imported_names(tree)
 
     class NamingVisitor(ast.NodeVisitor):
         def __init__(self):
@@ -604,14 +617,24 @@ def check_source(source, name):
             if node.arg not in {"self", "cls", "_"} and not SNAKE.match(node.arg):
                 self.errors.append(f"{name}:{node.lineno}: parameter '{node.arg}' must be snake_case")
 
+        def visit_Import(self, node):
+            return
+
+        def visit_ImportFrom(self, node):
+            return
+
         def visit_Assign(self, node):
-            for target in node.targets:
-                self.variable_target(target)
+            is_implicit_alias = len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and \
+                PASCAL.match(node.targets[0].id) and typing_expression(node.value, typing_names, typing_modules)
+            if not is_implicit_alias:
+                for target in node.targets:
+                    self.variable_target(target)
             self.generic_visit(node)
 
         def visit_AnnAssign(self, node):
             if not (isinstance(node.target, ast.Name) and PASCAL.match(node.target.id) and
-                    type_alias_annotation(node.annotation, type_aliases, typing_modules)):
+                    (type_alias_annotation(node.annotation, type_aliases, typing_modules) or
+                     (node.value is not None and typing_expression(node.value, typing_names, typing_modules)))):
                 self.variable_target(node.target)
             self.generic_visit(node)
 
