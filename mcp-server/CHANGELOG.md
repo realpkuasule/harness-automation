@@ -1,3 +1,9 @@
+## [2.8.6] - 2026-09-01
+
+### Fixed
+
+- classify Python unittest lifecycle methods and TypeAlias declarations correctly (d751ab1)
+
 ## [2.8.5] - 2026-09-01
 
 ### Fixed
