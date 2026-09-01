@@ -131,6 +131,25 @@ function isZodSchema(value: unknown, bindings: Set<string>): boolean {
   return root !== null && bindings.has(root);
 }
 
+function jsxComponentNames(program: unknown): Set<string> {
+  const names = new Set<string>();
+  const walk = (value: unknown): void => {
+    if (!value || typeof value !== "object") return;
+    const node = value as Record<string, unknown>;
+    if (node.type === "JSXOpeningElement") {
+      const name = node.name as Record<string, unknown> | undefined;
+      if (name?.type === "JSXIdentifier") names.add(String(name.name));
+    }
+    for (const [key, child] of Object.entries(node)) {
+      if (["loc", "range", "parent", "tokens", "comments"].includes(key)) continue;
+      if (Array.isArray(child)) child.forEach(walk);
+      else walk(child);
+    }
+  };
+  walk(program);
+  return names;
+}
+
 function fingerprint(parts: readonly string[]): string {
   return createHash("sha256").update(parts.join("\0")).digest("hex");
 }
@@ -156,6 +175,7 @@ export function inspectTypeScriptSource(source: string, filename: string): TypeS
 
   const bindings = zodBindings(program);
   const moduleVariables = moduleVariableDeclarations(program);
+  const jsxComponents = jsxComponentNames(program);
   const report = (name: string, at: number, kind: string, expected: string): void => {
     const identity = [TYPESCRIPT_NAMING_RULE_ID, filename, kind, name];
     const message = `${filename}:${at}: '${name}' must be ${expected}`;
@@ -182,7 +202,7 @@ export function inspectTypeScriptSource(source: string, filename: string): TypeS
           const moduleConstant = moduleVariables.constants.has(node) && UPPER.test(identifier.name);
           const schema = schemaValue && identifier.name.endsWith("Schema") && PASCAL.test(identifier.name);
           if (!(CAMEL.test(identifier.name) || moduleConstant || NODE_SPECIAL_IDENTIFIERS.has(identifier.name) ||
-            (functionValue && PASCAL.test(identifier.name)) || schema)) {
+            ((functionValue || jsxComponents.has(identifier.name)) && PASCAL.test(identifier.name)) || schema)) {
             report(identifier.name, identifier.line, "variable", "camelCase (or PascalCase for a component/schema / UPPER_SNAKE_CASE for a module constant)");
           }
         }

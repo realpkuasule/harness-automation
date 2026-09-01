@@ -104,6 +104,22 @@ describe("naming verifiers", () => {
     }
   });
 
+  it("allows PascalCase local aliases used as JSX components", () => {
+    const violations = checkTypeScriptSource(`
+      function render(item: { icon: unknown }) {
+        const Icon = item.icon;
+        return <Icon />;
+      }
+    `, "component-alias.tsx");
+
+    expect(violations.join("\n")).not.toContain("Icon");
+    expect(checkTypeScriptSource("const user_id = 1;\nconst UnusedValue = 1;", "non-components.tsx"))
+      .toEqual(expect.arrayContaining([
+        expect.stringContaining("user_id"),
+        expect.stringContaining("UnusedValue"),
+      ]));
+  });
+
   it("uses line-stable, rule-bound fingerprints and distinguishes duplicate violations", () => {
     const original = inspectTypeScriptSource("const legacy_name = 1;\n", "src/value.ts")[0];
     const moved = inspectTypeScriptSource("\n\nconst legacy_name = 1;\n", "src/value.ts")[0];
