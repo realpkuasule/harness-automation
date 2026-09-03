@@ -15,6 +15,7 @@ import {
   sha256,
   withoutHash,
 } from "./fs.js";
+import { requireMutationAllowed, type RecoveryApproval } from "../recovery/service.js";
 import {
   GO_NAMING_CHECKER,
   PYTHON_NAMING_CHECKER,
@@ -1380,8 +1381,17 @@ export function applyPlan(args: {
   projectRoot: string;
   planPath: string;
   approval: string;
+  safeMode?: boolean;
+  recoveryApproval?: RecoveryApproval;
+  recoveryPacketHash?: string;
   now?: Date;
 }): AppliedChange | WorkspaceReceipt {
+  requireMutationAllowed({
+    safeMode: args.safeMode,
+    recoveryApproval: args.recoveryApproval,
+    recoveryPlanHash: args.recoveryApproval ? args.approval : undefined,
+    recoveryPacketHash: args.recoveryPacketHash,
+  });
   const root = resolve(args.projectRoot);
   const candidate = readJson<{ kind?: string }>(safePath(root, args.planPath));
   if (candidate.kind === "workspace-plan") return applyWorkspacePlan(args);

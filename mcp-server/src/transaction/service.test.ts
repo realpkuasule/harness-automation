@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { fileHash, sha256 } from "../v2/fs.js";
+import { createSemanticApprovalPacket } from "../approval/service.js";
 import { applyTransactionPlan, createTransactionApproval, createTransactionPlan, readTransactionReceipts } from "./service.js";
 
 const roots: string[] = [];
@@ -15,9 +16,13 @@ function fixture(): string {
 }
 
 function approved(plan: ReturnType<typeof createTransactionPlan>) {
+  const packet = createSemanticApprovalPacket({
+    planHash: plan.planHash, inputHash: plan.inputDigest, producerIdentity: "producer",
+    actions: [{ id: "write", kind: "write", summary: "write", before: "before", after: "after", reversible: true, recovery: "recover" }],
+  });
   return createTransactionApproval({
     planHash: plan.planHash, inputDigest: plan.inputDigest, policyDigest: plan.policyDigest, observedHash: plan.observedHash,
-    packetHash: "p".repeat(64), risk: "ordinary-reversible", actor: "independent-reviewer", actorType: "reviewer",
+    packetHash: packet.packetHash, packet, risk: "ordinary-reversible", actor: "independent-reviewer", actorType: "reviewer",
     verdict: "approved", approvedAt: now.toISOString(), expiresAt: "2030-01-01T00:00:00.000Z",
   });
 }
@@ -47,6 +52,8 @@ describe("transaction plan", () => {
     expect(() => apply(root, { ...plan, observedHash: "tampered" })).toThrow("TRANSACTION_PLAN_INVALID");
     expect(() => apply(root, plan, { expectedProjectDir: join(root, "other") })).toThrow("TRANSACTION_PLAN_INVALID");
     expect(() => apply(root, plan, { approval: { ...approved(plan), inputDigest: "wrong" } })).toThrow("TRANSACTION_APPROVAL_INVALID");
+    expect(() => apply(root, plan, { approval: { ...approved(plan), risk: "unknown" as never, actorType: "human" } })).toThrow("TRANSACTION_APPROVAL_INVALID");
+    expect(() => apply(root, plan, { approval: { ...approved(plan), packetHash: "f".repeat(64) } })).toThrow("TRANSACTION_APPROVAL_INVALID");
     const receipt = apply(root, plan);
     expect(receipt.status).toBe("applied");
     expect(readFileSync(path, "utf8")).toBe("after\n");

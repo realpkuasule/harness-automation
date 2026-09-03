@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { scrubSensitive } from "../credentials/service.js";
-import { recoveryExecutionAllowed, requireSafeModeCommand, type RecoveryApproval } from "../recovery/service.js";
+import { validSemanticApprovalPacket, type SemanticApprovalPacket } from "../approval/service.js";
+import { requireMutationAllowed, type RecoveryApproval } from "../recovery/service.js";
 import { assertCurrentHash, atomicWrite, durableWriteOnce, fileHash, hashObject, prettyJson, readJson, safePath, sha256, withoutHash } from "../v2/fs.js";
 
 export interface TransactionWrite {
@@ -32,6 +33,7 @@ export interface TransactionApproval {
   policyDigest: string;
   observedHash: string;
   packetHash: string;
+  packet: SemanticApprovalPacket;
   risk: "ordinary-reversible" | "human-required" | "protected";
   actor: string;
   actorType: "reviewer" | "human";
@@ -181,6 +183,8 @@ function validateApproval(plan: TransactionPlan, approval: TransactionApproval, 
   if (approval.schemaVersion !== "semantic-approval-receipt/3.0" || approval.kind !== "semantic-approval-receipt" ||
       approval.approvalHash !== hashObject(approvalWithoutHash(approval)) || !approval.actor || !approval.packetHash || approval.verdict !== "approved" ||
       approval.planHash !== plan.planHash || approval.inputDigest !== plan.inputDigest || approval.policyDigest !== plan.policyDigest || approval.observedHash !== plan.observedHash ||
+      !["ordinary-reversible", "human-required", "protected"].includes(approval.risk) || !validSemanticApprovalPacket(approval.packet) ||
+      approval.packetHash !== approval.packet.packetHash || approval.packet.planHash !== plan.planHash || approval.packet.inputHash !== plan.inputDigest || approval.packet.risk !== approval.risk ||
       !Number.isFinite(Date.parse(approval.approvedAt)) || Date.parse(approval.approvedAt) > now.getTime() || !Number.isFinite(Date.parse(approval.expiresAt)) || Date.parse(approval.expiresAt) <= now.getTime() ||
       (approval.risk === "ordinary-reversible" ? approval.actorType !== "reviewer" : approval.actorType !== "human")) throw new Error("TRANSACTION_APPROVAL_INVALID");
 }
@@ -197,7 +201,7 @@ export function applyTransactionPlan(args: {
   testInterruptAfterWrites?: number;
 }): TransactionReceipt {
   const { plan } = args;
-  if (args.safeMode) requireSafeModeCommand("apply");
+  requireMutationAllowed({ safeMode: args.safeMode });
   validateTransactionPlan(plan, args.expectedProjectDir, args.expectedCommonDir, args.reobserveIndependent());
   validateApproval(plan, args.approval, args.now ?? new Date());
   const held = lock(args.expectedCommonDir);
@@ -210,7 +214,7 @@ export function applyTransactionPlan(args: {
     }
     // A started receipt is recoverable only when it is the newest receipt for this exact plan.
     const started = chain.at(-1)?.planHash === plan.planHash && chain.at(-1)?.status === "started" ? chain.at(-1) : undefined;
-    if (started) recoveryExecutionAllowed(args.recoveryApproval, plan.planHash, args.approval.packetHash);
+    if (started) requireMutationAllowed({ recoveryApproval: args.recoveryApproval, recoveryPlanHash: plan.planHash, recoveryPacketHash: args.approval.packetHash });
     for (const write of plan.writes) {
       const current = fileHash(safePath(args.expectedProjectDir, write.path));
       if (current !== write.beforeHash && (!started || current !== sha256(write.afterContent))) throw new Error("RECOVERY_REQUIRED: transaction target drifted");

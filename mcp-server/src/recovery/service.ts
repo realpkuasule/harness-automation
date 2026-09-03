@@ -35,3 +35,16 @@ export function recoveryExecutionAllowed(approval: RecoveryApproval | undefined,
     throw new Error("RECOVERY_HUMAN_APPROVAL_REQUIRED");
   }
 }
+
+/** Shared mutation boundary for v2, worktree, and transaction Apply paths. */
+export function requireMutationAllowed(args: {
+  safeMode?: boolean;
+  recoveryApproval?: RecoveryApproval;
+  recoveryPlanHash?: string;
+  recoveryPacketHash?: string;
+}): void {
+  if (args.safeMode) requireSafeModeCommand("apply");
+  if (args.recoveryApproval || args.recoveryPlanHash || args.recoveryPacketHash) {
+    recoveryExecutionAllowed(args.recoveryApproval, args.recoveryPlanHash ?? "", args.recoveryPacketHash ?? "");
+  }
+}

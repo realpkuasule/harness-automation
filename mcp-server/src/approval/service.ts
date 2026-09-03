@@ -65,6 +65,13 @@ function packetWithoutHash(packet: SemanticApprovalPacket): Omit<SemanticApprova
   return copy as Omit<SemanticApprovalPacket, "packetHash">;
 }
 
+export function validSemanticApprovalPacket(packet: SemanticApprovalPacket): boolean {
+  return packet.schemaVersion === "semantic-approval/1.0" && packet.kind === "semantic-approval" &&
+    packet.packetHash === hashObject(packetWithoutHash(packet)) &&
+    packet.actions.every((action) => (APPROVAL_ACTION_KINDS as readonly string[]).includes(action.kind)) &&
+    packet.risk === classifyRisk(packet.actions);
+}
+
 export function classifyRisk(actions: SemanticApprovalPacket["actions"]): RiskClass {
   if (actions.some((action) => action.protected || ["protected", "permission-change"].includes(action.kind))) return "protected";
   if (actions.some((action) => !action.reversible || ["adopt", "rebind", "recover", "rollback", "migration", "weakening"].includes(action.kind))) return "human-required";
@@ -92,9 +99,7 @@ export function reviewSemanticApproval(args: {
   attempt?: 1 | 2 | 3;
 }): ApprovalResult {
   const { packet } = args;
-  if (packet.packetHash !== hashObject(packetWithoutHash(packet)) ||
-      packet.actions.some((action) => !(APPROVAL_ACTION_KINDS as readonly string[]).includes(action.kind)) ||
-      packet.risk !== classifyRisk(packet.actions)) {
+  if (!validSemanticApprovalPacket(packet)) {
     return { state: "NeedsHuman", code: "HUMAN_APPROVAL_REQUIRED", packet };
   }
   if (packet.risk === "read-only") return { state: "Approved", packet };

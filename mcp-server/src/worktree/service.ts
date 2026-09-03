@@ -75,6 +75,7 @@ import {
 } from "./config.js";
 import { runGit, runGitCommand, runGitToFile } from "../repository/git.js";
 import { createSemanticApprovalPacket, reviewSemanticApprovalWithHistory, type ApprovalActionKind } from "../approval/service.js";
+import { requireMutationAllowed, type RecoveryApproval } from "../recovery/service.js";
 export { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
 import { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
 
@@ -3462,12 +3463,21 @@ export function applyWorkspacePlan(args: {
   projectRoot: string;
   planPath: string;
   approval: string;
+  safeMode?: boolean;
+  recoveryApproval?: RecoveryApproval;
+  recoveryPacketHash?: string;
   authorization?: WorkspaceAiDecision;
   now?: Date;
   testFailAfterLeaseWrites?: number;
   testFailCloseAfterWorktreeRemove?: boolean;
   testFailRemoteDeleteAfterPush?: boolean;
 }): WorkspaceReceipt {
+  requireMutationAllowed({
+    safeMode: args.safeMode,
+    recoveryApproval: args.recoveryApproval,
+    recoveryPlanHash: args.recoveryApproval ? args.approval : undefined,
+    recoveryPacketHash: args.recoveryPacketHash,
+  });
   const root = repositoryRoot(args.projectRoot);
   const plan = loadWorkspacePlan(root, args.planPath);
   validateWorkspacePlanEnvelope(root, gitCommonDir(root), plan, plan.planHash);
