@@ -205,6 +205,56 @@ describe("recovery safe mode", () => {
       expect.objectContaining({ kind: "invalid", id }),
     ]));
   });
+
+  it("finds an immutable pending workspace receipt without its mutable projection", () => {
+    const ctx = context();
+    const id = "worktree-configure-2026-01-01T00-00-00-000Z-cccccccccccc";
+    appendReceiptEvent({
+      root: ctx.commonDir,
+      domain: "workspace",
+      transactionId: id,
+      snapshot: {
+        schemaVersion: "worktree-delivery/1.0",
+        kind: "workspace-receipt",
+        id,
+        planHash: "a".repeat(64),
+        operation: "configure",
+        status: "started",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        steps: [],
+        before: { observedHash: "b".repeat(64) },
+        beforeObservedHash: "b".repeat(64),
+        mutationStarted: false,
+        compensationStatus: "not-required",
+      },
+    });
+    expect(inspectRecoveryState(ctx)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "workspace", id, action: "resume-apply" }),
+    ]));
+  });
+
+  it("never lets an approved recovery bypass unrelated invalid evidence", () => {
+    const ctx = context();
+    writeJournal(ctx.projectDir, "change-one");
+    const approval = approve(ctx, "change-one");
+    const id = "worktree-configure-2026-01-01T00-00-00-000Z-dddddddddddd";
+    appendReceiptEvent({
+      root: ctx.commonDir,
+      domain: "workspace",
+      transactionId: id,
+      snapshot: { status: "started" },
+    });
+    writeFileSync(join(
+      ctx.commonDir, "harness", "receipts", "workspace", id, "events", "000000000001.json",
+    ), "{}", "utf8");
+    expect(() => requireMutationAllowed(ctx, {
+      kind: "file-apply",
+      id: "change-one",
+      action: "resume-apply",
+      approvalRef: approval.id,
+      now: new Date("2026-01-01T00:00:30.000Z"),
+    })).toThrow("RECOVERY_REQUIRED");
+  });
 });
 
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
