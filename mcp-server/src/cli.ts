@@ -718,6 +718,7 @@ Usage:
   harness-automation delivery pr --authorization <sha256> --title <title> [--body <body>] [--project .]
   harness-automation delivery merge --authorization <sha256> --pull-request <number> [--project .]
   harness-automation session admit --session <session-id> [--intent read-only|continue|new-code|unclear] [--context-receipt .harness/sessions/<receipt>.json] [--work-item <provider:id>] [--reclassify] [--managed-write] [--project .]
+  harness-automation session prepare --session <session-id> --confirm <readable-confirmation> --owner <name> --base <refs/heads/name> --base-sha <exact-sha> [--local-only] [--work-item <provider:id> | --title <title> --description <details>] [--priority critical|high|medium|low] [--phase <n>] [--branch <name-or-{id}-template>] [--path <absolute-path>] [--project .]
   harness-automation session handoff --work-item <provider:repo#issue> --session <session-id> [--to-status in-progress|ready-for-review] [--dry-run] [--project .]
   harness-automation session status [--work-item <provider:repo#issue>] [--project .]
   harness-automation session seed --work-item <provider:repo#issue> [--project .]
@@ -766,7 +767,7 @@ function printLkg(root: string): void {
   });
 }
 
-function runWorkflow(argv: string[]): void {
+async function runWorkflow(argv: string[]): Promise<void> {
   const separator = argv.indexOf("--");
   const workflowArguments = separator === -1 ? argv : argv.slice(0, separator);
   const trailingCommand = separator === -1 ? [] : argv.slice(separator + 1);
@@ -929,7 +930,7 @@ function runWorkflow(argv: string[]): void {
       runTrackingCommand(root, args);
       return;
     case "session":
-      runSessionCommand(root, args);
+      await runSessionCommand(root, args);
       return;
     case "help":
     case "--help":
@@ -941,11 +942,11 @@ function runWorkflow(argv: string[]): void {
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   try {
     if (argv.length === 0 || argv[0] === "install") install({ syncGlobal: !argv.includes("--no-global") });
-    else runWorkflow(argv);
+    else await runWorkflow(argv);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (argv.length === 0 || argv[0] === "install") fail(message);
@@ -954,4 +955,4 @@ function main(): void {
   }
 }
 
-main();
+void main();
