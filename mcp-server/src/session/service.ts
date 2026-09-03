@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { atomicWrite, durableWriteOnce, hashObject, readJson, safePath, sha256 } from "../v2/fs.js";
+import { atomicWrite, durableWriteOnce, fileHash, hashObject, readJson, safePath, sha256 } from "../v2/fs.js";
 import { readLkgChain, readReceiptChain } from "../receipt/service.js";
 import { acquireMutationLock, releaseMutationLock } from "../recovery/service.js";
 import {
@@ -989,6 +989,7 @@ function localSessionHandoffLocked(
     throw new Error(`SESSION_LOCAL_TASK_OWNER_MISMATCH: ${workItem.workItem}`);
   }
   let transaction: LocalHandoffTransaction | null = null;
+  let createdTransaction: { path: string; hash: string; dev: number; ino: number } | null = null;
   if (existsSync(transactionDirectory)) {
     const metadata = lstatSync(transactionDirectory);
     if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_INVALID");
@@ -1027,13 +1028,53 @@ function localSessionHandoffLocked(
     const unhashed = { ...draft };
     delete (unhashed as Partial<LocalHandoffTransaction>).journalHash;
     draft.journalHash = hashObject(unhashed);
-    durableWriteOnce(safePath(transactionDirectory, `${receiptId}.json`), `${JSON.stringify(draft, null, 2)}\n`);
+    const transactionPath = safePath(transactionDirectory, `${receiptId}.json`);
+    const transactionContent = `${JSON.stringify(draft, null, 2)}\n`;
+    durableWriteOnce(transactionPath, transactionContent);
+    const transactionMetadata = lstatSync(transactionPath);
+    createdTransaction = {
+      path: transactionPath,
+      hash: sha256(transactionContent),
+      dev: transactionMetadata.dev,
+      ino: transactionMetadata.ino,
+    };
     transaction = draft;
   }
 
   if (evidence.task.status === "pending") {
     options.testBeforeLocalStatusCas?.();
-    updateLocalTaskStatusCas(root, workItem, "pending", "in_progress", sessionId);
+    try {
+      updateLocalTaskStatusCas(root, workItem, "pending", "in_progress", sessionId);
+    } catch (casError) {
+      let authoritativeTask: { status: string; updatedBy: string };
+      try {
+        const board = localBoardSchema.parse(readJson<unknown>(safePath(commonDir, "harness/local-tracking/TASK.json")));
+        const matches = board.tasks.filter((task) => task.id === workItem.id);
+        if (matches.length !== 1) throw new Error("TASK identity is not unique");
+        authoritativeTask = { status: matches[0].status, updatedBy: matches[0].updatedBy };
+      } catch (readbackError) {
+        const detail = readbackError instanceof Error ? readbackError.message : String(readbackError);
+        throw new Error(`SESSION_LOCAL_HANDOFF_RECOVERY_REQUIRED: TASK readback unknown: ${detail}`);
+      }
+      if (authoritativeTask.status !== "in_progress" || authoritativeTask.updatedBy !== sessionId) {
+        if (!createdTransaction) {
+          throw new Error("SESSION_LOCAL_HANDOFF_RECOVERY_REQUIRED: failed CAS did not own this transaction journal");
+        }
+        try {
+          const metadata = lstatSync(createdTransaction.path);
+          if (!metadata.isFile() || metadata.isSymbolicLink() ||
+              metadata.dev !== createdTransaction.dev || metadata.ino !== createdTransaction.ino ||
+              fileHash(createdTransaction.path) !== createdTransaction.hash || existsSync(receiptPath)) {
+            throw new Error("transaction journal changed after creation");
+          }
+          unlinkSync(createdTransaction.path);
+        } catch (cleanupError) {
+          const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+          throw new Error(`SESSION_LOCAL_HANDOFF_RECOVERY_REQUIRED: transaction journal cleanup unsafe: ${detail}`);
+        }
+        throw casError;
+      }
+    }
   }
   if (sha256(existing) !== handoffDocHash) atomicWrite(docPath, content);
   let committedReceipt = transaction.receipt;

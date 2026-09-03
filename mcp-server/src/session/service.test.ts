@@ -676,6 +676,93 @@ describe("session status", () => {
     })).toThrow("LOCAL_TRACKING_STATUS_CAS_FAILED");
     expect(readFileSync(docPath, "utf8")).toBe(docBefore);
     expect(readdirOrEmpty(join(commonDir, "harness/session-handoff/receipts"))).toHaveLength(0);
+    expect(readdirOrEmpty(join(commonDir, "harness/session-handoff/transactions"))).toHaveLength(0);
+
+    const retryBoard = JSON.parse(readFileSync(boardPath, "utf8")) as {
+      tasks: Array<{ id: string; status: string; updatedBy: string }>;
+    };
+    const retryTask = retryBoard.tasks.find((task) => task.id === "P0-1")!;
+    retryTask.status = "pending";
+    retryTask.updatedBy = "external-retry";
+    writeFileSync(boardPath, `${JSON.stringify(retryBoard, null, 2)}\n`, "utf8");
+    expect(sessionHandoff({
+      projectRoot: local.target,
+      workItem: local.workItem,
+      session: "local-winner",
+    }).receipt?.id).toMatch(/^handoff-local-P0-1-/u);
+  });
+
+  it("continues when a failed CAS readback proves this session acquired in-progress", async () => {
+    const local = await localFixture();
+    sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-uncertain" });
+    write(local.target, "docs/HANDOFF-local-P0-1.md", filledLocalDoc(local.receiptEventHash));
+    const commonDir = git(local.root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const boardPath = join(commonDir, "harness/local-tracking/TASK.json");
+
+    const result = sessionHandoff({
+      projectRoot: local.target,
+      workItem: local.workItem,
+      session: "local-uncertain",
+      testBeforeLocalStatusCas: () => {
+        const board = JSON.parse(readFileSync(boardPath, "utf8")) as {
+          tasks: Array<{ id: string; status: string; updatedBy: string }>;
+        };
+        const task = board.tasks.find((candidate) => candidate.id === "P0-1")!;
+        task.status = "in_progress";
+        task.updatedBy = "local-uncertain";
+        writeFileSync(boardPath, `${JSON.stringify(board, null, 2)}\n`, "utf8");
+      },
+    });
+    expect(result.receipt?.id).toMatch(/^handoff-local-P0-1-/u);
+    expect(readdirOrEmpty(join(commonDir, "harness/session-handoff/transactions"))).toHaveLength(1);
+    expect(readdirOrEmpty(join(commonDir, "harness/session-handoff/receipts"))).toHaveLength(1);
+  });
+
+  it("keeps a transaction journal and requires recovery when CAS readback is corrupt", async () => {
+    const local = await localFixture();
+    sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-corrupt" });
+    write(local.target, "docs/HANDOFF-local-P0-1.md", filledLocalDoc(local.receiptEventHash));
+    const commonDir = git(local.root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const boardPath = join(commonDir, "harness/local-tracking/TASK.json");
+    const docPath = join(local.target, "docs/HANDOFF-local-P0-1.md");
+    const docBefore = readFileSync(docPath, "utf8");
+
+    expect(() => sessionHandoff({
+      projectRoot: local.target,
+      workItem: local.workItem,
+      session: "local-corrupt",
+      testBeforeLocalStatusCas: () => writeFileSync(boardPath, "{", "utf8"),
+    })).toThrow("SESSION_LOCAL_HANDOFF_RECOVERY_REQUIRED");
+    expect(readFileSync(docPath, "utf8")).toBe(docBefore);
+    expect(readdirOrEmpty(join(commonDir, "harness/session-handoff/transactions"))).toHaveLength(1);
+    expect(readdirOrEmpty(join(commonDir, "harness/session-handoff/receipts"))).toHaveLength(0);
+  });
+
+  it("does not delete a transaction journal that drifts before failed-CAS cleanup", async () => {
+    const local = await localFixture();
+    sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-tampered" });
+    write(local.target, "docs/HANDOFF-local-P0-1.md", filledLocalDoc(local.receiptEventHash));
+    const commonDir = git(local.root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const boardPath = join(commonDir, "harness/local-tracking/TASK.json");
+    const transactionDirectory = join(commonDir, "harness/session-handoff/transactions");
+
+    expect(() => sessionHandoff({
+      projectRoot: local.target,
+      workItem: local.workItem,
+      session: "local-tampered",
+      testBeforeLocalStatusCas: () => {
+        const [name] = readdirSync(transactionDirectory);
+        const journalPath = join(transactionDirectory, name);
+        writeFileSync(journalPath, `${readFileSync(journalPath, "utf8")} `, "utf8");
+        const board = JSON.parse(readFileSync(boardPath, "utf8")) as {
+          tasks: Array<{ id: string; status: string }>;
+        };
+        board.tasks.find((task) => task.id === "P0-1")!.status = "completed";
+        writeFileSync(boardPath, `${JSON.stringify(board, null, 2)}\n`, "utf8");
+      },
+    })).toThrow("SESSION_LOCAL_HANDOFF_RECOVERY_REQUIRED");
+    expect(readdirOrEmpty(transactionDirectory)).toHaveLength(1);
+    expect(readdirOrEmpty(join(commonDir, "harness/session-handoff/receipts"))).toHaveLength(0);
   });
 
   it("rejects a completed Local-only task before changing TASK, document, or receipts", async () => {
