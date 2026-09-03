@@ -2,6 +2,61 @@ import { z } from "zod";
 
 export const SESSION_WORKFLOW_SCHEMA_VERSION = "session-workflow/1.0" as const;
 export const SESSION_HANDOFF_RECEIPT_SCHEMA_VERSION = "session-handoff/1.0" as const;
+export const SESSION_ADMISSION_SCHEMA_VERSION = "session-admission/1.0" as const;
+
+/** `read-only` also covers non-code work; intent is supplied by the host/agent, not guessed from prose. */
+export const SESSION_INTENTS = ["read-only", "continue", "new-code", "unclear"] as const;
+export type SessionIntent = typeof SESSION_INTENTS[number];
+
+export const SESSION_ADMISSION_DECISIONS = [
+  "read-only",
+  "continue",
+  "prepare-required",
+  "unclear",
+] as const;
+export type SessionAdmissionDecision = typeof SESSION_ADMISSION_DECISIONS[number];
+
+const digestSchema = z.string().regex(/^[a-f0-9]{64}$/u);
+const gitObjectSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
+
+export const sessionAdmissionFactsSchema = z.object({
+  policyDigest: digestSchema,
+  contextReceipt: z.string().regex(/^\.harness\/sessions\/[A-Za-z0-9._-]+\.json$/u),
+  contextReceiptHash: digestSchema,
+  repository: z.string().min(1),
+  commonDir: z.string().min(1),
+  cwd: z.string().min(1),
+  branch: z.string().min(1).nullable(),
+  head: gitObjectSchema,
+  configFingerprint: digestSchema,
+  leaseFingerprint: digestSchema.nullable(),
+  workItem: z.string().min(1).nullable(),
+  leaseWorkItem: z.string().min(1).nullable(),
+  managementCheckout: z.boolean(),
+}).strict();
+
+export const sessionAdmissionRecordSchema = z.object({
+  schemaVersion: z.literal(SESSION_ADMISSION_SCHEMA_VERSION),
+  kind: z.literal("session-admission"),
+  session: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u),
+  intent: z.enum(SESSION_INTENTS),
+  decision: z.enum(SESSION_ADMISSION_DECISIONS),
+  enforcement: z.literal("managed-commands-only"),
+  managedWriteAllowed: z.boolean(),
+  facts: sessionAdmissionFactsSchema,
+  factsFingerprint: digestSchema,
+  reasonCodes: z.array(z.string().min(1)).min(1),
+  recordedAt: z.string().datetime(),
+}).strict();
+
+export type SessionAdmissionFacts = z.infer<typeof sessionAdmissionFactsSchema>;
+export type SessionAdmissionRecord = z.infer<typeof sessionAdmissionRecordSchema>;
+
+export interface SessionAdmissionResult extends SessionAdmissionRecord {
+  reused: boolean;
+  receiptSequence: number;
+  receiptEventHash: string;
+}
 
 /** GitHub 形式的 work item：github:<owner>/<repo>#<number> */
 export const WORK_ITEM_PATTERN = /^github:([^/]+)\/([^/]+)#(\d+)$/u;

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "evaluation-baseline/1.0",
+  "suite": "session-admission-guard",
+  "origin": "pre-implementation",
+  "observedAt": "2026-09-03T11:22:51.246Z",
+  "score": 0,
+  "trials": 2,
+  "evidence": {
+    "source": "mcp-server/src/session/admission.ts",
+    "sourcePresent": false,
+    "finding": "No durable first-turn admission or management-checkout managed-write guard existed at origin/main 6059146430fdfe9ab3013841d48e43ac62f5d3eb."
+  }
+}

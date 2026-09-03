@@ -717,6 +717,7 @@ Usage:
   harness-automation delivery push --authorization <sha256> [--project .]
   harness-automation delivery pr --authorization <sha256> --title <title> [--body <body>] [--project .]
   harness-automation delivery merge --authorization <sha256> --pull-request <number> [--project .]
+  harness-automation session admit --session <session-id> [--intent read-only|continue|new-code|unclear] [--context-receipt .harness/sessions/<receipt>.json] [--work-item <provider:id>] [--reclassify] [--managed-write] [--project .]
   harness-automation session handoff --work-item <provider:repo#issue> --session <session-id> [--to-status in-progress|ready-for-review] [--dry-run] [--project .]
   harness-automation session status [--work-item <provider:repo#issue>] [--project .]
   harness-automation session seed --work-item <provider:repo#issue> [--project .]
