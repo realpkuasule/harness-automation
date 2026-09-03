@@ -62,6 +62,20 @@ describe("semantic approval", () => {
       .toMatchObject({ state: "NeedsHuman", code: "REVIEWER_ATTEMPT_LIMIT" });
   });
 
+  it("fails closed when an immutable review receipt is removed", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-approval-"));
+    roots.push(root);
+    const packet = base();
+    const adapter = { identity: "reviewer", review: () => ({
+      schemaVersion: "reviewer-verdict/1.0" as const, packetHash: packet.packetHash,
+      planHash: packet.planHash, inputHash: packet.inputHash, reviewerIdentity: "reviewer",
+      verdict: "reject" as const, reasonCodes: ["NO"],
+    }) };
+    expect(reviewSemanticApprovalWithHistory({ commonDir: root, packet, adapter })).toMatchObject({ state: "ReviewPending" });
+    rmSync(join(root, "harness", "receipts", "approval", packet.packetHash, "events", "000000000001.json"));
+    expect(() => reviewSemanticApprovalWithHistory({ commonDir: root, packet, adapter })).toThrow("APPROVAL_HISTORY_TAMPERED");
+  });
+
   it("binds the reviewer verdict to the exact packet and rejects action or binding drift", () => {
     const packet = base();
     const adapter = { identity: "reviewer", review: () => ({

@@ -46,22 +46,17 @@ describe("credentials", () => {
     expect(scrubbed).not.toContain('"r"');
   });
 
-  it("never treats a Git token as an askpass program or probes a reviewer through GitHub", () => {
+  it("never treats a Git token as an askpass program or invokes a reviewer before DG-02", () => {
     const gitRef: CredentialRef = { ...ref, purpose: "git-transport", envVar: "HARNESS_GIT_TOKEN" };
     expect(() => runWithCredential({
       ref: gitRef, purpose: "git-transport", resolver: { resolve: () => ({ ref: gitRef, secret: "secret" }) },
       command: "git", argv: ["fetch"], requiredCapability: "contents:read",
     })).toThrow("CREDENTIAL_TRANSPORT_HELPER_REQUIRED");
     const reviewer: CredentialRef = { ...ref, purpose: "reviewer", envVar: "HARNESS_REVIEWER_TOKEN" };
-    const result = runWithCredential({
+    expect(() => runWithCredential({
       ref: reviewer, purpose: "reviewer", resolver: { resolve: () => ({ ref: reviewer, secret: "secret" }) },
       command: "reviewer", argv: [], requiredCapability: "issues:write",
-      runner: (_command, _argv, env) => {
-        expect(env.GH_TOKEN).toBeUndefined();
-        expect(env.HARNESS_REVIEWER_TOKEN).toBe("secret");
-        return { status: 0, stdout: "ok", stderr: "" } as never;
-      },
-    });
-    expect(result.stdout).toBe("ok");
+      runner: () => { throw new Error("REVIEWER_MUST_NOT_RUN"); },
+    })).toThrow("DG02_REVIEWER_CONFIGURATION_REQUIRED");
   });
 });

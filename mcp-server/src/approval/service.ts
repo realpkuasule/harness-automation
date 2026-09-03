@@ -1,5 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
-import { durableWriteOnce, hashObject, prettyJson, readJson, safePath } from "../v2/fs.js";
+import { hashObject, safePath } from "../v2/fs.js";
+import { appendLkgRecord, appendReceiptEvent, readLkgChain, readReceiptChain } from "../receipt/service.js";
 
 export type RiskClass = "read-only" | "ordinary-reversible" | "human-required" | "protected";
 export type ApprovalState = "Approved" | "ReviewPending" | "NeedsHuman";
@@ -159,28 +160,42 @@ function approvalReceiptWithoutHash(receipt: ApprovalAttemptReceipt): Omit<Appro
   return copy as Omit<ApprovalAttemptReceipt, "receiptHash">;
 }
 
+function validApprovalReceipt(receipt: ApprovalAttemptReceipt, packetHash: string, sequence: number): boolean {
+  return receipt.schemaVersion === "approval-attempt/3.0" && receipt.kind === "approval-attempt" &&
+    receipt.id === `approval-${packetHash.slice(0, 16)}-${sequence}` && receipt.packetHash === packetHash &&
+    receipt.packetHash === receipt.packet.packetHash && validSemanticApprovalPacket(receipt.packet) &&
+    receipt.attempt === sequence && [1, 2].includes(receipt.attempt) &&
+    ["Approved", "ReviewPending", "NeedsHuman"].includes(receipt.state) &&
+    (receipt.verdict ? validVerdict(receipt.packet, { identity: receipt.verdict.reviewerIdentity, review: () => receipt.verdict! }, receipt.verdict) : receipt.state !== "Approved") &&
+    receipt.receiptHash === hashObject(approvalReceiptWithoutHash(receipt));
+}
+
 function approvalReceipts(commonDir: string): ApprovalAttemptReceipt[] {
-  const directory = safePath(commonDir, "harness/approvals");
+  const legacyDirectory = safePath(commonDir, "harness/approvals");
+  if (existsSync(legacyDirectory) && readdirSync(legacyDirectory).length > 0) throw new Error("APPROVAL_HISTORY_MIGRATION_REQUIRED");
+  const directory = safePath(commonDir, "harness/receipts/approval");
   if (!existsSync(directory)) return [];
-  const receipts = readdirSync(directory).filter((name) => name.endsWith(".json")).map((name) => {
-    if (!/^approval-[a-f0-9]{16}-[12]\.json$/u.test(name)) throw new Error("APPROVAL_HISTORY_TAMPERED");
-    const receipt = readJson<ApprovalAttemptReceipt>(safePath(directory, name));
-    if (receipt.schemaVersion !== "approval-attempt/3.0" || receipt.kind !== "approval-attempt" ||
-        receipt.id !== name.slice(0, -5) || receipt.packetHash !== receipt.packet.packetHash ||
-        !validSemanticApprovalPacket(receipt.packet) || ![1, 2].includes(receipt.attempt) ||
-        !["Approved", "ReviewPending", "NeedsHuman"].includes(receipt.state) ||
-        (receipt.verdict ? !validVerdict(receipt.packet, { identity: receipt.verdict.reviewerIdentity, review: () => receipt.verdict! }, receipt.verdict) : receipt.state === "Approved") ||
-        receipt.receiptHash !== hashObject(approvalReceiptWithoutHash(receipt))) throw new Error("APPROVAL_HISTORY_TAMPERED");
-    return receipt;
-  });
-  receipts.sort((left, right) => left.packetHash.localeCompare(right.packetHash) || left.attempt - right.attempt);
-  for (let index = 0; index < receipts.length; index += 1) {
-    const prior = receipts[index - 1];
-    if (prior?.packetHash === receipts[index].packetHash && receipts[index].attempt !== prior.attempt + 1) {
-      throw new Error("APPROVAL_HISTORY_TAMPERED");
+  try {
+    const lkg = readLkgChain({ root: commonDir, domain: "approval" });
+    const receipts: ApprovalAttemptReceipt[] = [];
+    for (const packetHash of readdirSync(directory)) {
+      if (!/^[a-f0-9]{64}$/u.test(packetHash)) throw new Error("APPROVAL_HISTORY_TAMPERED");
+      const events = readReceiptChain<ApprovalAttemptReceipt>({ root: commonDir, domain: "approval", transactionId: packetHash });
+      const records = lkg.filter((record) => record.transactionId === packetHash);
+      if (events.length !== records.length || events.length > 2) throw new Error("APPROVAL_HISTORY_TAMPERED");
+      for (const event of events) {
+        if (!validApprovalReceipt(event.snapshot, packetHash, event.sequence) ||
+            !records.some((record) => record.sequence === event.sequence && record.receiptEventHash === event.eventHash &&
+              record.planHash === event.snapshot.packet.planHash && record.observedHash === packetHash)) {
+          throw new Error("APPROVAL_HISTORY_TAMPERED");
+        }
+        receipts.push(event.snapshot);
+      }
     }
+    return receipts;
+  } catch {
+    throw new Error("APPROVAL_HISTORY_TAMPERED");
   }
-  return receipts;
 }
 
 /** The mutation caller derives attempts from append-only history; callers cannot reset it. */
@@ -203,11 +218,14 @@ export function reviewSemanticApprovalWithHistory(args: {
     ...(result.verdict ? { verdict: result.verdict } : {}), receiptHash: "",
   };
   receipt.receiptHash = hashObject(approvalReceiptWithoutHash(receipt));
-  try {
-    durableWriteOnce(safePath(args.commonDir, `harness/approvals/${receipt.id}.json`), prettyJson(receipt));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("APPROVAL_HISTORY_CONFLICT");
-    throw error;
-  }
+  const event = appendReceiptEvent({ root: args.commonDir, domain: "approval", transactionId: args.packet.packetHash, snapshot: receipt });
+  appendLkgRecord({
+    root: args.commonDir,
+    domain: "approval",
+    transactionId: args.packet.packetHash,
+    appliedReceiptEventHash: event.eventHash,
+    planHash: args.packet.planHash,
+    observedHash: args.packet.packetHash,
+  });
   return result;
 }

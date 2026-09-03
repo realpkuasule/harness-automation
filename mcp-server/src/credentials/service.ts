@@ -57,7 +57,7 @@ function statusFromOutput(output: string): number {
 
 function fixedProbe(ref: CredentialRef, env: NodeJS.ProcessEnv): CredentialEvidence {
   if (ref.purpose === "reviewer") {
-    return { identity: ref.identity, repository: ref.repository, capabilities: [...ref.scopes], status: 200 };
+    throw new Error("DG02_REVIEWER_CONFIGURATION_REQUIRED");
   }
   if (ref.purpose === "git-transport") throw new Error("CREDENTIAL_TRANSPORT_HELPER_REQUIRED");
   const request = (argv: string[]) => spawnSync("gh", argv, { env, encoding: "utf8", maxBuffer: 1024 * 1024 });
