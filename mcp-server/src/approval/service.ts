@@ -184,8 +184,8 @@ function approvalReceipts(commonDir: string): ApprovalAttemptReceipt[] {
       const events = readReceiptChain<ApprovalAttemptReceipt>({ root: commonDir, domain: "approval", transactionId: packetHash });
       const records = lkg.filter((record) => record.transactionId === packetHash);
       if (events.length > 2 || records.length > events.length) throw new Error("APPROVAL_HISTORY_TAMPERED");
-      const recordsMatchEvents = records.every((record, index) => record.sequence === events[index]?.sequence &&
-        record.receiptEventHash === events[index]?.eventHash && record.planHash === events[index]?.snapshot.packet.planHash &&
+      const recordsMatchEvents = records.every((record, index) => record.receiptEventHash === events[index]?.eventHash &&
+        record.planHash === events[index]?.snapshot.packet.planHash &&
         record.observedHash === packetHash);
       if (!recordsMatchEvents) throw new Error("APPROVAL_HISTORY_TAMPERED");
       if (records.length === events.length - 1) {

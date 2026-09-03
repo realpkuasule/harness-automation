@@ -92,6 +92,24 @@ describe("semantic approval", () => {
       .toMatchObject({ state: "NeedsHuman", code: "REVIEWER_ATTEMPT_LIMIT" });
   });
 
+  it("keeps packet-local receipt sequence separate from the domain-wide LKG sequence", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-approval-"));
+    roots.push(root);
+    const first = base();
+    const second = createSemanticApprovalPacket({
+      planHash: "f".repeat(64), inputHash: "1".repeat(64), producerIdentity: "producer",
+      binding: { planHash: "f".repeat(64), contextDigest: "c".repeat(64), inputDigest: "1".repeat(64), policyDigest: "d".repeat(64), observedHash: "e".repeat(64) },
+      actions: first.actions,
+    });
+    const adapter = { identity: "reviewer", review: (packet: typeof first) => ({
+      schemaVersion: "reviewer-verdict/1.0" as const, packetHash: packet.packetHash,
+      planHash: packet.planHash, inputHash: packet.inputHash, reviewerIdentity: "reviewer",
+      verdict: "reject" as const, reasonCodes: ["NO"],
+    }) };
+    expect(reviewSemanticApprovalWithHistory({ commonDir: root, packet: first, adapter })).toMatchObject({ state: "ReviewPending" });
+    expect(reviewSemanticApprovalWithHistory({ commonDir: root, packet: second, adapter })).toMatchObject({ state: "ReviewPending" });
+  });
+
   it("binds the reviewer verdict to the exact packet and rejects action or binding drift", () => {
     const packet = base();
     const adapter = { identity: "reviewer", review: () => ({
