@@ -69,6 +69,7 @@ import { authorizeDelivery, deliveryStatus, mergeDelivery, pushDelivery, upsertD
 import {
   createRecoveryApproval,
   inspectRecoveryState,
+  quarantineInvalidEvidence,
   recordRecoveryApproval,
 } from "./recovery/service.js";
 import { readLkgChain } from "./receipt/service.js";
@@ -642,6 +643,7 @@ Usage:
   harness-automation rollback [--project .] [--change <id>] [--recovery-approval <recovery-id>]
   harness-automation recovery status [--project .]
   harness-automation recovery approve --id <finding-id> --approved-by <person> --expires-at <ISO-8601> [--project .]
+  harness-automation recovery quarantine --id <finding-id> --approval <approval-id> [--project .]
   harness-automation lkg [--project .]
   harness-automation worktree status|audit [--project .]
   harness-automation worktree retention-audit [--receipt-scope host-global|project] [--project .]
@@ -693,7 +695,11 @@ function runRecoveryCommand(root: string, args: ParsedArguments): void {
     printJson({ approval, path: recordRecoveryApproval(context, approval) });
     return;
   }
-  throw new Error("RECOVERY_COMMAND_REQUIRED: choose recovery status or recovery approve");
+  if (action === "quarantine") {
+    printJson({ path: quarantineInvalidEvidence(context, required(args, "approval"), required(args, "id")) });
+    return;
+  }
+  throw new Error("RECOVERY_COMMAND_REQUIRED: choose recovery status, recovery approve, or recovery quarantine");
 }
 
 function printLkg(root: string): void {

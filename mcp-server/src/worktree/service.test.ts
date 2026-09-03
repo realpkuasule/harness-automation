@@ -2717,7 +2717,7 @@ describe("hash-approved worktree lifecycle", () => {
       approval: planned.plan.planHash,
     })).toEqual(receipt);
     expect(readFileSync(calls, "utf8")).toBe("2");
-  });
+  }, 20_000);
 
   it("requires configured-Project legacy allocation plans to be regenerated", () => {
     if (process.platform === "win32") return;

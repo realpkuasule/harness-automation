@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, readdirSync, rmdirSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import {
   durableWriteOnce,
@@ -8,7 +8,7 @@ import {
   readJson,
   safePath,
 } from "../v2/fs.js";
-import { readLatestReceiptEvent, readLkgChain, readReceiptChain } from "../receipt/service.js";
+import { appendReceiptEvent, readLatestReceiptEvent, readLkgChain, readReceiptChain } from "../receipt/service.js";
 
 export const SAFE_MODE_COMMANDS = ["doctor", "audit", "plan", "receipt", "lkg", "recovery-plan", "recovery-verify"] as const;
 export type SafeModeCommand = typeof SAFE_MODE_COMMANDS[number];
@@ -23,7 +23,7 @@ export interface RecoveryApproval {
   schemaVersion: "recovery-approval/2.0";
   kind: "semantic-human-approval";
   id: string;
-  targetKind: "file-apply" | "file-rollback" | "workspace";
+  targetKind: "file-apply" | "file-rollback" | "workspace" | "invalid";
   targetId: string;
   planHash: string;
   action: RecoveryAction;
@@ -72,6 +72,7 @@ export interface RecoveryFinding {
   action: RecoveryAction;
   packetHash: string;
   evidenceHash: string;
+  quarantineSource?: { root: "project" | "common"; path: string };
 }
 
 export type RecoveryAction = "resume-apply" | "resume-rollback" | "quarantine-invalid-evidence";
@@ -92,6 +93,39 @@ function recoveryRoot(context: RecoveryContext): string {
   return context.repository === false
     ? safePath(context.projectDir, ".harness/recovery")
     : safePath(context.commonDir, "harness/recovery");
+}
+
+function rootForSource(context: RecoveryContext, source: NonNullable<RecoveryFinding["quarantineSource"]>): string {
+  return source.root === "project" ? context.projectDir : context.commonDir;
+}
+
+function evidenceHashForPath(root: string, relativePath: string): string {
+  const visit = (path: string): unknown => {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) throw new Error("RECOVERY_EVIDENCE_SYMLINK");
+    if (stat.isDirectory()) {
+      return { type: "directory", entries: readdirSync(path).sort().map((name) => [name, visit(safePath(path, name))]) };
+    }
+    if (stat.isFile()) return { type: "file", sha256: fileHash(path) };
+    return { type: "other" };
+  };
+  return hashObject({ path: relativePath, evidence: visit(safePath(root, relativePath)) });
+}
+
+function invalidFinding(
+  context: RecoveryContext,
+  id: string,
+  packet: unknown,
+  source: NonNullable<RecoveryFinding["quarantineSource"]>,
+): RecoveryFinding {
+  return {
+    kind: "invalid",
+    id,
+    action: "quarantine-invalid-evidence",
+    packetHash: hashObject(packet),
+    evidenceHash: evidenceHashForPath(rootForSource(context, source), source.path),
+    quarantineSource: source,
+  };
 }
 
 /** This is the same lock path used by the worktree lifecycle. */
@@ -234,7 +268,7 @@ export function createRecoveryApproval(args: {
   approvedAt: string;
   expiresAt: string;
 }): RecoveryApproval {
-  if (args.finding.kind === "invalid" || !args.finding.planHash) {
+  if (args.finding.kind !== "invalid" && !args.finding.planHash) {
     throw new Error("RECOVERY_APPROVAL_TARGET_INVALID");
   }
   const approval: RecoveryApproval = {
@@ -247,7 +281,7 @@ export function createRecoveryApproval(args: {
     }).slice(0, 12)}`,
     targetKind: args.finding.kind,
     targetId: args.finding.id,
-    planHash: args.finding.planHash,
+    planHash: args.finding.planHash ?? hashObject({ kind: "invalid-evidence", id: args.finding.id, evidenceHash: args.finding.evidenceHash }),
     action: args.finding.action,
     packetHash: args.finding.packetHash,
     evidenceHash: args.finding.evidenceHash,
@@ -272,8 +306,9 @@ function validateRecoveryApproval(context: RecoveryContext, approval: RecoveryAp
   if (!approval || typeof approval !== "object" || approval.schemaVersion !== "recovery-approval/2.0" ||
       approval.kind !== "semantic-human-approval" ||
       !/^recovery-[a-f0-9]{16}-[a-f0-9]{12}$/u.test(approval.id) ||
-      !["file-apply", "file-rollback", "workspace"].includes(approval.targetKind) ||
-      !approval.targetId || !["resume-apply", "resume-rollback"].includes(approval.action) ||
+      !["file-apply", "file-rollback", "workspace", "invalid"].includes(approval.targetKind) ||
+      !approval.targetId || !["resume-apply", "resume-rollback", "quarantine-invalid-evidence"].includes(approval.action) ||
+      (approval.targetKind === "invalid") !== (approval.action === "quarantine-invalid-evidence") ||
       !validDigest(approval.planHash) || !validDigest(approval.packetHash) || !validDigest(approval.evidenceHash) ||
       approval.contextDigest !== contextDigest(context) || !approval.approvedBy ||
       !Number.isFinite(Date.parse(approval.approvedAt)) || !Number.isFinite(Date.parse(approval.expiresAt)) ||
@@ -298,14 +333,75 @@ export function recoveryExecutionAllowed(
   } catch {
     throw new Error("RECOVERY_HUMAN_APPROVAL_REQUIRED");
   }
+  const planHash = finding.planHash ?? hashObject({ kind: "invalid-evidence", id: finding.id, evidenceHash: finding.evidenceHash });
   if (finding.kind === "invalid" || !finding.planHash || approval.id !== approvalRef ||
       approval.targetKind !== finding.kind || approval.targetId !== finding.id ||
-      approval.planHash !== finding.planHash || approval.action !== finding.action ||
+      approval.planHash !== planHash || approval.action !== finding.action ||
       approval.packetHash !== finding.packetHash || approval.evidenceHash !== finding.evidenceHash ||
       Date.parse(approval.approvedAt) > now.getTime() || Date.parse(approval.expiresAt) <= now.getTime()) {
     throw new Error("RECOVERY_HUMAN_APPROVAL_REQUIRED");
   }
   return approval;
+}
+
+/** Moves one currently-invalid evidence object aside; it never deletes or rewrites it. */
+export function quarantineInvalidEvidence(
+  context: RecoveryContext,
+  approvalRef: string | undefined,
+  findingId: string,
+  now = new Date(),
+): string {
+  if (!approvalRef || !/^recovery-[a-f0-9]{16}-[a-f0-9]{12}$/u.test(approvalRef)) {
+    throw new Error("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+  }
+  const lock = acquireMutationLock(context);
+  try {
+    const finding = inspectRecoveryState(context).filter((item) => item.kind === "invalid" && item.id === findingId);
+    if (finding.length !== 1) throw new Error("RECOVERY_QUARANTINE_TARGET_INVALID");
+    const target = finding[0];
+    const sourceDefinition = target.quarantineSource;
+    if (!sourceDefinition) throw new Error("RECOVERY_QUARANTINE_TARGET_INVALID");
+    const planHash = hashObject({ kind: "invalid-evidence", id: target.id, evidenceHash: target.evidenceHash });
+    let approval: RecoveryApproval;
+    try {
+      approval = readJson<RecoveryApproval>(safePath(recoveryRoot(context), `approvals/${approvalRef}.json`));
+      validateRecoveryApproval(context, approval);
+    } catch {
+      throw new Error("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+    }
+    if (approval.id !== approvalRef || approval.targetKind !== "invalid" || approval.targetId !== target.id ||
+        approval.action !== "quarantine-invalid-evidence" || approval.planHash !== planHash ||
+        approval.packetHash !== target.packetHash || approval.evidenceHash !== target.evidenceHash ||
+        Date.parse(approval.approvedAt) > now.getTime() || Date.parse(approval.expiresAt) <= now.getTime()) {
+      throw new Error("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+    }
+    const sourceRoot = rootForSource(context, sourceDefinition);
+    const source = safePath(sourceRoot, sourceDefinition.path);
+    if (evidenceHashForPath(sourceRoot, sourceDefinition.path) !== target.evidenceHash) {
+      throw new Error("RECOVERY_EVIDENCE_DRIFTED");
+    }
+    const stateDirectory = sourceDefinition.root === "project" ? ".harness" : "harness";
+    const destination = safePath(sourceRoot, `${stateDirectory}/recovery/quarantine/${approval.id}`);
+    const started = appendReceiptEvent({
+      root: sourceRoot,
+      stateDirectory,
+      domain: "recovery-quarantine",
+      transactionId: approval.id,
+      snapshot: { schemaVersion: "recovery-quarantine/1.0", kind: "recovery-quarantine", status: "started", source: sourceDefinition, approvalHash: approval.approvalHash, evidenceHash: target.evidenceHash },
+    });
+    mkdirSync(join(destination, ".."), { recursive: true });
+    renameSync(source, destination);
+    appendReceiptEvent({
+      root: sourceRoot,
+      stateDirectory,
+      domain: "recovery-quarantine",
+      transactionId: approval.id,
+      snapshot: { schemaVersion: "recovery-quarantine/1.0", kind: "recovery-quarantine", status: "quarantined", source: sourceDefinition, approvalHash: approval.approvalHash, evidenceHash: target.evidenceHash, startedEventHash: started.eventHash, quarantinedAt: now.toISOString() },
+    });
+    return destination;
+  } finally {
+    releaseMutationLock(lock);
+  }
 }
 
 function completedFileChange(projectDir: string, changeDir: string, journal: FileApplyJournal): boolean {
@@ -459,11 +555,14 @@ export function inspectRecoveryState(context: RecoveryContext): RecoveryFinding[
   try {
     workspaceLkg = readLkgChain({ root: context.commonDir, domain: "workspace" });
   } catch {
-    findings.push({ kind: "invalid", id: "lkg:workspace", action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-lkg-chain/1.0", domain: "workspace" }), evidenceHash: hashObject("workspace") });
+    findings.push(invalidFinding(context, "lkg:workspace", { kind: "invalid-lkg-chain/1.0", domain: "workspace" }, { root: "common", path: "harness/lkg/workspace" }));
   }
   for (const id of workspaceReceiptIds) {
     if (!/^worktree-[A-Za-z0-9._-]{1,120}$/u.test(id)) {
-      findings.push({ kind: "invalid", id, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-workspace-receipt/1.0", id }), evidenceHash: hashObject(id) });
+      const immutablePath = safePath(context.commonDir, `harness/receipts/workspace/${id}`);
+      findings.push(invalidFinding(context, id, { kind: "invalid-workspace-receipt/1.0", id }, existsSync(immutablePath)
+        ? { root: "common", path: `harness/receipts/workspace/${id}` }
+        : { root: "common", path: `harness/worktree-delivery/receipts/${id}.json` }));
       continue;
     }
     const receiptPath = safePath(receipts, `${id}.json`);
@@ -501,7 +600,10 @@ export function inspectRecoveryState(context: RecoveryContext): RecoveryFinding[
         });
       }
     } catch {
-      findings.push({ kind: "invalid", id, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-workspace-receipt/1.0", id }), evidenceHash: existsSync(receiptPath) ? fileHash(receiptPath) ?? hashObject(id) : hashObject(id) });
+      const immutablePath = safePath(context.commonDir, `harness/receipts/workspace/${id}`);
+      findings.push(invalidFinding(context, id, { kind: "invalid-workspace-receipt/1.0", id }, existsSync(immutablePath)
+        ? { root: "common", path: `harness/receipts/workspace/${id}` }
+        : { root: "common", path: `harness/worktree-delivery/receipts/${id}.json` }));
     }
   }
 
@@ -514,14 +616,14 @@ export function inspectRecoveryState(context: RecoveryContext): RecoveryFinding[
         try {
           readReceiptChain({ root: receiptRoot, stateDirectory, domain, transactionId: id });
         } catch {
-          findings.push({ kind: "invalid", id: `${domain}:${id}`, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-receipt-chain/1.0", domain, id }), evidenceHash: hashObject({ domain, id }) });
+          findings.push(invalidFinding(context, `${domain}:${id}`, { kind: "invalid-receipt-chain/1.0", domain, id }, { root: context.repository === false ? "project" : "common", path: `${stateDirectory}/receipts/${domain}/${id}` }));
         }
       }
     }
     try {
       readLkgChain({ root: receiptRoot, stateDirectory, domain });
     } catch {
-      findings.push({ kind: "invalid", id: `lkg:${domain}`, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-lkg-chain/1.0", domain }), evidenceHash: hashObject(domain) });
+      findings.push(invalidFinding(context, `lkg:${domain}`, { kind: "invalid-lkg-chain/1.0", domain }, { root: context.repository === false ? "project" : "common", path: `${stateDirectory}/lkg/${domain}` }));
     }
   }
 
@@ -529,7 +631,7 @@ export function inspectRecoveryState(context: RecoveryContext): RecoveryFinding[
   if (!existsSync(changes)) return findings;
   for (const id of readdirSync(changes)) {
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(id)) {
-      findings.push({ kind: "invalid", id, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-change-id/1.0", id }), evidenceHash: hashObject(id) });
+      findings.push(invalidFinding(context, id, { kind: "invalid-change-id/1.0", id }, { root: "project", path: `.harness/changes/${id}` }));
       continue;
     }
     const changeDir = safePath(changes, id);
@@ -549,7 +651,7 @@ export function inspectRecoveryState(context: RecoveryContext): RecoveryFinding[
           });
         }
       } catch {
-        findings.push({ kind: "invalid", id, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-file-journal/1.0", id }), evidenceHash: fileHash(journalPath) ?? hashObject(id) });
+        findings.push(invalidFinding(context, id, { kind: "invalid-file-journal/1.0", id }, { root: "project", path: `.harness/changes/${id}/apply.json` }));
       }
     }
     const rollbackPath = safePath(changeDir, "rollback.json");
@@ -568,7 +670,7 @@ export function inspectRecoveryState(context: RecoveryContext): RecoveryFinding[
           });
         }
       } catch {
-        findings.push({ kind: "invalid", id, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-rollback-journal/1.0", id }), evidenceHash: fileHash(rollbackPath) ?? hashObject(id) });
+        findings.push(invalidFinding(context, id, { kind: "invalid-rollback-journal/1.0", id }, { root: "project", path: `.harness/changes/${id}/rollback.json` }));
       }
     }
   }

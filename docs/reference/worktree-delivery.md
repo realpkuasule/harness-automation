@@ -289,6 +289,7 @@ gate on the local audit. CI reports the host-local gate as unavailable.
 
 ```bash
 harness-automation rollback --project . --change <receipt-id>
+harness-automation recovery status --project .
 ```
 
 Configuration rollback restores both the repository policy and host binding;
@@ -300,3 +301,9 @@ a new close plan instead.
 
 Never bypass a blocked result with force flags. Use the reported dirty evidence
 to prepare a separate, owner-approved rescue or disposition plan.
+
+When `recovery status` reports an invalid durable journal or receipt, it stays
+in safe mode. An owner may first create its bound recovery approval, then run
+`recovery quarantine --id <finding-id> --approval <approval-id>`. Quarantine
+moves exactly the currently approved evidence into the local recovery store;
+it never deletes or rewrites it and records immutable before/after receipts.

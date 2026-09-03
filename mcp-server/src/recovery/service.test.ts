@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +10,7 @@ import {
   createFileApplyJournal,
   createRecoveryApproval,
   inspectRecoveryState,
+  quarantineInvalidEvidence,
   recordRecoveryApproval,
   releaseMutationLock,
   requireMutationAllowed,
@@ -254,6 +255,25 @@ describe("recovery safe mode", () => {
       approvalRef: approval.id,
       now: new Date("2026-01-01T00:00:30.000Z"),
     })).toThrow("RECOVERY_REQUIRED");
+  });
+
+  it("quarantines only a freshly approved invalid evidence file and preserves an immutable receipt", () => {
+    const ctx = context();
+    const journal = writeJournal(ctx.projectDir, "change-one");
+    const path = join(ctx.projectDir, ".harness", "changes", "change-one", "apply.json");
+    writeFileSync(path, prettyJson({ ...journal, written: ["other.txt"] }));
+    const finding = inspectRecoveryState(ctx).find((item) => item.kind === "invalid")!;
+    const approval = createRecoveryApproval({
+      context: ctx, finding, approvedBy: "owner", approvedAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-01-01T00:01:00.000Z",
+    });
+    recordRecoveryApproval(ctx, approval);
+    expect(() => quarantineInvalidEvidence(ctx, approval.id, "other", new Date("2026-01-01T00:00:30.000Z")))
+      .toThrow("RECOVERY_QUARANTINE_TARGET_INVALID");
+    const destination = quarantineInvalidEvidence(ctx, approval.id, finding.id, new Date("2026-01-01T00:00:30.000Z"));
+    expect(existsSync(path)).toBe(false);
+    expect(existsSync(destination)).toBe(true);
+    expect(inspectRecoveryState(ctx)).toEqual([]);
+    expect(existsSync(join(ctx.projectDir, ".harness", "receipts", "recovery-quarantine", approval.id, "events", "000000000002.json"))).toBe(true);
   });
 });
 
