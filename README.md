@@ -376,7 +376,7 @@ The command never fetches, writes GitHub settings, changes token scopes, or modi
 - `enforced`: real checkers reject known-invalid fixtures;
 - `passing`: the current codebase passes the checks.
 
-`stackAdapters` additionally reports per-stack built-in adapter coverage, and `stackCoverageComplete` summarizes whether everything is covered. Writing something into an instruction file is not the same as enforced. Design-judgment rules always show as `guidance`; missing runtimes or adapters show as `blocked`. A generic Harness baseline can apply successfully to an unknown stack, but that does not mean the language has gained deterministic enforcement.
+`stackAdapters` reports each stack's support, enforcement, passing result, and evidence: adapter reachability, known-bad fixture rejection, and project-gate connection. A naming adapter is `verified` only when all three proofs are present and the project check passes; missing proof is `blocked`, while a real project violation is `failing`. `stackCoverageComplete` requires every selected stack to have supported, enforced coverage. Design-judgment rules remain `guidance`; a generic Harness baseline does not grant unknown stacks deterministic enforcement.
 
 ## CLI and MCP
 

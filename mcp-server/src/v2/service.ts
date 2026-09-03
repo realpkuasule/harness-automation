@@ -1591,15 +1591,49 @@ export function checkProject(projectRoot: string, observedDrift?: ReturnType<typ
   const hardPassing = hardResults.every((item) => item.passing);
   const stackAdapters = policy.project.stacks.map<StackAdapterResult>((stack) => {
     const support = stackAdapterSupport(stack);
+    const checker = stack === "typescript" ? naming.typescript
+      : stack === "python" ? naming.python
+      : stack === "go" ? naming.go
+      : null;
+    const ruleId = stack === "typescript" ? "typescript-naming"
+      : stack === "python" ? "python-naming"
+      : stack === "go" ? "go-naming"
+      : null;
+    const gate = ruleId ? results.find((item) => item.id === ruleId) : null;
+    const evidenceGaps = checker ? [
+      ...(checker.adapterReachable ? [] : ["adapter is unreachable"]),
+      ...(checker.knownBadRejected ? [] : ["known-bad fixture was not rejected"]),
+      ...(gate ? [] : ["project check gate is not connected"]),
+    ] : [];
+    const supported = checker !== null && checker.adapterReachable && checker.knownBadRejected;
+    const enforced = supported && gate?.enforced === true;
+    const passing = enforced && gate?.passing === true;
     const available = support !== "none";
     return {
       stack,
       support,
       available,
-      status: available ? "available" : "blocked",
-      detail: available
-        ? `Harness provides ${support} policy support for '${stack}'.`
-        : `No built-in adapter for '${stack}'; generic continuity policies are active, but stack-specific enforcement is unavailable.`,
+      supported,
+      enforced,
+      passing,
+      status: checker
+        ? evidenceGaps.length > 0 ? "blocked" : passing ? "verified" : "failing"
+        : support === "guidance" || support === "procedural" ? "guidance" : "blocked",
+      evidence: {
+        adapterReachable: checker?.adapterReachable ?? false,
+        knownBadRejected: checker?.knownBadRejected ?? false,
+        projectGateConnected: gate !== null,
+      },
+      evidenceGaps,
+      detail: checker
+        ? evidenceGaps.length > 0
+          ? `Naming adapter for '${stack}' is blocked: ${evidenceGaps.join("; ")}.`
+          : passing
+            ? `Naming adapter for '${stack}' is supported and enforced by the project check gate.`
+            : `Naming adapter for '${stack}' is supported and enforced, but the project check is failing.`
+        : available
+          ? `Harness provides ${support} guidance for '${stack}', not stack-specific enforced support.`
+          : `No built-in adapter for '${stack}'; generic continuity policies are active, but stack-specific enforcement is unavailable.`,
     };
   });
   const agents = policy.agents.adapters.map((adapter) => {
@@ -1624,7 +1658,7 @@ export function checkProject(projectRoot: string, observedDrift?: ReturnType<typ
     agents,
     results,
     stackAdapters,
-    stackCoverageComplete: stackAdapters.every((adapter) => adapter.available),
+    stackCoverageComplete: stackAdapters.every((adapter) => adapter.supported && adapter.enforced),
     violations,
   };
 }

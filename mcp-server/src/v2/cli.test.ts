@@ -109,6 +109,20 @@ describe("v2 CLI forward flow", () => {
     expect(run(root, ["context", "--agent", "codex"]).agent).toBe("codex");
     const checked = run(root, ["check", "--mode", "session"]);
     expect(checked.ok).toBe(true);
+    expect(checked.stackAdapters).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stack: "typescript",
+        supported: true,
+        enforced: true,
+        passing: true,
+        status: "verified",
+        evidence: {
+          adapterReachable: true,
+          knownBadRejected: true,
+          projectGateConnected: true,
+        },
+      }),
+    ]));
     expect((run(root, ["explain", "typescript-naming"]).id)).toBe("typescript-naming");
     expect(run(root, ["drift"]).clean).toBe(true);
     expect(run(root, ["update", "plan"])).toMatchObject({ status: "current", planPath: null, planHash: null });
