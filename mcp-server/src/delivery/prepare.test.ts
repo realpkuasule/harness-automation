@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   cpSync,
   chmodSync,
@@ -15,15 +15,16 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { readLkgChain, readReceiptChain } from "../receipt/service.js";
+import { appendReceiptEvent, readLkgChain, readReceiptChain } from "../receipt/service.js";
 import { admitSession } from "../session/admission.js";
 import { hashObject, sha256, withoutHash } from "../v2/fs.js";
 import { workspaceStatus } from "../worktree/service.js";
-import { authorizeDelivery, pushDelivery } from "./service.js";
+import { authorizeDelivery, deliveryStatus, pushDelivery } from "./service.js";
 import {
   deliveryPrepareJournalSchema,
   deliveryPreparePlanSchema,
   prepareDelivery,
+  type DeliveryPrepareJournal,
   type DeliveryPrepareOptions,
 } from "./prepare.js";
 
@@ -154,6 +155,99 @@ function prepareTransaction(item: Fixture): string {
   return `prepare-${sha256(item.session).slice(0, 24)}`;
 }
 
+function runPrepareProcess(item: Fixture): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  const serialized = {
+    ...item.options,
+    now: fixedNow.toISOString(),
+    testPauseDuringWorkItemAdmissionMs: 400,
+  };
+  const script = `
+import { prepareDelivery } from ${JSON.stringify(join(packageRoot, "src/delivery/prepare.ts"))};
+const options = ${JSON.stringify(serialized)};
+options.now = new Date(options.now);
+const result = await prepareDelivery(options);
+process.stdout.write(JSON.stringify(result));
+`;
+  return new Promise((resolveProcess) => {
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+      cwd: packageRoot,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+    child.once("close", (status) => resolveProcess({ status, stdout, stderr }));
+  });
+}
+
+async function preparedGitHubIdentityFixture(suffix: string): Promise<{
+  item: Fixture;
+  branch: string;
+  authorizationHash: string;
+  transactionId: string;
+}> {
+  const item = fixture("github", suffix);
+  const branch = `codex/7-${suffix}`;
+  git(item.root, "worktree", "add", "-q", "-b", branch, item.target, item.options.baseSha);
+  const authorization = authorizeDelivery({
+    projectRoot: item.target,
+    workItem: "github:example/project#7",
+    baseBranch: "main",
+    featureBranch: branch,
+    allowedPaths: ["README.md"],
+    intent: "Legacy delivery before v3 Prepare",
+    approvalSource: "test-before-prepare",
+    now: fixedNow,
+  }).authorization;
+  const result = await prepareDelivery({
+    ...item.options,
+    workItem: "github:example/project#7",
+    githubRequest: (_root, args) => args.includes("GET")
+      ? { ok: true, value: {
+          number: 7,
+          node_id: "ISSUE_7",
+          state: "open",
+          title: "Export data",
+          body: "",
+          html_url: "https://github.com/example/project/issues/7",
+          updated_at: fixedNow.toISOString(),
+        } }
+      : { ok: false, error: "unexpected request" },
+  });
+  const chain = readReceiptChain<DeliveryPrepareJournal>({
+    root: item.commonDir,
+    domain: "delivery-prepare",
+    transactionId: result.transactionId,
+  });
+  const prepared: DeliveryPrepareJournal = {
+    ...chain.at(-1)!.snapshot,
+    phase: "prepared",
+    state: "Prepared",
+    outcome: "PreparedNotOpened",
+    blocked: false,
+    branch,
+    path: realpathSync.native(item.target),
+    updatedAt: new Date(fixedNow.getTime() + 1_000).toISOString(),
+    journalHash: "",
+  };
+  const unhashed = { ...prepared };
+  delete (unhashed as Partial<DeliveryPrepareJournal>).journalHash;
+  prepared.journalHash = hashObject(unhashed);
+  appendReceiptEvent({
+    root: item.commonDir,
+    domain: "delivery-prepare",
+    transactionId: result.transactionId,
+    snapshot: deliveryPrepareJournalSchema.parse(prepared),
+    projection: {
+      root: item.commonDir,
+      path: `harness/delivery-prepare/journals/${result.transactionId}.json`,
+    },
+  });
+  return { item, branch, authorizationHash: authorization.authorizationHash, transactionId: result.transactionId };
+}
+
 afterEach(() => {
   for (const path of fixtures.splice(0).reverse()) {
     if (existsSync(path)) rmSync(path, { recursive: true, force: true });
@@ -282,6 +376,37 @@ describe("delivery prepare", () => {
     expect(readLkgChain({ root: item.commonDir, domain: "delivery-prepare" })).toHaveLength(1);
   });
 
+  it("single-flights the same transaction across independent Node processes", async () => {
+    const item = fixture("none", "concurrent-processes");
+    const [first, second] = await Promise.all([runPrepareProcess(item), runPrepareProcess(item)]);
+
+    expect([first.status, second.status]).toEqual([0, 0]);
+    const receipts = [first, second].map((result) => JSON.parse(result.stdout) as {
+      transactionId: string;
+      receiptEventHash: string;
+      lkgRecordHash: string;
+      workItem: string;
+    });
+    expect(receipts[0].transactionId).toBe(receipts[1].transactionId);
+    expect(receipts[0].receiptEventHash).toBe(receipts[1].receiptEventHash);
+    expect(receipts[0].lkgRecordHash).toBe(receipts[1].lkgRecordHash);
+    expect((board(item).tasks as unknown[])).toHaveLength(1);
+    const status = workspaceStatus(item.root);
+    expect(status.leases.filter((lease) => lease.workItem === receipts[0].workItem)).toHaveLength(1);
+    expect(status.worktrees.filter((worktree) => worktree.path === realpathSync.native(item.target))).toHaveLength(1);
+    const chain = readReceiptChain({
+      root: item.commonDir,
+      domain: "delivery-prepare",
+      transactionId: receipts[0].transactionId,
+    });
+    const semanticPhases = chain.map((event) => (event.snapshot as { phase: string }).phase)
+      .filter((phase, index, phases) => index === 0 || phase !== phases[index - 1]);
+    expect(semanticPhases).toEqual([
+      "planned", "work-item-admitted", "claim-acquired", "workspace-established", "binding-seeded", "prepared",
+    ]);
+    expect(readLkgChain({ root: item.commonDir, domain: "delivery-prepare" })).toHaveLength(1);
+  });
+
   it.each(["working-tree", "index", "head", "plan"] as const)(
     "does not hide %s drift behind an orphan workspace plan",
     async (drift) => {
@@ -308,6 +433,59 @@ describe("delivery prepare", () => {
       expect(workspaceStatus(item.root).leases).toHaveLength(0);
     },
   );
+
+  it.each(["management-bytes", "host-binding"] as const)(
+    "revalidates %s after a workspace plan is journal-bound and immediately before apply",
+    async (drift) => {
+      const item = fixture("none", `bound-${drift}`);
+      await expect(prepareDelivery({ ...item.options, testCrashAfterWorkspacePlanBound: true }))
+        .rejects.toThrow("TEST_DELIVERY_PREPARE_AFTER_WORKSPACE_PLAN_BOUND");
+
+      await expect(prepareDelivery({
+        ...item.options,
+        testBeforeWorkspaceApplyValidation: () => {
+          if (drift === "management-bytes") {
+            write(item.root, "late-drift.txt", "changed after entry validation\n");
+          } else {
+            const path = join(item.commonDir, "harness/worktree-delivery/host-binding.json");
+            const binding = JSON.parse(readFileSync(path, "utf8")) as { allowedRoots: string[] };
+            binding.allowedRoots.push(join(tmpdir(), "late-binding-drift"));
+            writeFileSync(path, `${JSON.stringify(binding, null, 2)}\n`, "utf8");
+          }
+        },
+      })).rejects.toThrow(drift === "management-bytes"
+        ? "DELIVERY_PREPARE_MANAGEMENT_CHECKOUT_DRIFT"
+        : "DELIVERY_PREPARE_ADMISSION_DRIFT");
+      expect(existsSync(item.target)).toBe(false);
+      expect(workspaceStatus(item.root).leases).toHaveLength(0);
+    },
+  );
+
+  it("revalidates an adopted exact HEAD after its workspace plan is journal-bound", async () => {
+    const item = fixture("none", "bound-adopted-head");
+    execFileSync("python3", [
+      join(repositoryRoot, "scripts/task.py"), "--local-only", "add", "0", "Existing task", "Already admitted", "--by", "fixture-owner",
+    ], {
+      cwd: item.root,
+      env: { PATH: process.env.PATH, LANG: process.env.LANG ?? "C.UTF-8", HARNESS_REPO_ROOT: item.root, PYTHONDONTWRITEBYTECODE: "1" },
+    });
+    const branch = "codex/P0-1-bound-adopt";
+    git(item.root, "worktree", "add", "-q", "-b", branch, item.target, item.options.baseSha);
+    const options = { ...item.options, workItem: "local:P0-1", branch, path: item.target };
+    await expect(prepareDelivery({ ...options, testCrashAfterWorkspacePlanBound: true }))
+      .rejects.toThrow("TEST_DELIVERY_PREPARE_AFTER_WORKSPACE_PLAN_BOUND");
+
+    await expect(prepareDelivery({
+      ...options,
+      testBeforeWorkspaceApplyValidation: () => {
+        write(item.target, "late-head.txt", "advance adopted worktree\n");
+        git(item.target, "add", "late-head.txt");
+        git(item.target, "commit", "-q", "-m", "late adopted drift");
+      },
+    })).rejects.toThrow("DELIVERY_PREPARE_ADOPTION_HEAD_DRIFT");
+    expect(existsSync(item.target)).toBe(true);
+    expect(workspaceStatus(item.root).leases).toHaveLength(0);
+  });
 
   it("executes only the bundled Local-only tracker with a minimal child environment", async () => {
     const item = fixture("none", "bundled-script");
@@ -591,6 +769,37 @@ exec /usr/bin/git "$@"
     expect(readdirSync(receiptDirectory).filter((name) => name.startsWith("delivery-authorization-"))).toHaveLength(beforeAuthorizations);
   });
 
+  it("permanently suspends legacy delivery for a Prepared v3 identity", async () => {
+    const prepared = await preparedGitHubIdentityFixture("prepared-identity");
+    expect(deliveryStatus(prepared.item.target, prepared.authorizationHash).invalidation)
+      .toBe("CoordinationBackendRequired");
+  });
+
+  it("uses immutable Prepare receipts when the mutable projection is absent", async () => {
+    const prepared = await preparedGitHubIdentityFixture("receipt-first");
+    rmSync(join(
+      prepared.item.commonDir,
+      "harness/delivery-prepare/journals",
+      `${prepared.transactionId}.json`,
+    ));
+    expect(deliveryStatus(prepared.item.target, prepared.authorizationHash).invalidation)
+      .toBe("CoordinationBackendRequired");
+  });
+
+  it("canonicalizes repository case and decimal issue aliases before the v3 legacy fence", async () => {
+    const prepared = await preparedGitHubIdentityFixture("canonical-identity");
+    expect(() => authorizeDelivery({
+      projectRoot: prepared.item.target,
+      workItem: "github:Example/Project#007",
+      repository: "example/project",
+      baseBranch: "main",
+      featureBranch: prepared.branch,
+      allowedPaths: ["README.md"],
+      intent: "Alias must not bypass v3 coordination",
+      approvalSource: "test-alias",
+    })).toThrow("CoordinationBackendRequired");
+  });
+
   it("does not switch a GitHub project to Local-only when the network is unavailable", async () => {
     const item = fixture("github", "network");
     await expect(prepareDelivery({
@@ -607,6 +816,57 @@ exec /usr/bin/git "$@"
     await expect(prepareDelivery(item.options)).rejects.toThrow("DELIVERY_PREPARE_GITHUB_CREDENTIAL_REQUIRED");
     expect(workspaceStatus(item.root).leases).toHaveLength(0);
     expect(workspaceStatus(item.root).worktrees).toHaveLength(1);
+  });
+
+  it("keeps Admission and existing-worktree facts on the credential-free local observation path", async () => {
+    const item = fixture("github", "credential-local-facts");
+    const leasedTarget = `${item.root}-leased`;
+    fixtures.push(leasedTarget);
+    const leasedBranch = "codex/99-existing";
+    git(item.root, "worktree", "add", "-q", "-b", leasedBranch, leasedTarget, item.options.baseSha);
+    write(item.commonDir, `harness/worktree-delivery/leases/${sha256("github:example/project#99")}.json`, {
+      schemaVersion: "1.0",
+      workItem: "github:example/project#99",
+      branch: leasedBranch,
+      path: realpathSync.native(leasedTarget),
+      owner: "fixture-owner",
+      acceptedCommit: item.options.baseSha,
+      createdAt: fixedNow.toISOString(),
+      heartbeatAt: fixedNow.toISOString(),
+      status: "active",
+    });
+    const requestedBranch = "codex/7-existing";
+    git(item.root, "worktree", "add", "-q", "-b", requestedBranch, item.target, item.options.baseSha);
+    const fakeBin = mkdtempSync(join(tmpdir(), "harness-prepare-gh-canary-"));
+    fixtures.push(fakeBin);
+    const called = join(fakeBin, "ambient-gh-called");
+    writeFileSync(join(fakeBin, "gh"), `#!/bin/sh\ntouch ${JSON.stringify(called)}\nprintf '{}'\n`, "utf8");
+    chmodSync(join(fakeBin, "gh"), 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${fakeBin}:${savedPath ?? ""}`;
+    try {
+      const result = await prepareDelivery({
+        ...item.options,
+        workItem: "github:example/project#7",
+        branch: requestedBranch,
+        path: item.target,
+        githubRequest: (_root, args) => args.includes("GET")
+          ? { ok: true, value: {
+              number: 7,
+              node_id: "ISSUE_7",
+              state: "open",
+              title: "Export data",
+              body: "",
+              html_url: "https://github.com/example/project/issues/7",
+              updated_at: fixedNow.toISOString(),
+            } }
+          : { ok: false, error: "unexpected request" },
+      });
+      expect(result.outcome).toBe("CoordinationBackendRequired");
+      expect(existsSync(called)).toBe(false);
+    } finally {
+      process.env.PATH = savedPath;
+    }
   });
 
   it("does not silently adopt a branch that predates the Prepare transaction", async () => {

@@ -6,8 +6,7 @@ import { commandJson } from "../worktree/provider.js";
 import { loadWorktreeConfig } from "../worktree/config.js";
 import { runGit, runGitCommand } from "../repository/git.js";
 import { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
-import { readLatestReceiptEvent } from "../receipt/service.js";
-import { deliveryPrepareJournalSchema, type DeliveryPrepareJournal } from "./prepare.js";
+import { readDeliveryPrepareTransactions } from "./prepare.js";
 import {
   DELIVERY_AUTHORIZATION_SCHEMA_VERSION,
   DELIVERY_RECEIPT_SCHEMA_VERSION,
@@ -85,28 +84,19 @@ function receiptPath(common: string, id: string): string {
   return safePath(common, `harness/worktree-delivery/receipts/${id}.json`);
 }
 
+function canonicalGitHubWorkItem(value: string): string | null {
+  const match = /^github:([^/\s]+)\/([^#\s]+)#([0-9]+)$/iu.exec(value.trim());
+  if (!match) return null;
+  const issue = match[3].replace(/^0+(?=[0-9])/u, "");
+  return `github:${match[1].toLowerCase()}/${match[2].toLowerCase()}#${issue}`;
+}
+
 function coordinationBlock(common: string, workItem: string): boolean {
-  const directory = safePath(common, "harness/delivery-prepare/journals");
-  if (!existsSync(directory)) return false;
-  for (const name of readdirSync(directory).filter((entry) => /^prepare-[a-f0-9]{24}\.json$/u.test(entry)).sort()) {
-    const transactionId = name.slice(0, -".json".length);
-    const projection = readJson<unknown>(join(directory, name));
-    const parsedProjection = deliveryPrepareJournalSchema.safeParse(projection);
-    if (!parsedProjection.success) throw new Error("DELIVERY_PREPARE_JOURNAL_INVALID");
-    const event = readLatestReceiptEvent<DeliveryPrepareJournal>({
-      root: common,
-      domain: "delivery-prepare",
-      transactionId,
-      compatibilitySnapshot: parsedProjection.data,
-    });
-    if (!event) continue;
-    const latest = deliveryPrepareJournalSchema.parse(event.snapshot);
-    const unhashed = { ...latest };
-    delete (unhashed as Partial<DeliveryPrepareJournal>).journalHash;
-    if (latest.journalHash !== hashObject(unhashed)) throw new Error("DELIVERY_PREPARE_JOURNAL_INVALID");
-    if (latest.workItem === workItem && latest.outcome === "CoordinationBackendRequired" && latest.blocked) return true;
-  }
-  return false;
+  const expected = canonicalGitHubWorkItem(workItem);
+  if (!expected) return false;
+  return readDeliveryPrepareTransactions(common).some((transaction) => transaction.events.some((event) =>
+    event.snapshot.mode === "github" && event.snapshot.workItem !== null &&
+    canonicalGitHubWorkItem(event.snapshot.workItem) === expected));
 }
 
 function assertLegacyCoordinationAllowed(root: string, workItem: string): void {
@@ -345,11 +335,11 @@ export function authorizeDelivery(options: {
   const observedRepository = githubEndpointRepository(endpoint.value, remote).toLowerCase();
   const repository = (options.repository?.trim() || observedRepository).toLowerCase();
   if (repository !== observedRepository) throw new Error("DELIVERY_REMOTE_REPOSITORY_MISMATCH");
-  if (!/^github:[^/]+\/[^#]+#\d+$/u.test(options.workItem.trim()) ||
-      !options.workItem.toLowerCase().startsWith(`github:${repository}#`)) {
+  const workItem = canonicalGitHubWorkItem(options.workItem);
+  if (!workItem || !workItem.startsWith(`github:${repository}#`)) {
     throw new Error(`DELIVERY_WORK_ITEM_REPOSITORY_MISMATCH: ${options.workItem}`);
   }
-  assertLegacyCoordinationAllowed(root, options.workItem.trim());
+  assertLegacyCoordinationAllowed(root, workItem);
   const baseBranch = options.baseBranch.trim();
   const featureBranch = options.featureBranch?.trim() || currentBranch(root);
   if (!baseBranch || !featureBranch || baseBranch === featureBranch) throw new Error("DELIVERY_BRANCH_INVALID");
@@ -375,13 +365,13 @@ export function authorizeDelivery(options: {
   const authorization: DeliveryAuthorization = {
     schemaVersion: DELIVERY_AUTHORIZATION_SCHEMA_VERSION,
     kind: "delivery-authorization",
-    id: `delivery-${options.workItem.trim().split("#").at(-1)}-${sha256(`${options.workItem}\n${featureBranch}\n${issuedAt}`).slice(0, 12)}`,
+    id: `delivery-${workItem.split("#").at(-1)}-${sha256(`${workItem}\n${featureBranch}\n${issuedAt}`).slice(0, 12)}`,
     issuedAt,
     approval: { source: approvalSource, sourceHash: sha256(approvalSource) },
     supersedes: options.supersedes,
     intent,
     intentHash: sha256(intent),
-    workItem: options.workItem.trim(),
+    workItem,
     repository,
     remote: { name: remote, endpointHash: endpoint.hash },
     baseBranch,
@@ -417,10 +407,12 @@ export function latestDeliveryAuthorization(projectRoot: string, workItem: strin
   const root = repositoryRoot(projectRoot);
   const directory = receiptDirectory(commonDir(root));
   if (!existsSync(directory)) return null;
+  const expected = canonicalGitHubWorkItem(workItem);
+  if (!expected) return null;
   const values = readdirSync(directory)
     .filter((name) => name.startsWith("delivery-authorization-") && name.endsWith(".json"))
     .map((name) => readJson<DeliveryAuthorization>(join(directory, name)))
-    .filter((authorization) => authorization.workItem === workItem)
+    .filter((authorization) => canonicalGitHubWorkItem(authorization.workItem) === expected)
     .map(ensureAuthorization);
   if (values.length <= 1) return values[0] ?? null;
   const superseded = new Set(values.flatMap((authorization) => authorization.supersedes ? [authorization.supersedes] : []));

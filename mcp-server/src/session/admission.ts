@@ -124,7 +124,9 @@ function observeFacts(
   const repository = resolveRepositoryContext(projectRoot);
   const loaded = loadWorktreeConfig(repository.projectDir);
   const binding = loadWorktreeHostBinding(repository.projectDir, repository.commonDir, loaded.legacyBinding);
-  const status = workspaceStatus(binding.topology?.managementCheckout ?? repository.projectDir);
+  const status = workspaceStatus(binding.topology?.managementCheckout ?? repository.projectDir, {
+    providerObservation: { kind: "none", configured: false, available: true, items: [] },
+  });
   const currentWorktree = status.worktrees.find((candidate) => samePath(candidate.path, repository.projectDir));
   if (!currentWorktree || currentWorktree.bare || currentWorktree.prunable) {
     fail("SESSION_ADMISSION_DELIVERY_FACTS_INVALID", "current checkout is not an active worktree");

@@ -1,10 +1,12 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
-import { atomicWrite, hashObject, readJson, safePath, sha256 } from "../v2/fs.js";
-import { readLatestReceiptEvent, readLkgChain, readReceiptChain } from "../receipt/service.js";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { atomicWrite, readJson, safePath, sha256 } from "../v2/fs.js";
+import { readLkgChain, readReceiptChain } from "../receipt/service.js";
 import {
-  deliveryPrepareJournalSchema,
   localBoardSchema,
+  readDeliveryPrepareTransactions,
   type DeliveryPrepareJournal,
 } from "../delivery/prepare.js";
 import { observeProvider } from "../worktree/provider.js";
@@ -39,6 +41,7 @@ import {
 } from "./types.js";
 
 const SEED_SECTION_HEADING = "## SEED（由 CLI 确定性生成，勿手改）";
+const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 
 const HANDOFF_SECTIONS = [
   "## 目标与验收标准",
@@ -317,6 +320,8 @@ export interface SessionCommandOptions {
   session?: string;
   toStatus?: string;
   dryRun?: boolean;
+  /** Deterministic test seam immediately before Local-only task status CAS. */
+  testBeforeLocalStatusCas?: () => void;
 }
 
 function parseSessionId(session: string | undefined): string {
@@ -448,28 +453,14 @@ function localSessionEvidence(root: string, workItem: LocalParsedWorkItem): Loca
   const ancestry = runGitCommand(lease.path, ["merge-base", "--is-ancestor", lease.acceptedCommit, worktree.head], process.env);
   if (ancestry.error || ancestry.status !== 0) throw new Error(`SESSION_LOCAL_HEAD_DRIFT: ${workItem.workItem}`);
 
-  const journals = safePath(commonDir, "harness/delivery-prepare/journals");
-  const prepared: Array<{ journal: DeliveryPrepareJournal; receiptEventHash: string }> = [];
-  if (existsSync(journals) && lstatSync(journals).isDirectory()) {
-    for (const name of readdirSync(journals).filter((entry) => /^prepare-[a-f0-9]{24}\.json$/u.test(entry)).sort()) {
-      const transactionId = name.slice(0, -".json".length);
-      const projection = deliveryPrepareJournalSchema.parse(readJson<unknown>(join(journals, name)));
-      const event = readLatestReceiptEvent<DeliveryPrepareJournal>({
-        root: commonDir,
-        domain: "delivery-prepare",
-        transactionId,
-        compatibilitySnapshot: projection,
-      });
-      if (!event) continue;
-      const journal = deliveryPrepareJournalSchema.parse(event.snapshot);
-      const unhashed = { ...journal };
-      delete (unhashed as Partial<DeliveryPrepareJournal>).journalHash;
-      if (journal.journalHash !== hashObject(unhashed)) throw new Error("SESSION_LOCAL_PREPARE_INVALID");
-      if (journal.workItem === workItem.workItem && journal.state === "Prepared" && journal.outcome === "PreparedNotOpened") {
-        prepared.push({ journal, receiptEventHash: event.eventHash });
-      }
-    }
-  }
+  const prepared = readDeliveryPrepareTransactions(commonDir).flatMap((transaction) => {
+    const event = transaction.latest;
+    const journal = event.snapshot;
+    return journal.mode === "local-only" && journal.workItem === workItem.workItem &&
+      journal.state === "Prepared" && journal.outcome === "PreparedNotOpened"
+      ? [{ journal, receiptEventHash: event.eventHash }]
+      : [];
+  });
   if (prepared.length !== 1) throw new Error(`SESSION_LOCAL_PREPARE_INVALID: ${workItem.workItem}`);
   const evidence = prepared[0];
   if (evidence.journal.branch !== lease.branch || resolve(evidence.journal.path ?? "") !== resolve(lease.path)) {
@@ -740,6 +731,67 @@ function displayStatus(kebab: string, statusValues: Record<string, string>): str
   return statusValues[kebab] ?? kebab;
 }
 
+function bundledTaskScript(): string {
+  const scriptDirectory = [
+    join(moduleDirectory, "..", "scripts"),
+    join(moduleDirectory, "..", "..", "..", "scripts"),
+  ].find((candidate) => {
+    const task = join(candidate, "task.py");
+    const helper = join(candidate, "local_tracking.py");
+    return existsSync(task) && existsSync(helper) && lstatSync(task).isFile() && !lstatSync(task).isSymbolicLink() &&
+      lstatSync(helper).isFile() && !lstatSync(helper).isSymbolicLink();
+  });
+  if (!scriptDirectory) throw new Error("SESSION_LOCAL_TRACKING_SCRIPT_REQUIRED");
+  return join(scriptDirectory, "task.py");
+}
+
+function updateLocalTaskStatusCas(
+  root: string,
+  workItem: LocalParsedWorkItem,
+  expectedStatus: string,
+  nextStatus: "in_progress",
+  actor: string,
+): void {
+  const result = spawnSync(process.platform === "win32" ? "python" : "python3", [
+    bundledTaskScript(),
+    "--local-only",
+    "update",
+    workItem.id,
+    "--status",
+    nextStatus,
+    "--expected-status",
+    expectedStatus,
+    "--by",
+    actor,
+  ], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 30_000,
+    maxBuffer: 1024 * 1024,
+    env: {
+      PATH: process.env.PATH,
+      LANG: process.env.LANG ?? "C.UTF-8",
+      HARNESS_REPO_ROOT: root,
+      PYTHONDONTWRITEBYTECODE: "1",
+      ...(process.platform === "win32" ? {
+        SystemRoot: process.env.SystemRoot,
+        WINDIR: process.env.WINDIR,
+        COMSPEC: process.env.COMSPEC,
+        PATHEXT: process.env.PATHEXT,
+      } : {}),
+    },
+  });
+  const detail = `${result.stderr || result.stdout || result.error?.message || ""}`.trim();
+  if (result.error || result.status !== 0) {
+    throw new Error(`SESSION_LOCAL_TRACKING_UPDATE_FAILED: ${detail || `exit ${result.status ?? "unknown"}`}`);
+  }
+  const board = localBoardSchema.parse(readJson<unknown>(safePath(gitCommonDir(root), "harness/local-tracking/TASK.json")));
+  const matches = board.tasks.filter((task) => task.id === workItem.id && task.status !== "deleted");
+  if (matches.length !== 1 || matches[0].status !== nextStatus) {
+    throw new Error(`SESSION_LOCAL_TRACKING_READBACK_FAILED: ${workItem.workItem}`);
+  }
+}
+
 function localSessionHandoff(
   options: SessionCommandOptions,
   workItem: LocalParsedWorkItem,
@@ -749,6 +801,9 @@ function localSessionHandoff(
 ): SessionHandoffResult {
   const root = options.projectRoot;
   const dryRun = options.dryRun === true;
+  if (toStatus !== HANDOFF_CONTINUATION_STATUS) {
+    throw new Error(`SESSION_LOCAL_STATUS_UNSUPPORTED: ${toStatus} has no TASK.json status mapping`);
+  }
   const { seed, evidence } = localSeed(root, loaded, workItem);
   const repositoryPath = resolve(git(root, ["rev-parse", "--show-toplevel"]).trim());
   if (repositoryPath !== resolve(evidence.lease.path) || currentBranchForSession(root) !== evidence.lease.branch) {
@@ -810,7 +865,9 @@ function localSessionHandoff(
     };
   }
 
+  options.testBeforeLocalStatusCas?.();
   atomicWrite(docPath, content);
+  updateLocalTaskStatusCas(root, workItem, evidence.task.status, "in_progress", sessionId);
   const receipt: SessionReceipt = {
     schemaVersion: SESSION_HANDOFF_RECEIPT_SCHEMA_VERSION,
     kind: "session-handoff-receipt",

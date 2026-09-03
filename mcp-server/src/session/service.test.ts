@@ -213,7 +213,14 @@ function readdirOrEmpty(dir: string): string[] {
   return existsSync(dir) ? readdirSync(dir) : [];
 }
 
-async function localFixture(): Promise<{ root: string; target: string; receiptEventHash: string; branch: string; workItem: string }> {
+async function localFixture(): Promise<{
+  root: string;
+  target: string;
+  receiptEventHash: string;
+  transactionId: string;
+  branch: string;
+  workItem: string;
+}> {
   const root = directory();
   const target = `${root}-delivery`;
   directories.push(target);
@@ -267,7 +274,14 @@ async function localFixture(): Promise<{ root: string; target: string; receiptEv
     path: target,
     now,
   });
-  return { root, target, receiptEventHash: prepared.receiptEventHash, branch: prepared.branch!, workItem: prepared.workItem };
+  return {
+    root,
+    target,
+    receiptEventHash: prepared.receiptEventHash,
+    transactionId: prepared.transactionId,
+    branch: prepared.branch!,
+    workItem: prepared.workItem,
+  };
 }
 
 function filledLocalDoc(receipt: string): string {
@@ -581,8 +595,66 @@ describe("session status", () => {
 
     write(local.target, "docs/HANDOFF-local-P0-1.md", filledLocalDoc(local.receiptEventHash));
     const ready = sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-next" });
-    expect(ready).toMatchObject({ phase: "ready", dryRun: false });
+    expect(ready).toMatchObject({
+      phase: "ready",
+      dryRun: false,
+      receipt: { fromStatus: "pending", toStatus: "in-progress" },
+    });
     expect(ready).not.toHaveProperty("issueUpdates");
     expect(readFileSync(join(local.target, "docs/HANDOFF-local-P0-1.md"), "utf8")).not.toContain("conflicting chat summary");
+    const commonDir = git(local.root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const board = JSON.parse(readFileSync(join(commonDir, "harness/local-tracking/TASK.json"), "utf8")) as {
+      tasks: Array<{ id: string; status: string }>;
+    };
+    expect(board.tasks.find((task) => task.id === "P0-1")?.status).toBe("in_progress");
+  });
+
+  it("restores Local-only facts from the immutable Prepare receipt when its projection is absent", async () => {
+    const local = await localFixture();
+    const commonDir = git(local.root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    rmSync(join(commonDir, "harness/delivery-prepare/journals", `${local.transactionId}.json`));
+
+    const status = sessionStatus({ projectRoot: local.target, workItem: local.workItem });
+    expect(status.items[0]).toMatchObject({
+      workItem: local.workItem,
+      prepare: { transactionId: local.transactionId, receiptEventHash: local.receiptEventHash },
+    });
+    expect(sessionSeed({ projectRoot: local.target, workItem: local.workItem }).seed)
+      .toContain(local.receiptEventHash);
+  });
+
+  it("does not write a Local-only handoff receipt when task status CAS loses", async () => {
+    const local = await localFixture();
+    sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-cas" });
+    write(local.target, "docs/HANDOFF-local-P0-1.md", filledLocalDoc(local.receiptEventHash));
+    const commonDir = git(local.root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const boardPath = join(commonDir, "harness/local-tracking/TASK.json");
+
+    expect(() => sessionHandoff({
+      projectRoot: local.target,
+      workItem: local.workItem,
+      session: "local-cas",
+      testBeforeLocalStatusCas: () => {
+        const board = JSON.parse(readFileSync(boardPath, "utf8")) as {
+          meta: { updated: string };
+          tasks: Array<{ id: string; status: string }>;
+        };
+        board.tasks.find((task) => task.id === "P0-1")!.status = "completed";
+        writeFileSync(boardPath, `${JSON.stringify(board, null, 2)}\n`, "utf8");
+      },
+    })).toThrow("LOCAL_TRACKING_STATUS_CAS_FAILED");
+    expect(readdirOrEmpty(join(commonDir, "harness/session-handoff/receipts"))).toHaveLength(0);
+  });
+
+  it("rejects Local-only ready-for-review when the TASK status model has no mapping", async () => {
+    const local = await localFixture();
+    sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-review" });
+    write(local.target, "docs/HANDOFF-local-P0-1.md", filledLocalDoc(local.receiptEventHash));
+    expect(() => sessionHandoff({
+      projectRoot: local.target,
+      workItem: local.workItem,
+      session: "local-review",
+      toStatus: "ready-for-review",
+    })).toThrow("SESSION_LOCAL_STATUS_UNSUPPORTED");
   });
 });

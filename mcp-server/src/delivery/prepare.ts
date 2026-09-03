@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, readlinkSync, readdirSync, realpathSync, unlinkSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSync, realpathSync, rmdirSync, unlinkSync } from "node:fs";
+import { hostname } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
@@ -8,6 +9,7 @@ import {
   appendLkgRecord,
   appendReceiptEvent,
   readLatestReceiptEvent,
+  readReceiptChain,
   type ReceiptEvent,
 } from "../receipt/service.js";
 import { acquireMutationLock, releaseMutationLock } from "../recovery/service.js";
@@ -39,6 +41,12 @@ export const DELIVERY_PREPARE_PHASES = [
 ] as const;
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+const LOCAL_FACTS_PROVIDER_OBSERVATION = {
+  kind: "none" as const,
+  configured: false,
+  available: true,
+  items: [],
+};
 
 type PreparePhase = typeof DELIVERY_PREPARE_PHASES[number];
 type PrepareMode = "github" | "local-only";
@@ -162,6 +170,12 @@ export interface DeliveryPrepareOptions {
   testFailAfter?: PreparePhase;
   /** Simulates process death after the workspace planner writes its immutable plan. */
   testCrashAfterWorkspacePlan?: boolean;
+  /** Simulates process death after the workspace plan is archived and journal-bound. */
+  testCrashAfterWorkspacePlanBound?: boolean;
+  /** Deterministic cross-process contention seam used only by transaction tests. */
+  testPauseDuringWorkItemAdmissionMs?: number;
+  /** Deterministic drift seam immediately before the final pre-apply validation. */
+  testBeforeWorkspaceApplyValidation?: () => void;
 }
 
 export const localTaskSchema = z.object({
@@ -297,6 +311,67 @@ function parseJournal(value: unknown): DeliveryPrepareJournal {
   return journal;
 }
 
+export interface DeliveryPrepareTransactionEvidence {
+  transactionId: string;
+  events: Array<ReceiptEvent<DeliveryPrepareJournal>>;
+  latest: ReceiptEvent<DeliveryPrepareJournal>;
+}
+
+/** Immutable receipt chains are authoritative; projections are optional compatibility evidence. */
+export function readDeliveryPrepareTransactions(commonDir: string): DeliveryPrepareTransactionEvidence[] {
+  const receiptRoot = safePath(commonDir, "harness/receipts/delivery-prepare");
+  const projectionRoot = safePath(commonDir, "harness/delivery-prepare/journals");
+  const identifiers = new Set<string>();
+  if (existsSync(receiptRoot)) {
+    const metadata = lstatSync(receiptRoot);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) fail("DELIVERY_PREPARE_RECEIPT_STORE_INVALID");
+    for (const name of readdirSync(receiptRoot).sort()) {
+      if (!/^prepare-[a-f0-9]{24}$/u.test(name)) fail("DELIVERY_PREPARE_RECEIPT_STORE_INVALID");
+      const transactionDirectory = safePath(receiptRoot, name);
+      const transactionMetadata = lstatSync(transactionDirectory);
+      if (!transactionMetadata.isDirectory() || transactionMetadata.isSymbolicLink()) {
+        fail("DELIVERY_PREPARE_RECEIPT_STORE_INVALID");
+      }
+      identifiers.add(name);
+    }
+  }
+  if (existsSync(projectionRoot)) {
+    const metadata = lstatSync(projectionRoot);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) fail("DELIVERY_PREPARE_JOURNAL_STORE_INVALID");
+    for (const name of readdirSync(projectionRoot).sort()) {
+      const match = /^(prepare-[a-f0-9]{24})\.json$/u.exec(name);
+      if (!match) fail("DELIVERY_PREPARE_JOURNAL_STORE_INVALID");
+      const path = safePath(projectionRoot, name);
+      const projectionMetadata = lstatSync(path);
+      if (!projectionMetadata.isFile() || projectionMetadata.isSymbolicLink()) {
+        fail("DELIVERY_PREPARE_JOURNAL_STORE_INVALID");
+      }
+      identifiers.add(match[1]);
+    }
+  }
+  return [...identifiers].sort().map((id) => {
+    const projectionPath = safePath(projectionRoot, `${id}.json`);
+    const projection = existsSync(projectionPath) ? parseJournal(readJson<unknown>(projectionPath)) : undefined;
+    const rawEvents = readReceiptChain<DeliveryPrepareJournal>({
+      root: commonDir,
+      domain: "delivery-prepare",
+      transactionId: id,
+      ...(projection ? { compatibilitySnapshot: projection } : {}),
+    });
+    if (rawEvents.length === 0) fail("DELIVERY_PREPARE_RECEIPT_CHAIN_REQUIRED");
+    const events = rawEvents.map((event) => {
+      const journal = parseJournal(event.snapshot);
+      if (journal.transactionId !== id) fail("DELIVERY_PREPARE_RECEIPT_CHAIN_INVALID");
+      return { ...event, snapshot: journal };
+    });
+    const latest = events.at(-1)!;
+    if (projection && projection.journalHash !== latest.snapshot.journalHash) {
+      fail("DELIVERY_PREPARE_RECEIPT_PROJECTION_DIVERGED");
+    }
+    return { transactionId: id, events, latest };
+  });
+}
+
 function currentJournal(commonDir: string, id: string): { journal: DeliveryPrepareJournal; event: ReceiptEvent<DeliveryPrepareJournal> } | null {
   const projection = journalProjection(commonDir, id);
   const projectionPath = safePath(projection.root, projection.path);
@@ -384,6 +459,122 @@ async function withMutationLock<T>(plan: DeliveryPreparePlan, action: () => Prom
   }
 }
 
+interface DeliveryPrepareLockOwner {
+  schemaVersion: "delivery-prepare-lock/1.0";
+  host: string;
+  pid: number;
+  token: string;
+  acquiredAt: string;
+}
+
+function validPrepareLockOwner(value: unknown): value is DeliveryPrepareLockOwner {
+  const owner = value as Partial<DeliveryPrepareLockOwner> | null;
+  return Boolean(owner && owner.schemaVersion === "delivery-prepare-lock/1.0" &&
+    typeof owner.host === "string" && Number.isSafeInteger(owner.pid) && (owner.pid ?? 0) > 0 &&
+    typeof owner.token === "string" && /^[a-f0-9-]{36}$/u.test(owner.token) &&
+    typeof owner.acquiredAt === "string" && Number.isFinite(Date.parse(owner.acquiredAt)));
+}
+
+function prepareLockProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+function reclaimPrepareLock(lock: string): boolean {
+  let metadata;
+  try {
+    metadata = lstatSync(lock);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+  if (!metadata.isDirectory() || metadata.isSymbolicLink()) fail("DELIVERY_PREPARE_TRANSACTION_LOCK_INVALID");
+  let entries: string[];
+  try {
+    entries = readdirSync(lock).sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+  if (entries.length === 0 && Date.now() - metadata.mtimeMs >= 5_000) {
+    try {
+      rmdirSync(lock);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+      if ((error as NodeJS.ErrnoException).code === "ENOTEMPTY") return false;
+      throw error;
+    }
+  }
+  if (entries.length !== 1 || entries[0] !== "owner.json") return false;
+  let owner: DeliveryPrepareLockOwner;
+  try {
+    owner = readJson<DeliveryPrepareLockOwner>(join(lock, "owner.json"));
+  } catch {
+    return false;
+  }
+  if (!validPrepareLockOwner(owner) || owner.host !== hostname() || prepareLockProcessAlive(owner.pid)) return false;
+  try {
+    unlinkSync(join(lock, "owner.json"));
+    rmdirSync(lock);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    if ((error as NodeJS.ErrnoException).code === "ENOTEMPTY") return false;
+    throw error;
+  }
+}
+
+async function withPrepareTransactionLock<T>(
+  commonDir: string,
+  id: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  const lockRoot = safePath(commonDir, "harness/delivery-prepare/locks");
+  mkdirSync(lockRoot, { recursive: true });
+  const lock = safePath(lockRoot, `${id}.lock`);
+  const deadline = Date.now() + 30_000;
+  let owner: DeliveryPrepareLockOwner | null = null;
+  while (!owner) {
+    try {
+      mkdirSync(lock);
+      owner = {
+        schemaVersion: "delivery-prepare-lock/1.0",
+        host: hostname(),
+        pid: process.pid,
+        token: randomUUID(),
+        acquiredAt: new Date().toISOString(),
+      };
+      try {
+        durableWriteOnce(join(lock, "owner.json"), prettyJson(owner));
+      } catch (error) {
+        if (existsSync(join(lock, "owner.json"))) unlinkSync(join(lock, "owner.json"));
+        if (existsSync(lock) && readdirSync(lock).length === 0) rmdirSync(lock);
+        throw error;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (reclaimPrepareLock(lock)) continue;
+      if (Date.now() >= deadline) fail("DELIVERY_PREPARE_TRANSACTION_LOCK_TIMEOUT", id);
+      await new Promise<void>((resolveWait) => setTimeout(resolveWait, 25));
+    }
+  }
+  try {
+    return await action();
+  } finally {
+    const stored = readJson<DeliveryPrepareLockOwner>(join(lock, "owner.json"));
+    if (!validPrepareLockOwner(stored) || stored.host !== owner.host || stored.pid !== owner.pid || stored.token !== owner.token) {
+      fail("DELIVERY_PREPARE_TRANSACTION_LOCK_OWNERSHIP_LOST", id);
+    }
+    unlinkSync(join(lock, "owner.json"));
+    rmdirSync(lock);
+  }
+}
+
 function modeFor(root: string, localOnly: boolean): PrepareMode {
   const loaded = loadWorktreeConfig(root);
   if (!loaded.configured || loaded.config.mode !== "enforced") fail("DELIVERY_PREPARE_WORKTREE_ENFORCEMENT_REQUIRED");
@@ -427,7 +618,10 @@ function adoptedHead(
   if (!requestedWorkItem || !requestedBranch || !requestedPath || !existsSync(requestedPath)) return null;
   const id = requestedWorkItem.slice(Math.max(requestedWorkItem.lastIndexOf(":"), requestedWorkItem.lastIndexOf("#")) + 1);
   const branch = requestedBranch.replaceAll("{id}", id);
-  const status = workspaceStatus(root, { adoptionSafe: true, providerWorkItems: [requestedWorkItem] });
+  const status = workspaceStatus(root, {
+    adoptionSafe: true,
+    providerObservation: LOCAL_FACTS_PROVIDER_OBSERVATION,
+  });
   const canonicalPath = (path: string): string => existsSync(path) ? realpathSync.native(path) : resolve(path);
   const matches = status.worktrees.filter((worktree) => canonicalPath(worktree.path) === canonicalPath(requestedPath) && worktree.branch === branch);
   if (matches.length !== 1 || matches[0].detached || matches[0].bare || matches[0].locked || matches[0].prunable || matches[0].dirty) {
@@ -830,7 +1024,7 @@ function transactionOwnedOrphanWorkspacePlan(
   if (matches.length === 0) return null;
   const status = workspaceStatus(plan.management.projectDir, {
     ...(adoption ? { adoptionSafe: true } : {}),
-    providerWorkItems: [workItem],
+    providerObservation: LOCAL_FACTS_PROVIDER_OBSERVATION,
   });
   if (matches[0].plan.observedHash !== status.observedHash) fail("DELIVERY_PREPARE_ORPHAN_PLAN_DRIFT");
   return matches[0];
@@ -847,7 +1041,9 @@ function verifyPreparedWorkspace(
   if (receipt.status !== "applied" || receipt.operation !== workspacePlan.operation.kind) {
     fail("DELIVERY_PREPARE_WORKSPACE_APPLY_FAILED");
   }
-  const status = workspaceStatus(plan.management.projectDir);
+  const status = workspaceStatus(plan.management.projectDir, {
+    providerObservation: LOCAL_FACTS_PROVIDER_OBSERVATION,
+  });
   const leases = status.leases.filter((lease) => lease.workItem === workItem);
   const worktrees = status.worktrees.filter((worktree) => worktree.path === lease.path);
   if (leases.length !== 1 || worktrees.length !== 1) fail("DELIVERY_PREPARE_WORKSPACE_READBACK_FAILED");
@@ -918,6 +1114,14 @@ function reached(current: DeliveryPrepareJournal, phase: PreparePhase): boolean 
   return DELIVERY_PREPARE_PHASES.indexOf(current.phase) >= DELIVERY_PREPARE_PHASES.indexOf(phase);
 }
 
+async function testPause(milliseconds: number | undefined): Promise<void> {
+  if (milliseconds === undefined) return;
+  if (!Number.isInteger(milliseconds) || milliseconds < 0 || milliseconds > 5_000) {
+    fail("DELIVERY_PREPARE_TEST_PAUSE_INVALID");
+  }
+  await new Promise<void>((resolvePause) => setTimeout(resolvePause, milliseconds));
+}
+
 /** One confirmed, journaled Prepare event. It never substitutes Local-only for a configured GitHub project. */
 async function prepareDeliveryTransaction(options: DeliveryPrepareOptions): Promise<DeliveryPrepareReceipt> {
   const plan = loadOrCreatePlan(options);
@@ -936,6 +1140,7 @@ async function prepareDeliveryTransaction(options: DeliveryPrepareOptions): Prom
     if (!current.journal.workItem) {
       const workItem = await withMutationLock(plan, async () => {
         assertManagementUnchanged(plan);
+        await testPause(options.testPauseDuringWorkItemAdmissionMs);
         return plan.mode === "local-only"
           ? admitLocalWorkItem(plan)
           : admitGitHubWorkItem(plan, options.githubRequest);
@@ -1014,10 +1219,15 @@ async function prepareDeliveryTransaction(options: DeliveryPrepareOptions): Prom
         path: lease.path,
         error: null,
       }, options.now ?? new Date()));
+      if (options.testCrashAfterWorkspacePlanBound) throw new Error("TEST_DELIVERY_PREPARE_AFTER_WORKSPACE_PLAN_BOUND");
     }
     const lease = preparedLease(workspacePlan);
 
     // applyWorkspacePlan owns the same common-dir lock; never hold acquireMutationLock across this call.
+    options.testBeforeWorkspaceApplyValidation?.();
+    validateAdmission(plan, options.now);
+    validateAdoptedHead(plan);
+    assertManagementUnchanged(plan, current.journal.workspacePlan!.path);
     const workspaceReceipt = applyWorkspacePlan({
       projectRoot: plan.management.projectDir,
       planPath: current.journal.workspacePlan!.path,
@@ -1071,7 +1281,8 @@ async function prepareDeliveryTransaction(options: DeliveryPrepareOptions): Prom
     return withMutationLock(plan, () => finalReceipt(plan, current!.journal, current!.event, false));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (message === "TEST_DELIVERY_PREPARE_AFTER_WORKSPACE_PLAN") throw error;
+    if (message === "TEST_DELIVERY_PREPARE_AFTER_WORKSPACE_PLAN" ||
+        message === "TEST_DELIVERY_PREPARE_AFTER_WORKSPACE_PLAN_BOUND") throw error;
     try {
       const latest = currentJournal(plan.management.commonDir, plan.transactionId);
       if (latest && latest.journal.outcome !== "PreparedNotOpened" && latest.journal.outcome !== "CoordinationBackendRequired") {
@@ -1105,7 +1316,8 @@ export async function prepareDelivery(options: DeliveryPrepareOptions): Promise<
     }
     return deliveryPrepareReceiptSchema.parse({ ...winner, reused: true });
   }
-  const flight = prepareDeliveryTransaction(options);
+  const flight = withPrepareTransactionLock(context.commonDir, transactionId(options.session), () =>
+    prepareDeliveryTransaction(options));
   activePrepareTransactions.set(key, flight);
   try {
     return await flight;
