@@ -710,9 +710,11 @@ function blockedResult(
 
 export function auditWorkspace(projectRoot: string): WorkspaceAudit {
   const status = workspaceStatus(projectRoot);
-  const incompleteMigrations = stateJsonFiles(status.commonDir, "receipts").flatMap(({ path }) => {
+  const incompleteMigrations = workspaceReceiptIds(status.commonDir).flatMap((id) => {
+    const path = receiptFile(status.commonDir, id);
     try {
-      const receipt = readJson<WorkspaceReceipt>(path);
+      const receipt = inspectWorkspaceReceipt(status.commonDir, id)?.receipt;
+      if (!receipt) return [];
       return receipt.operation === "migrate" && (receipt.status === "started" || receipt.status === "failed")
         ? [`${receipt.id}: ${receipt.status}: ${path}`]
         : [];
@@ -3007,6 +3009,20 @@ function receiptProjection(commonDir: string, id: string): { root: string; path:
   };
 }
 
+function workspaceReceiptIds(commonDir: string): string[] {
+  const ids = new Set(stateJsonFiles(commonDir, "receipts")
+    .map(({ path }) => basename(path, ".json"))
+    .filter((id) => workspaceReceiptId.test(id)));
+  const immutableRoot = safePath(commonDir, "harness/receipts/workspace");
+  if (!existsSync(immutableRoot)) return [...ids].sort();
+  if (!lstatSync(immutableRoot).isDirectory()) throw new Error("WORKSPACE_RECEIPT_INVALID");
+  for (const id of readdirSync(immutableRoot)) {
+    if (!workspaceReceiptId.test(id)) throw new Error("WORKSPACE_RECEIPT_INVALID");
+    ids.add(id);
+  }
+  return [...ids].sort();
+}
+
 function inspectWorkspaceReceipt(commonDir: string, id: string): {
   receipt: WorkspaceReceipt;
   event: ReceiptEvent<WorkspaceReceipt> | null;
@@ -4245,8 +4261,8 @@ function laterLifecycleUsesAdoptedLease(
   operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>,
 ): string | null {
   const hashes = new Set(operation.items.map((item) => item.afterLeaseHash));
-  for (const { path } of stateJsonFiles(commonDir, "receipts")) {
-    const candidate = inspectWorkspaceReceipt(commonDir, basename(path, ".json"))!.receipt;
+  for (const id of workspaceReceiptIds(commonDir)) {
+    const candidate = inspectWorkspaceReceipt(commonDir, id)!.receipt;
     if (candidate.id === receipt.id) continue;
     const use = candidate.leaseChanges?.find(
       (change) => change.beforeHash !== null && hashes.has(change.beforeHash),

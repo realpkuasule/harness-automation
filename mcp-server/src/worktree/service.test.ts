@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { hashObject, prettyJson, sha256, withoutHash } from "../v2/fs.js";
+import { readLkgChain, readReceiptChain } from "../receipt/service.js";
 import { createRecoveryApproval, inspectRecoveryState, recordRecoveryApproval } from "../recovery/service.js";
 import { resolveRepositoryContext } from "../repository/git.js";
 import type { WorktreeApprovalPolicy, WorktreeDelegatableOperation } from "./types.js";
@@ -607,6 +608,69 @@ describe("portable worktree inventory", () => {
 });
 
 describe("hash-approved worktree lifecycle", () => {
+  it("chains workspace receipts, records LKG, and repairs an interrupted LKG projection", () => {
+    const root = repository();
+    const planned = planWorkspaceConfiguration({
+      projectRoot: root,
+      mode: "enforced",
+      allowedRoots: [join(root, "..")],
+      remoteBranchDeletion: false,
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    const receipt = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    const commonDir = workspaceStatus(root).commonDir;
+    const key = { root: commonDir, domain: "workspace", transactionId: receipt.id };
+    const chain = readReceiptChain(key);
+    expect(chain[0].snapshot).toMatchObject({ status: "started" });
+    expect(chain.at(-1)?.snapshot).toMatchObject({ status: "applied" });
+    expect(readLkgChain({ root: commonDir, domain: "workspace" }).at(-1))
+      .toMatchObject({ receiptEventHash: chain.at(-1)?.eventHash, planHash: receipt.planHash });
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: "0".repeat(64),
+    })).toThrow(/APPROVAL_MISMATCH/);
+
+    rmSync(join(commonDir, "harness", "lkg", "workspace", "records"), { recursive: true, force: true });
+    const context = resolveRepositoryContext(root);
+    const finding = inspectRecoveryState(context).find((item) =>
+      item.kind === "workspace" && item.id === receipt.id)!;
+    const approval = createRecoveryApproval({
+      context,
+      finding,
+      approvedBy: "owner",
+      approvedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:01:00.000Z",
+    });
+    recordRecoveryApproval(context, approval);
+    expect(applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+      recoveryApprovalRef: approval.id,
+      now: new Date("2099-01-01T00:00:30.000Z"),
+    })).toEqual(receipt);
+    expect(inspectRecoveryState(context)).toEqual([]);
+
+    const projection = join(commonDir, "harness", "worktree-delivery", "receipts", `${receipt.id}.json`);
+    rmSync(projection);
+    expect(inspectRecoveryState(context)).toEqual([]);
+    expect(applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toEqual(receipt);
+    expect(existsSync(projection)).toBe(true);
+
+    const rolledBack = rollbackWorkspaceChange({ projectRoot: root, changeId: receipt.id });
+    expect(rolledBack).toMatchObject({ status: "rolled-back", rollbackObservedHash: expect.any(String) });
+    expect(readLkgChain({ root: commonDir, domain: "workspace" })).toHaveLength(2);
+  });
+
   it("separates portable policy from the host-local path binding", () => {
     const root = repository();
     const allowedRoot = join(root, "..");
@@ -3499,6 +3563,10 @@ process.stdout.write(fs.readFileSync(process.argv[2]));
       approval: closed.plan.planHash,
     });
     rollbackWorkspaceChange({ projectRoot: root, changeId: closeReceipt.id });
+    rmSync(join(
+      workspaceStatus(root).commonDir,
+      "harness", "worktree-delivery", "receipts", `${closeReceipt.id}.json`,
+    ));
 
     expect(() => rollbackWorkspaceChange({
       projectRoot: root,

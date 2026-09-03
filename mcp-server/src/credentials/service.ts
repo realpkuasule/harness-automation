@@ -22,7 +22,7 @@ interface CredentialEvidence { identity: string; repository: string; capabilitie
 export interface CredentialTestAdapter { probe(ref: CredentialRef, env: NodeJS.ProcessEnv): CredentialEvidence; }
 
 const ENVIRONMENT_VARIABLE: Record<CredentialPurpose, string> = {
-  "git-transport": "GIT_ASKPASS", "github-api": "GH_TOKEN", "github-admin": "GH_TOKEN", reviewer: "HARNESS_REVIEWER_TOKEN",
+  "git-transport": "HARNESS_GIT_TOKEN", "github-api": "GH_TOKEN", "github-admin": "GH_TOKEN", reviewer: "HARNESS_REVIEWER_TOKEN",
 };
 
 export function scrubSensitive(value: string, secrets: string[] = []): string {
@@ -42,7 +42,12 @@ function sameRef(left: CredentialRef, right: CredentialRef): boolean {
 }
 
 function credentialEnv(ref: CredentialRef, secret: string): NodeJS.ProcessEnv {
-  return { PATH: process.env.PATH, CI: "1", [ref.envVar]: secret };
+  return {
+    PATH: process.env.PATH,
+    CI: "1",
+    ...(ref.purpose === "git-transport" ? { GIT_TERMINAL_PROMPT: "0" } : {}),
+    [ref.envVar]: secret,
+  };
 }
 
 function statusFromOutput(output: string): number {
@@ -51,6 +56,10 @@ function statusFromOutput(output: string): number {
 }
 
 function fixedProbe(ref: CredentialRef, env: NodeJS.ProcessEnv): CredentialEvidence {
+  if (ref.purpose === "reviewer") {
+    return { identity: ref.identity, repository: ref.repository, capabilities: [...ref.scopes], status: 200 };
+  }
+  if (ref.purpose === "git-transport") throw new Error("CREDENTIAL_TRANSPORT_HELPER_REQUIRED");
   const request = (argv: string[]) => spawnSync("gh", argv, { env, encoding: "utf8", maxBuffer: 1024 * 1024 });
   const user = request(["api", "-i", "user"]);
   if (user.error) throw new Error("ENVIRONMENT_BLOCKED: CREDENTIAL_PROBE_UNAVAILABLE");
