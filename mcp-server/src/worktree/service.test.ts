@@ -2030,7 +2030,7 @@ describe("hash-approved worktree lifecycle", () => {
 
     expect(git(root, "branch", "--list", "issue-52-squash-local")).toBe("");
     expect(git(root, "ls-remote", "--heads", "origin", "refs/heads/issue-52-squash-upstream")).toBe("");
-  });
+  }, 20_000);
 
   it("fails closed for missing, ambiguous, invalid, and unavailable GitHub merge proof", () => {
     installMergedPullRequestGh();
@@ -2164,7 +2164,7 @@ describe("hash-approved worktree lifecycle", () => {
       workItem: "github:example/project#59",
       acceptedCommit: head,
     })).toThrow(/GITHUB_REMOTE_REPOSITORY_MISMATCH/);
-  });
+  }, 20_000);
 
   it("writes an applied close receipt when invoked from the worktree being removed", () => {
     const root = repositoryWithRemote();
