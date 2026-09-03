@@ -95,10 +95,37 @@ export function atomicWrite(path: string, content: string): void {
   }
 }
 
+function fsyncDirectory(path: string): void {
+  const descriptor = openSync(path, "r");
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function durableMkdir(path: string): void {
+  const missing: string[] = [];
+  let current = resolve(path);
+  while (!existsSync(current)) {
+    missing.push(current);
+    const parent = dirname(current);
+    if (parent === current) throw new Error(`DURABLE_DIRECTORY_INVALID: ${path}`);
+    current = parent;
+  }
+  if (!lstatSync(current).isDirectory() || lstatSync(current).isSymbolicLink()) {
+    throw new Error(`DURABLE_DIRECTORY_INVALID: ${current}`);
+  }
+  for (const directory of missing.reverse()) {
+    mkdirSync(directory);
+    fsyncDirectory(dirname(directory));
+  }
+}
+
 /** Write a receipt exactly once and make both file and parent directory durable. */
 export function durableWriteOnce(path: string, content: string): void {
   const directoryPath = dirname(path);
-  mkdirSync(directoryPath, { recursive: true });
+  durableMkdir(directoryPath);
   const stagingDirectory = dirname(directoryPath);
   const temporary = join(stagingDirectory, `.${basename(path)}.harness-${process.pid}-${randomUUID()}.tmp`);
   const descriptor = openSync(temporary, "wx");
@@ -110,21 +137,11 @@ export function durableWriteOnce(path: string, content: string): void {
       closeSync(descriptor);
     }
     linkSync(temporary, path);
-    const directory = openSync(directoryPath, "r");
-    try {
-      fsyncSync(directory);
-    } finally {
-      closeSync(directory);
-    }
+    fsyncDirectory(directoryPath);
   } finally {
     if (existsSync(temporary)) {
       unlinkSync(temporary);
-      const staging = openSync(stagingDirectory, "r");
-      try {
-        fsyncSync(staging);
-      } finally {
-        closeSync(staging);
-      }
+      fsyncDirectory(stagingDirectory);
     }
   }
 }

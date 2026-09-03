@@ -178,6 +178,17 @@ describe("durable write-once", () => {
     expect(readFileSync(path, "utf8")).toBe("first");
     expect(existsSync(path)).toBe(true);
   });
+
+  it("rejects a symbolic-link receipt directory", () => {
+    if (process.platform === "win32") return;
+    const base = root();
+    const external = root();
+    const link = join(base, "receipts");
+    symlinkSync(external, link);
+    expect(() => durableWriteOnce(join(link, "one.json"), "first"))
+      .toThrow("DURABLE_DIRECTORY_INVALID");
+    expect(existsSync(join(external, "one.json"))).toBe(false);
+  });
 });
 
 afterEach(() => roots.splice(0).forEach((path) => rmSync(path, { recursive: true, force: true })));
