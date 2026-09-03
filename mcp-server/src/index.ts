@@ -84,6 +84,9 @@ import type {
   WorktreeApprovalPolicy,
   WorktreeDeliveryConfig,
 } from "./worktree/types.js";
+import { inspectRecoveryState } from "./recovery/service.js";
+import { readLkgChain } from "./receipt/service.js";
+import { resolveProjectContext } from "./repository/git.js";
 import {
   EvaluateRulesInputSchema,
   GenerateConfigInputSchema,
@@ -247,6 +250,16 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         name: "harness_rollback",
         description: "v2: precisely restore one applied plan, refusing to overwrite files changed afterward",
         inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" }, changeId: { type: "string" } } },
+      },
+      {
+        name: "harness_recovery_status",
+        description: "Read-only v3 recovery findings; does not approve or resume mutations",
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" } } },
+      },
+      {
+        name: "harness_lkg",
+        description: "Read-only v3 last-known-good receipt records",
+        inputSchema: { type: "object", additionalProperties: false, required: ["projectDir"], properties: { projectDir: { type: "string" } } },
       },
       {
         name: "harness_research_github",
@@ -677,6 +690,19 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         projectRoot: v2String("projectDir"),
         changeId: typeof v2Args.changeId === "string" ? v2Args.changeId : undefined,
       }));
+
+    case "harness_recovery_status": {
+      const context = resolveProjectContext(v2String("projectDir"));
+      return v2Result({ findings: inspectRecoveryState(context) });
+    }
+
+    case "harness_lkg": {
+      const context = resolveProjectContext(v2String("projectDir"));
+      const root = context.repository ? context.commonDir : context.projectDir;
+      const stateDirectory = context.repository ? "harness" : ".harness";
+      return v2Result({ records: ["file-apply", "file-rollback", "workspace"].flatMap((domain) =>
+        readLkgChain({ root, stateDirectory, domain }).map((record) => ({ ...record, domain }))) });
+    }
 
     case "harness_research_github":
       return v2Result(researchV2GitHub({
