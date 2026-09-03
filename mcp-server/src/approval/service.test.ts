@@ -41,7 +41,7 @@ describe("semantic approval", () => {
     const nonReversiblePacket = createSemanticApprovalPacket({
       planHash: "a".repeat(64), inputHash: "b".repeat(64), producerIdentity: "producer",
       binding: { planHash: "a".repeat(64), contextDigest: "c".repeat(64), inputDigest: "b".repeat(64), policyDigest: "d".repeat(64), observedHash: "e".repeat(64) },
-      actions: [{ id: "delete", kind: "delete", summary: "delete data", before: "present", after: "absent", reversible: false, recovery: "restore backup" }],
+      actions: [{ id: "write", kind: "write", summary: "replace data", before: "present", after: "replaced", reversible: false, recovery: "restore backup" }],
     });
     expect(reviewSemanticApproval({ packet: nonReversiblePacket })).toMatchObject({ state: "NeedsHuman", code: "HUMAN_APPROVAL_REQUIRED", packet: { risk: "human-required" } });
   });
