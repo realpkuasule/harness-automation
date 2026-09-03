@@ -1568,7 +1568,7 @@ function z(schema: ZodTypeAny): Record<string, unknown> {
         "CLAUDE.md", "eslint.config.js", ".claude/settings.json",
         ".husky/pre-commit", ".husky/commit-msg", ".github/workflows/ci.yml",
         ".gitlab-ci.yml", ".gitlab/merge_request_templates/default.md", ".gitleaks.toml",
-        "scripts/task.py", "scripts/changelog.py", "scripts/gitlab-configure.sh",
+        "scripts/task.py", "scripts/changelog.py", "scripts/local_tracking.py", "scripts/gitlab-configure.sh",
         "docs/gitlab-settings.md", "scripts/onboard.sh", "TASK.json", "CHANGELOG.jsonl",
       ];
       const cleaned: string[] = [];
@@ -2241,6 +2241,7 @@ function backupGeneratedFiles(projectDir: string): string | null {
     ".lintstagedrc.json",
     "scripts/task.py",
     "scripts/changelog.py",
+    "scripts/local_tracking.py",
     "scripts/gitlab-configure.sh",
     "docs/gitlab-settings.md",
     "scripts/onboard.sh",

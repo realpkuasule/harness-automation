@@ -389,7 +389,7 @@ python3 scripts/github_tracker.py close 123 --comment "Done"
 python3 scripts/changelog.py add feat 11 "Describe change" --issue realpkuasule/harness-automation#123
 ```
 
-配置文件在 `.github/project-workflow.json`，详细说明见 [GitHub Issue / Project Workflow](docs/development/github-project-workflow.md)。
+配置文件在 `.github/project-workflow.json`，详细说明见 [GitHub Issue / Project Workflow](docs/development/github-project-workflow.md)。随包交付的 `harness-automation tracking` 提供完整分页和写后回读的 GitHub tracking；只有显式传入 `--local-only` 时，`task.py` 与 `changelog.py` 才把数据写入 Git common dir，GitHub 故障时绝不自动切换。
 
 ## 许可证
 

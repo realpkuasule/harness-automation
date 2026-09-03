@@ -103,6 +103,11 @@ export function generateScriptsDeployment(
   const includeTask = config.includeTaskBoard !== false;
   const includeCl = config.includeChangelog !== false;
 
+  if (includeTask || includeCl) {
+    const content = getScriptContent("local_tracking.py");
+    if (content) scripts.push({ path: "scripts/local_tracking.py", content, executable: false });
+  }
+
   if (includeTask) {
     const content = getScriptContent("task.py");
     if (content) {

@@ -2,62 +2,52 @@ import { describe, it, expect } from "vitest";
 import { generateScriptsDeployment } from "./scripts_deployment.js";
 
 describe("generateScriptsDeployment", () => {
-  it("returns task.py and TASK.json when includeTaskBoard is true", () => {
+  it("returns task.py, its shared helper, and the legacy root TASK.json", () => {
     const result = generateScriptsDeployment({ includeTaskBoard: true, includeChangelog: false });
-    expect(result.scripts.length).toBe(1);
-    expect(result.scripts[0].path).toBe("scripts/task.py");
-    expect(result.scripts[0].executable).toBe(true);
-    expect(result.dataFiles.length).toBe(1);
-    expect(result.dataFiles[0].path).toBe("TASK.json");
-    // Verify TASK.json template structure with rich fields
+    expect(result.scripts.map((script) => script.path)).toEqual(["scripts/local_tracking.py", "scripts/task.py"]);
+    expect(result.scripts.find((script) => script.path === "scripts/task.py")?.executable).toBe(true);
+    expect(result.scripts.find((script) => script.path === "scripts/local_tracking.py")?.executable).toBe(false);
+    expect(result.dataFiles.map((file) => file.path)).toEqual(["TASK.json"]);
     const parsed = JSON.parse(result.dataFiles[0].content);
     expect(parsed.meta).toBeDefined();
     expect(parsed.meta.description).toContain("Task board");
     expect(parsed.tasks).toBeInstanceOf(Array);
-    expect(parsed.tasks.length).toBe(1);
-    const t = parsed.tasks[0];
-    expect(t.id).toBe("P0-0");
-    expect(t.phase).toBe(0);
-    expect(t.status).toBe("_template_");
-    expect(t.priority).toBe("medium");
-    expect(t.blockedBy).toEqual([]);
-    expect(t.blocks).toEqual([]);
-    expect(t.relatedFiles).toEqual([]);
-    expect(t.createdAt).toBeDefined();
-    expect(t.updatedAt).toBeDefined();
-    expect(t.createdBy).toBe("harness-automation");
-    expect(t.updatedBy).toBe("harness-automation");
+    expect(parsed.tasks).toHaveLength(1);
+    expect(parsed.tasks[0]).toMatchObject({
+      id: "P0-0",
+      phase: 0,
+      status: "_template_",
+      priority: "medium",
+      blockedBy: [],
+      blocks: [],
+      relatedFiles: [],
+      createdBy: "harness-automation",
+      updatedBy: "harness-automation",
+    });
+    expect(parsed.tasks[0].createdAt).toBeDefined();
+    expect(parsed.tasks[0].updatedAt).toBeDefined();
   });
 
-  it("returns changelog.py and CHANGELOG.jsonl when includeChangelog is true", () => {
+  it("returns changelog.py, its shared helper, and the legacy root CHANGELOG.jsonl", () => {
     const result = generateScriptsDeployment({ includeTaskBoard: false, includeChangelog: true });
-    expect(result.scripts.length).toBe(1);
-    expect(result.scripts[0].path).toBe("scripts/changelog.py");
-    expect(result.scripts[0].executable).toBe(true);
-    expect(result.dataFiles.length).toBe(1);
-    expect(result.dataFiles[0].path).toBe("CHANGELOG.jsonl");
-    // CHANGELOG.jsonl contains a valid JSONL entry (one line with a milestone)
-    const content = result.dataFiles[0].content;
-    expect(content).toBeTruthy();
-    expect(content.trim()).toBeTruthy();
-    const parsed = JSON.parse(content.trim());
-    expect(parsed.type).toBe("milestone");
-    expect(parsed.phase).toBe(0);
+    expect(result.scripts.map((script) => script.path)).toEqual(["scripts/local_tracking.py", "scripts/changelog.py"]);
+    expect(result.scripts.find((script) => script.path === "scripts/changelog.py")?.executable).toBe(true);
+    expect(result.dataFiles.map((file) => file.path)).toEqual(["CHANGELOG.jsonl"]);
+    const parsed = JSON.parse(result.dataFiles[0].content.trim());
+    expect(parsed).toMatchObject({ type: "milestone", phase: 0 });
     expect(parsed.timestamp).toBeDefined();
     expect(parsed.description).toContain("CHANGELOG.jsonl");
   });
 
   it("returns both when both flags are true (default)", () => {
     const result = generateScriptsDeployment();
-    expect(result.scripts.length).toBe(2);
-    expect(result.dataFiles.length).toBe(2);
-    const paths = result.dataFiles.map((d) => d.path);
-    expect(paths).toContain("TASK.json");
-    expect(paths).toContain("CHANGELOG.jsonl");
-    // Both data files have content
-    for (const df of result.dataFiles) {
-      expect(df.content).toBeTruthy();
-    }
+    expect(result.scripts.map((script) => script.path)).toEqual([
+      "scripts/local_tracking.py",
+      "scripts/task.py",
+      "scripts/changelog.py",
+    ]);
+    expect(result.dataFiles.map((file) => file.path)).toEqual(["TASK.json", "CHANGELOG.jsonl"]);
+    for (const file of result.dataFiles) expect(file.content.trim()).toBeTruthy();
   });
 
   it("script content is non-empty and contains python shebang", () => {

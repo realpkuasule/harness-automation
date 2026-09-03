@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, writeFileSync, rmSync, existsSync, chmodSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, chmodSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SetupValidator } from "./setup_validator.js";
@@ -52,6 +52,7 @@ describe("SetupValidator", () => {
     write(".harness/state.json", JSON.stringify({ status: "generated", projectDir: tmpDir }));
     write("scripts/task.py", "#!/usr/bin/env python3\nprint('test')");
     write("scripts/changelog.py", "#!/usr/bin/env python3\nprint('test')");
+    write("scripts/local_tracking.py", "# shared tracking helper");
     chmodSync(join(tmpDir, "scripts/task.py"), 0o755);
     chmodSync(join(tmpDir, "scripts/changelog.py"), 0o755);
     write("TASK.json", JSON.stringify({ tasks: [] }));
@@ -62,6 +63,74 @@ describe("SetupValidator", () => {
 
     expect(result.summary.passed).toBe(true);
     expect(result.summary.errors).toBe(0);
+  });
+
+  it.each(["missing", "directory", "empty"])("fails when an importing tracking script has a %s helper", (kind) => {
+    write("scripts/task.py", "#!/usr/bin/env python3\nfrom local_tracking import locked");
+    if (kind === "directory") mkdirSync(join(tmpDir, "scripts/local_tracking.py"));
+    if (kind === "empty") write("scripts/local_tracking.py", "");
+
+    const result = new SetupValidator({
+      projectDir: tmpDir,
+      checkFiles: ["scripts/task.py"],
+      skipPermissionCheck: true,
+    }).validate();
+
+    expect(result.summary.passed).toBe(false);
+    expect(result.findings).toContainEqual(expect.objectContaining({
+      file: "scripts/local_tracking.py",
+      type: "error",
+    }));
+  });
+
+  it.skipIf(process.platform === "win32")("fails when an importing tracking script has an unreadable helper", () => {
+    write("scripts/task.py", "#!/usr/bin/env python3\nfrom local_tracking import locked");
+    write("scripts/local_tracking.py", "# helper");
+    chmodSync(join(tmpDir, "scripts/local_tracking.py"), 0o000);
+
+    const result = new SetupValidator({
+      projectDir: tmpDir,
+      checkFiles: ["scripts/task.py"],
+      skipPermissionCheck: true,
+    }).validate();
+
+    expect(result.findings).toContainEqual(expect.objectContaining({
+      file: "scripts/local_tracking.py",
+      type: "error",
+    }));
+  });
+
+  it.skipIf(process.platform === "win32")("rejects symlinked and broken shared helpers", () => {
+    write("scripts/task.py", "#!/usr/bin/env python3\nfrom local_tracking import locked");
+    write("external-helper.py", "# outside scripts");
+    const helper = join(tmpDir, "scripts/local_tracking.py");
+    symlinkSync("../external-helper.py", helper);
+
+    const validate = () => new SetupValidator({
+      projectDir: tmpDir,
+      checkFiles: ["scripts/task.py"],
+      skipPermissionCheck: true,
+    }).validate();
+    expect(validate().findings).toContainEqual(expect.objectContaining({ file: "scripts/local_tracking.py", type: "error" }));
+
+    rmSync(helper);
+    symlinkSync("../missing-helper.py", helper);
+    expect(validate().findings).toContainEqual(expect.objectContaining({ file: "scripts/local_tracking.py", type: "error" }));
+  });
+
+  it("keeps legacy self-contained tracking scripts compatible without the helper", () => {
+    write("scripts/task.py", "#!/usr/bin/env python3\nprint('legacy')");
+
+    const result = new SetupValidator({
+      projectDir: tmpDir,
+      checkFiles: ["scripts/task.py"],
+      skipPermissionCheck: true,
+    }).validate();
+
+    expect(result.summary.passed).toBe(true);
+    expect(result.findings).not.toContainEqual(expect.objectContaining({
+      file: "scripts/local_tracking.py",
+    }));
   });
 
   it("detects empty files as warnings", () => {

@@ -2,6 +2,7 @@
 """操作 CHANGELOG.jsonl 变更记录。
 
 用法:
+  添加 --local-only 可改用 <git-common-dir>/harness/local-tracking/CHANGELOG.jsonl；不得因 GitHub 故障自动添加。
   python3 scripts/changelog.py add <type> <phase> <description> [--task-id <id>] [--issue <repo#123>] [--files path1,path2] [--by agent-name]
   python3 scripts/changelog.py list [n]
   python3 scripts/changelog.py search <keyword>
@@ -21,39 +22,81 @@ CHANGELOG.jsonl 每条记录的结构:
 import json
 import os
 import sys
+from contextlib import nullcontext
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from local_tracking import atomic_write, locked, open_text_read, reject_symlink, storage_root
 
-ROOT = Path(os.environ.get("HARNESS_REPO_ROOT", Path(__file__).resolve().parent.parent))
-CHANGELOG_FILE = ROOT / "CHANGELOG.jsonl"
+LOCAL_ONLY = "--local-only" in sys.argv[1:]
+ARGV = [argument for argument in sys.argv[1:] if argument != "--local-only"]
+ROOT = Path(os.environ.get("HARNESS_REPO_ROOT", Path(__file__).resolve().parent.parent)).resolve()
+TRACKING_ROOT = storage_root() if LOCAL_ONLY else ROOT
+CHANGELOG_FILE = TRACKING_ROOT / "CHANGELOG.jsonl"
 TZ = timezone(timedelta(hours=8))
 
 VALID_TYPES = {"feat", "fix", "refactor", "test", "docs", "milestone", "chore"}
+REQUIRED_FIELDS = {"timestamp", "type", "phase", "description"}
+OPTIONAL_FIELDS = {"taskId", "issueRef", "agent", "relatedFiles"}
 
 
 def now_iso() -> str:
     return datetime.now(TZ).strftime("%Y-%m-%dT%H:%M:%S+08:00")
 
 
+def validate_entry(entry: object, line: int) -> dict:
+    if not isinstance(entry, dict) or not REQUIRED_FIELDS.issubset(entry) or not set(entry).issubset(REQUIRED_FIELDS | OPTIONAL_FIELDS):
+        raise ValueError(f"LOCAL_TRACKING_CHANGELOG_SCHEMA_INVALID: line {line} fields")
+    if entry["type"] not in VALID_TYPES:
+        raise ValueError(f"LOCAL_TRACKING_CHANGELOG_SCHEMA_INVALID: line {line} type")
+    if not isinstance(entry["phase"], (str, int)) or isinstance(entry["phase"], bool):
+        raise ValueError(f"LOCAL_TRACKING_CHANGELOG_SCHEMA_INVALID: line {line} phase")
+    for field in ("timestamp", "description"):
+        if not isinstance(entry[field], str) or not entry[field]:
+            raise ValueError(f"LOCAL_TRACKING_CHANGELOG_SCHEMA_INVALID: line {line} {field}")
+    for field in ("taskId", "issueRef", "agent"):
+        if field in entry and (not isinstance(entry[field], str) or not entry[field]):
+            raise ValueError(f"LOCAL_TRACKING_CHANGELOG_SCHEMA_INVALID: line {line} {field}")
+    if "relatedFiles" in entry and (
+        not isinstance(entry["relatedFiles"], list) or
+        not all(isinstance(value, str) and value for value in entry["relatedFiles"])
+    ):
+        raise ValueError(f"LOCAL_TRACKING_CHANGELOG_SCHEMA_INVALID: line {line} relatedFiles")
+    return entry
+
+
 def load() -> list[dict]:
+    if LOCAL_ONLY:
+        reject_symlink(CHANGELOG_FILE)
     if not CHANGELOG_FILE.exists():
         return []
     entries = []
-    with open(CHANGELOG_FILE) as f:
-        for line in f:
+    reader = open_text_read(CHANGELOG_FILE) if LOCAL_ONLY else open(CHANGELOG_FILE, encoding="utf-8")
+    with reader as f:
+        for number, line in enumerate(f, 1):
             line = line.strip()
-            if line:
-                try:
-                    entries.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                entries.append(validate_entry(entry, number) if LOCAL_ONLY else entry)
+            except json.JSONDecodeError as error:
+                if LOCAL_ONLY:
+                    raise ValueError(f"LOCAL_TRACKING_CORRUPT_JSONL: line {number}: {error}") from error
     return entries
 
 
 def save(entries: list[dict]) -> None:
-    with open(CHANGELOG_FILE, "w") as f:
-        for e in entries:
-            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+    validated = [validate_entry(entry, index) for index, entry in enumerate(entries, 1)] if LOCAL_ONLY else entries
+    content = "".join(json.dumps(entry, ensure_ascii=False) + "\n" for entry in validated)
+    if LOCAL_ONLY:
+        atomic_write(CHANGELOG_FILE, content)
+    else:
+        with open(CHANGELOG_FILE, "w", encoding="utf-8") as handle:
+            handle.write(content)
+
+
+def command_lock():
+    return locked(TRACKING_ROOT) if LOCAL_ONLY else nullcontext()
 
 
 def parse_list_arg(value: str | None) -> list[str] | None:
@@ -115,15 +158,17 @@ def cmd_add(args: list[str]) -> None:
     if "by" in opts:
         entry["agent"] = opts["by"]
 
-    entries = load()
-    entries.append(entry)
-    save(entries)
+    with command_lock():
+        entries = load()
+        entries.append(entry)
+        save(entries)
     print(f"Added entry #{len(entries)}: [{typ}] P{phase} — {desc[:60]}{'...' if len(desc) > 60 else ''}")
 
 
 def cmd_list(args: list[str]) -> None:
     n = int(args[0]) if args else 10
-    entries = load()
+    with command_lock():
+        entries = load()
     if not entries:
         print("No entries.")
         return
@@ -146,7 +191,8 @@ def cmd_search(args: list[str]) -> None:
         print("Usage: changelog.py search <keyword>", file=sys.stderr)
         sys.exit(1)
     keyword = args[0].lower()
-    entries = load()
+    with command_lock():
+        entries = load()
     matched = [e for e in entries if keyword in json.dumps(e, ensure_ascii=False).lower()]
     print(f"Found {len(matched)} entries matching '{keyword}':")
     for e in matched:
@@ -171,7 +217,8 @@ def cmd_show(args: list[str]) -> None:
         print(f"Index must be an integer, got: {args[0]}", file=sys.stderr)
         sys.exit(1)
 
-    entries = load()
+    with command_lock():
+        entries = load()
     # reversed list: index 1 = most recent
     if idx < 1 or idx > len(entries):
         print(f"Index out of range: 1-{len(entries)}", file=sys.stderr)
@@ -193,7 +240,11 @@ CMDS = {
 }
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
+    if not ARGV or ARGV[0] not in CMDS:
         print(__doc__, file=sys.stderr)
         sys.exit(1)
-    CMDS[sys.argv[1]](sys.argv[2:])
+    try:
+        CMDS[ARGV[0]](ARGV[1:])
+    except (OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(1)

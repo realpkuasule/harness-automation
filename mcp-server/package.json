@@ -35,14 +35,14 @@
   ],
   "license": "MIT",
   "scripts": {
-    "build": "tsc && cp src/rules.json dist/rules.json && rm -rf dist/session/templates && cp -R src/session/templates dist/session/templates && rm -rf dist/skill dist/manage-worktree-delivery && mkdir -p dist/skill dist/manage-worktree-delivery dist/docs/api && cp ../skill/SKILL.md dist/skill/SKILL.md && cp -R ../skill/agents ../skill/references ../skill/scripts ../skill/evals dist/skill/ && cp ../skills/manage-worktree-delivery/SKILL.md dist/manage-worktree-delivery/SKILL.md && cp -R ../skills/manage-worktree-delivery/agents ../skills/manage-worktree-delivery/references ../skills/manage-worktree-delivery/scripts dist/manage-worktree-delivery/ && cp ../docs/api/*.schema.json dist/docs/api/ && mkdir -p dist/scripts && cp ../scripts/task.py ../scripts/changelog.py dist/scripts/",
+    "build": "tsc && cp src/rules.json dist/rules.json && rm -rf dist/session/templates && cp -R src/session/templates dist/session/templates && rm -rf dist/skill dist/manage-worktree-delivery && mkdir -p dist/skill dist/manage-worktree-delivery dist/docs/api && cp ../skill/SKILL.md dist/skill/SKILL.md && cp -R ../skill/agents ../skill/references ../skill/scripts ../skill/evals dist/skill/ && cp ../skills/manage-worktree-delivery/SKILL.md dist/manage-worktree-delivery/SKILL.md && cp -R ../skills/manage-worktree-delivery/agents ../skills/manage-worktree-delivery/references ../skills/manage-worktree-delivery/scripts dist/manage-worktree-delivery/ && cp ../docs/api/*.schema.json dist/docs/api/ && mkdir -p dist/scripts && cp ../scripts/task.py ../scripts/changelog.py ../scripts/local_tracking.py dist/scripts/",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "lint": "eslint src/",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:ci": "vitest run --coverage --reporter=verbose",
+    "test:ci": "vitest run --coverage --reporter=verbose --maxWorkers=1",
     "prepare": "husky",
     "postinstall": "node postinstall.cjs",
     "prepublishOnly": "npm run build"
