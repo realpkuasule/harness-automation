@@ -422,6 +422,15 @@ export interface StackAdapterResult {
   stack: Stack;
   support: StackAdapterSupport;
   available: boolean;
-  status: "available" | "blocked";
+  supported: boolean;
+  enforced: boolean;
+  passing: boolean;
+  status: "verified" | "failing" | "blocked" | "guidance";
+  evidence: {
+    adapterReachable: boolean;
+    knownBadRejected: boolean;
+    projectGateConnected: boolean;
+  };
+  evidenceGaps: string[];
   detail: string;
 }

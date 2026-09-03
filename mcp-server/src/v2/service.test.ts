@@ -391,6 +391,42 @@ describe("v2 custom stack planning", () => {
       .toContain("generic policies apply and stack-specific enforcement is blocked");
   });
 
+  it("reports naming adapter evidence through the project check gate", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    applyCurrentPolicy(root);
+
+    expect(checkProject(root).stackAdapters).toEqual([
+      expect.objectContaining({
+        stack: "typescript",
+        support: "deterministic",
+        supported: true,
+        enforced: true,
+        passing: true,
+        status: "verified",
+        evidence: {
+          adapterReachable: true,
+          knownBadRejected: true,
+          projectGateConnected: true,
+        },
+        evidenceGaps: [],
+      }),
+      expect.objectContaining({ stack: "postgresql", status: "guidance", supported: false, enforced: false }),
+    ]);
+
+    write(root, "src/invalid.ts", "export const invalid_name = 1;\n");
+    expect(checkProject(root).stackAdapters).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stack: "typescript",
+        supported: true,
+        enforced: true,
+        passing: false,
+        status: "failing",
+        evidenceGaps: [],
+      }),
+    ]));
+  });
+
   it("keeps delivery and domain profiles orthogonal to stack selection", () => {
     const root = temporaryProject();
     approvedSources(root);

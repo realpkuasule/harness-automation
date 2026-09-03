@@ -7,6 +7,8 @@ import { parse } from "@typescript-eslint/typescript-estree";
 import { TYPESCRIPT_NAMING_RULE_ID, type TypeScriptNamingBaseline } from "./types.js";
 
 export interface NamingCheck {
+  adapterReachable: boolean;
+  knownBadRejected: boolean;
   enforced: boolean;
   passing: boolean;
   violations: string[];
@@ -305,6 +307,8 @@ export function checkTypeScript(root: string, approvedBaseline?: TypeScriptNamin
         return false;
       });
   return {
+    adapterReachable: true,
+    knownBadRejected: enforced,
     enforced,
     passing: violations.length === 0,
     violations: violations.map((violation) => violation.message),
@@ -323,11 +327,20 @@ function externalChecker(
   const fixture = spawnSync(command, selfTestArgs, { encoding: "utf8", env, timeout: 30_000 });
   const enforced = fixture.status === 1;
   if (fixture.error && (fixture.error as NodeJS.ErrnoException).code === "ENOENT") {
-    return { enforced: false, passing: false, violations: [], detail: `${command} is not installed` };
+    return {
+      adapterReachable: false,
+      knownBadRejected: false,
+      enforced: false,
+      passing: false,
+      violations: [],
+      detail: `${command} is not installed`,
+    };
   }
   const result = spawnSync(command, args, { encoding: "utf8", env, timeout: 120_000 });
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
   return {
+    adapterReachable: fixture.error === undefined,
+    knownBadRejected: enforced,
     enforced,
     passing: result.status === 0,
     violations: output.length > 0 ? output.split("\n") : [],
@@ -338,7 +351,14 @@ function externalChecker(
 export function checkPython(root: string): NamingCheck {
   const checker = join(root, ".harness/generated/check_python_naming.py");
   if (!existsSync(checker)) {
-    return { enforced: false, passing: false, violations: [], detail: "Python naming checker is not configured" };
+    return {
+      adapterReachable: false,
+      knownBadRejected: false,
+      enforced: false,
+      passing: false,
+      violations: [],
+      detail: "Python naming checker is not configured",
+    };
   }
   return externalChecker("python3", [checker, root], [checker, "--self-test"]);
 }
@@ -357,7 +377,14 @@ export function goCacheDirectory(
 export function checkGo(root: string): NamingCheck {
   const checker = join(root, ".harness/generated/check_go_naming.go");
   if (!existsSync(checker)) {
-    return { enforced: false, passing: false, violations: [], detail: "Go naming checker is not configured" };
+    return {
+      adapterReachable: false,
+      knownBadRejected: false,
+      enforced: false,
+      passing: false,
+      violations: [],
+      detail: "Go naming checker is not configured",
+    };
   }
   const env = {
     ...process.env,
