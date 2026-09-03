@@ -2125,18 +2125,41 @@ function executableAvailable(command: string, root: string): boolean {
 function trustedCommands(root: string, discovery: Discovery, mode: "session" | "commit" | "ci"): Array<{ id: string; command: string[] }> {
   if (mode === "session") return [];
   const selected: Array<{ id: string; command: string[] }> = [];
+  const commandName = (id: string): string => {
+    const parts = id.split(":");
+    return parts.length >= 3 ? parts.slice(2).join(":").toLowerCase() : parts.at(-1)?.toLowerCase() ?? "";
+  };
+  const packageScript = (id: string): { scope: string; name: string } | null => {
+    const parts = id.split(":");
+    if (parts.length < 3 || !["npm", "pnpm", "yarn", "bun"].includes(parts[0])) return null;
+    return { scope: `${parts[0]}:${parts[1]}`, name: parts.slice(2).join(":").toLowerCase() };
+  };
+  const packageScriptNames = new Map<string, Set<string>>();
+  for (const id of Object.keys(discovery.commands)) {
+    const script = packageScript(id);
+    if (!script) continue;
+    const names = packageScriptNames.get(script.scope) ?? new Set<string>();
+    names.add(script.name);
+    packageScriptNames.set(script.scope, names);
+  }
   const add = (id: string, command: string[] | undefined): void => {
     if (command && !selected.some((item) => JSON.stringify(item.command) === JSON.stringify(command))) selected.push({ id, command });
   };
   for (const [id, command] of Object.entries(discovery.commands)) {
-    const parts = id.split(":");
-    const name = parts.length >= 3 ? parts.slice(2).join(":").toLowerCase() : parts.at(-1)?.toLowerCase() ?? "";
+    const name = commandName(id);
     const commitGate = ["lint", "typecheck", "check", "format:check"].includes(name) ||
       name.startsWith("verify:") ||
       name.endsWith(":check");
-    const ciGate = ["test", "build", "test:ci"].includes(name) ||
+    const script = packageScript(id);
+    const siblingNames = script ? packageScriptNames.get(script.scope) : undefined;
+    const redundantBaseTest = Boolean(script && siblingNames && (siblingNames.has("test:ci")
+      ? name === "test" || name === "test:coverage"
+      : siblingNames.has("test:coverage") && name === "test"));
+    const ciGate = !redundantBaseTest && !name.split(":").some((segment) => segment.startsWith("watch")) && (
+      ["test", "build", "test:ci"].includes(name) ||
       name.startsWith("test:") ||
-      name.startsWith("build:");
+      name.startsWith("build:")
+    );
     if (commitGate) add(id, command);
     if (mode === "ci" && ciGate) add(id, command);
     if (mode === "ci" && (id.startsWith("eval:") || id.startsWith("eval-negative:"))) add(id, command);

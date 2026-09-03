@@ -1177,6 +1177,11 @@ describe("v2 plan/apply/check/rollback", () => {
     approvedSources(root);
     write(root, "package.json", JSON.stringify({ scripts: {
       test: "node -e \"require('node:fs').appendFileSync('ordinary-count.txt', 'x')\"",
+      "test:watch": "node -e \"require('node:fs').appendFileSync('watch-count.txt', 'x')\"",
+      "test:watchAll": "node -e \"require('node:fs').appendFileSync('watch-all-count.txt', 'x')\"",
+      "test:watch-all": "node -e \"require('node:fs').appendFileSync('watch-dash-count.txt', 'x')\"",
+      "test:watch:unit": "node -e \"require('node:fs').appendFileSync('watch-unit-count.txt', 'x')\"",
+      "build:watch-ci": "node -e \"require('node:fs').appendFileSync('build-watch-count.txt', 'x')\"",
     } }));
     intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
     write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
@@ -1185,6 +1190,66 @@ describe("v2 plan/apply/check/rollback", () => {
     expect(runTrustedChecks({ projectRoot: root, mode: "ci" }).commands)
       .toEqual(expect.arrayContaining([expect.objectContaining({ command: ["npm", "run", "test"], status: "passed" })]));
     expect(readFileSync(join(root, "ordinary-count.txt"), "utf8")).toBe("x");
+    expect(() => readFileSync(join(root, "watch-count.txt"), "utf8")).toThrow();
+    expect(() => readFileSync(join(root, "watch-all-count.txt"), "utf8")).toThrow();
+    expect(() => readFileSync(join(root, "watch-dash-count.txt"), "utf8")).toThrow();
+    expect(() => readFileSync(join(root, "watch-unit-count.txt"), "utf8")).toThrow();
+    expect(() => readFileSync(join(root, "build-watch-count.txt"), "utf8")).toThrow();
+  });
+
+  it("prefers the strongest base test script without suppressing specialized suites", () => {
+    const scenarios = [
+      {
+        scripts: {
+          test: "node -e \"require('node:fs').appendFileSync('base-count.txt', 'x')\"",
+          "test:coverage": "node -e \"require('node:fs').appendFileSync('coverage-count.txt', 'x')\"",
+          "test:ci": "node -e \"require('node:fs').appendFileSync('ci-count.txt', 'x')\"",
+          "test:unit": "node -e \"require('node:fs').appendFileSync('unit-count.txt', 'x')\"",
+        },
+        selected: ["ci-count.txt", "unit-count.txt"],
+        skipped: ["base-count.txt", "coverage-count.txt"],
+      },
+      {
+        scripts: {
+          test: "node -e \"require('node:fs').appendFileSync('base-count.txt', 'x')\"",
+          "test:coverage": "node -e \"require('node:fs').appendFileSync('coverage-count.txt', 'x')\"",
+        },
+        selected: ["coverage-count.txt"],
+        skipped: ["base-count.txt"],
+      },
+    ];
+    for (const scenario of scenarios) {
+      const root = temporaryProject();
+      approvedSources(root);
+      write(root, "package.json", JSON.stringify({ scripts: scenario.scripts }));
+      intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+      write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+      const planned = planProject({ projectRoot: root, profile: "custom", stacks: ["typescript"] });
+      applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+
+      expect(runTrustedChecks({ projectRoot: root, mode: "ci" }).ok).toBe(true);
+      for (const marker of scenario.selected) expect(readFileSync(join(root, marker), "utf8")).toBe("x");
+      for (const marker of scenario.skipped) expect(() => readFileSync(join(root, marker), "utf8")).toThrow();
+    }
+
+    const root = temporaryProject();
+    approvedSources(root);
+    write(root, "package.json", JSON.stringify({ scripts: {
+      test: "node -e \"require('node:fs').appendFileSync('root-base-count.txt', 'x')\"",
+      "test:ci": "node -e \"require('node:fs').appendFileSync('root-ci-count.txt', 'x')\"",
+    } }));
+    write(root, "packages/child/package.json", JSON.stringify({ scripts: {
+      test: "node -e \"require('node:fs').appendFileSync('child-base-count.txt', 'x')\"",
+    } }));
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    const planned = planProject({ projectRoot: root, profile: "custom", stacks: ["typescript"] });
+    applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+
+    expect(runTrustedChecks({ projectRoot: root, mode: "ci" }).ok).toBe(true);
+    expect(() => readFileSync(join(root, "root-base-count.txt"), "utf8")).toThrow();
+    expect(readFileSync(join(root, "root-ci-count.txt"), "utf8")).toBe("x");
+    expect(readFileSync(join(root, "packages/child/child-base-count.txt"), "utf8")).toBe("x");
   });
 
   it("uses a PATH runner only for its approved argv, never a preflight --version probe", () => {

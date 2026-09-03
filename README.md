@@ -431,7 +431,7 @@ python3 scripts/github_tracker.py close 123 --comment "Done"
 python3 scripts/changelog.py add feat 11 "Describe change" --issue realpkuasule/harness-automation#123
 ```
 
-The project configuration lives in `.github/project-workflow.json`; see [GitHub Issue / Project Workflow](docs/development/github-project-workflow.md).
+The project configuration lives in `.github/project-workflow.json`; see [GitHub Issue / Project Workflow](docs/development/github-project-workflow.md). The packaged `harness-automation tracking` command provides paginated, readback-verified GitHub tracking. An explicit `--local-only` on packaged `task.py` and `changelog.py` stores data under the Git common dir; GitHub outages never select that mode automatically.
 
 ## License
 

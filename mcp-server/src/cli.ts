@@ -74,6 +74,13 @@ import {
 } from "./recovery/service.js";
 import { readLkgChain } from "./receipt/service.js";
 import { resolveProjectContext } from "./repository/git.js";
+import {
+  createGitHubWorkItem,
+  listGitHubWorkItems,
+  loadGitHubTrackingConfig,
+  readGitHubWorkItem,
+  updateGitHubWorkItem,
+} from "./tracking/service.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -149,6 +156,51 @@ function reviewReceiptScope(args: ParsedArguments): ReviewReceiptScope {
 
 function printJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function trackingIssue(args: ParsedArguments): number {
+  const selected = Number(required(args, "issue"));
+  if (!Number.isInteger(selected) || selected < 1) throw new Error("GITHUB_TRACKING_ISSUE_INVALID");
+  return selected;
+}
+
+function runTrackingCommand(root: string, args: ParsedArguments): void {
+  const loaded = loadGitHubTrackingConfig(root);
+  switch (args.positionals[0]) {
+    case "list":
+      printJson(listGitHubWorkItems(loaded));
+      return;
+    case "show":
+      printJson(readGitHubWorkItem({ ...loaded, issue: trackingIssue(args) }));
+      return;
+    case "create":
+      printJson(createGitHubWorkItem({
+        ...loaded,
+        title: required(args, "title"),
+        body: value(args, "body"),
+        status: value(args, "status"),
+        priority: value(args, "priority"),
+      }));
+      return;
+    case "update": {
+      const state = value(args, "state");
+      if (state !== undefined && state !== "open" && state !== "closed") {
+        throw new Error("GITHUB_TRACKING_STATE_INVALID: choose open or closed");
+      }
+      printJson(updateGitHubWorkItem({
+        ...loaded,
+        issue: trackingIssue(args),
+        title: value(args, "title"),
+        body: value(args, "body"),
+        state,
+        status: value(args, "status"),
+        priority: value(args, "priority"),
+      }));
+      return;
+    }
+    default:
+      throw new Error("TRACKING_COMMAND_REQUIRED: choose list, show, create, or update");
+  }
 }
 
 function getGlobalPackagePath(): string | null {
@@ -649,6 +701,7 @@ Usage:
   harness-automation worktree retention-audit [--receipt-scope host-global|project] [--project .]
   harness-automation worktree integration-check --work-item <provider:id> [--target <local-ref>] [--project .]
   harness-automation github audit --project <absolute-repository> [--organization <github-organization>]
+  harness-automation tracking list|show|create|update --project <repository> [--issue <number>] [--title <text>] [--body <text>] [--state open|closed] [--status <value>] [--priority <value>]
   harness-automation worktree configure [--mode audit-only|enforced] [--management-branch <branch>] [--topology container-v1 --workspace-container <absolute-path>] [--allow-root <absolute-path>] [--approval-mode manual] [--project .]
   harness-automation worktree migrate --workspace-container <absolute-path> [--project .]
   harness-automation worktree migrate apply --plan <relative-plan-path> --approve <sha256> [--recovery-approval <recovery-id>] [--project .]
@@ -871,6 +924,9 @@ function runWorkflow(argv: string[]): void {
       if (report.status === "blocked") process.exitCode = 2;
       return;
     }
+    case "tracking":
+      runTrackingCommand(root, args);
+      return;
     case "session":
       runSessionCommand(root, args);
       return;
