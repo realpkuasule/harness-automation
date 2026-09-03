@@ -637,22 +637,10 @@ describe("hash-approved worktree lifecycle", () => {
 
     rmSync(join(commonDir, "harness", "lkg", "workspace", "records"), { recursive: true, force: true });
     const context = resolveRepositoryContext(root);
-    const finding = inspectRecoveryState(context).find((item) =>
-      item.kind === "workspace" && item.id === receipt.id)!;
-    const approval = createRecoveryApproval({
-      context,
-      finding,
-      approvedBy: "owner",
-      approvedAt: "2099-01-01T00:00:00.000Z",
-      expiresAt: "2099-01-01T00:01:00.000Z",
-    });
-    recordRecoveryApproval(context, approval);
     expect(applyWorkspacePlan({
       projectRoot: root,
       planPath: planned.path,
       approval: planned.plan.planHash,
-      recoveryApprovalRef: approval.id,
-      now: new Date("2099-01-01T00:00:30.000Z"),
     })).toEqual(receipt);
     expect(inspectRecoveryState(context)).toEqual([]);
 
@@ -727,6 +715,184 @@ describe("hash-approved worktree lifecycle", () => {
     })).toMatchObject({ status: "applied" });
     expect(inspectRecoveryState(context)).toEqual([]);
   });
+
+  it("reconciles exact allocation crash windows without a second approval", () => {
+    for (const crashAfter of ["before", "worktree", "lease"] as const) {
+      const root = repository();
+      configure(root);
+      const worktreePath = `${root}-crash-${crashAfter}`;
+      repositories.push(worktreePath);
+      const planned = planWorkspaceAllocation({
+        projectRoot: root,
+        workItem: `local:crash-${crashAfter}`,
+        branch: `issue-crash-${crashAfter}`,
+        path: worktreePath,
+        owner: "owner",
+      });
+      expect(() => applyWorkspacePlan({
+        projectRoot: root,
+        planPath: planned.path,
+        approval: planned.plan.planHash,
+        ...(crashAfter === "lease"
+          ? { testCrashAfterLeaseWrite: true }
+          : { testCrashAfterWorktreeAdd: true }),
+      })).toThrow(crashAfter === "lease"
+        ? /TEST_ALLOCATION_CRASH_AFTER_LEASE_WRITE/
+        : /TEST_ALLOCATION_CRASH_AFTER_WORKTREE_ADD/);
+
+      if (crashAfter === "before") {
+        git(root, "worktree", "remove", worktreePath);
+        git(root, "branch", "-d", `issue-crash-${crashAfter}`);
+      } else if (crashAfter === "worktree") {
+        git(root, "branch", "unrelated-after-crash");
+      }
+
+      expect(worktreeCount(root)).toBe(crashAfter === "before" ? 1 : 2);
+      expect(workspaceStatus(root).leases).toHaveLength(crashAfter === "lease" ? 1 : 0);
+      const interrupted = readReceiptChain({
+        root: workspaceStatus(root).commonDir,
+        domain: "workspace",
+        transactionId: planned.plan.id,
+      }).at(-1)?.snapshot;
+      expect(interrupted).toMatchObject({
+        status: "started",
+        mutationStarted: true,
+        compensationStatus: "not-required",
+      });
+
+      const recovered = applyWorkspacePlan({
+        projectRoot: root,
+        planPath: planned.path,
+        approval: planned.plan.planHash,
+      });
+      expect(recovered).toMatchObject({ status: "applied", afterObservedHash: expect.any(String) });
+      expect(workspaceStatus(root).leases).toEqual([planned.plan.operation.kind === "allocate"
+        ? planned.plan.operation.lease
+        : null]);
+      expect(inspectRecoveryState(resolveRepositoryContext(root))).toEqual([]);
+      expect(readLkgChain({ root: workspaceStatus(root).commonDir, domain: "workspace" }).at(-1))
+        .toMatchObject({ planHash: planned.plan.planHash });
+      expect(applyWorkspacePlan({
+        projectRoot: root,
+        planPath: planned.path,
+        approval: planned.plan.planHash,
+      })).toEqual(recovered);
+    }
+  }, 20_000);
+
+  it("keeps a drifted interrupted allocation behind the recovery gate", () => {
+    const root = repository();
+    configure(root);
+    const worktreePath = `${root}-crash-drift`;
+    repositories.push(worktreePath);
+    const planned = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "local:crash-drift",
+      branch: "issue-crash-drift",
+      path: worktreePath,
+      owner: "owner",
+    });
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+      testCrashAfterWorktreeAdd: true,
+    })).toThrow(/TEST_ALLOCATION_CRASH_AFTER_WORKTREE_ADD/);
+    writeFileSync(join(worktreePath, "valuable.txt"), "preserve me\n", "utf8");
+
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toThrow(/RECOVERY_HUMAN_APPROVAL_REQUIRED/);
+    const context = resolveRepositoryContext(root);
+    const finding = inspectRecoveryState(context).find((item) => item.id === planned.plan.id)!;
+    const recoveryApproval = createRecoveryApproval({
+      context,
+      finding,
+      approvedBy: "owner",
+      approvedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:01:00.000Z",
+    });
+    recordRecoveryApproval(context, recoveryApproval);
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+      recoveryApprovalRef: recoveryApproval.id,
+      now: new Date("2099-01-01T00:00:30.000Z"),
+    })).toThrow(/WORKTREE_ALLOCATION_RECOVERY_UNSAFE/);
+    expect(readFileSync(join(worktreePath, "valuable.txt"), "utf8")).toBe("preserve me\n");
+    expect(worktreeCount(root)).toBe(2);
+    expect(workspaceStatus(root).leases).toHaveLength(0);
+  });
+
+  it("rejects configuration and capacity drift while recovering an allocation", () => {
+    for (const drift of ["configuration", "capacity"] as const) {
+      const root = repository();
+      configure(root);
+      const worktreePath = `${root}-crash-${drift}`;
+      repositories.push(worktreePath);
+      const planned = planWorkspaceAllocation({
+        projectRoot: root,
+        workItem: `local:crash-${drift}`,
+        branch: `issue-crash-${drift}`,
+        path: worktreePath,
+        owner: "owner",
+      });
+      expect(() => applyWorkspacePlan({
+        projectRoot: root,
+        planPath: planned.path,
+        approval: planned.plan.planHash,
+        testCrashAfterWorktreeAdd: true,
+      })).toThrow(/TEST_ALLOCATION_CRASH_AFTER_WORKTREE_ADD/);
+      if (planned.plan.operation.kind !== "allocate") throw new Error("expected allocation plan");
+
+      if (drift === "configuration") {
+        const configPath = join(root, ".harness", "worktree-delivery.json");
+        const config = JSON.parse(readFileSync(configPath, "utf8")) as { reviewTtlMinutes: number };
+        config.reviewTtlMinutes += 1;
+        writeFileSync(configPath, prettyJson(config));
+      } else {
+        const extraPath = `${root}-capacity-extra`;
+        const extraLease = {
+          ...planned.plan.operation.lease,
+          workItem: "local:capacity-extra",
+          branch: "issue-capacity-extra",
+          path: extraPath,
+        };
+        repositories.push(extraPath);
+        git(root, "worktree", "add", "-b", extraLease.branch, extraPath, extraLease.acceptedCommit);
+        const leaseDirectory = join(workspaceStatus(root).commonDir, "harness", "worktree-delivery", "leases");
+        mkdirSync(leaseDirectory, { recursive: true });
+        writeFileSync(join(leaseDirectory, `${sha256(extraLease.workItem)}.json`), prettyJson(extraLease));
+      }
+
+      expect(() => applyWorkspacePlan({
+        projectRoot: root,
+        planPath: planned.path,
+        approval: planned.plan.planHash,
+      })).toThrow(/RECOVERY_HUMAN_APPROVAL_REQUIRED/);
+      const context = resolveRepositoryContext(root);
+      const finding = inspectRecoveryState(context).find((item) => item.id === planned.plan.id)!;
+      const recoveryApproval = createRecoveryApproval({
+        context,
+        finding,
+        approvedBy: "owner",
+        approvedAt: "2099-01-01T00:00:00.000Z",
+        expiresAt: "2099-01-01T00:01:00.000Z",
+      });
+      recordRecoveryApproval(context, recoveryApproval);
+      expect(() => applyWorkspacePlan({
+        projectRoot: root,
+        planPath: planned.path,
+        approval: planned.plan.planHash,
+        recoveryApprovalRef: recoveryApproval.id,
+        now: new Date("2099-01-01T00:00:30.000Z"),
+      })).toThrow(/WORKTREE_ALLOCATION_RECOVERY_UNSAFE/);
+      expect(existsSync(worktreePath)).toBe(true);
+    }
+  }, 20_000);
 
   it("never overwrites an immutable workspace plan", () => {
     const root = repository();
@@ -1128,6 +1294,7 @@ describe("hash-approved worktree lifecycle", () => {
         branch: "main",
       })],
     });
+    expect(existsSync(join(topology.commonDir, "harness", "worktree-delivery", "apply.lock"))).toBe(false);
     expect(applyWorkspaceMigration({
       projectRoot: topology.managementCheckout,
       planPath: planned.path,
@@ -1257,6 +1424,12 @@ describe("hash-approved worktree lifecycle", () => {
       operation: "migrate",
       error: "TEST_MIGRATION_AFTER_MOVE_FAILURE",
     });
+    expect(existsSync(join(
+      planned.plan.operation.topology.commonDir,
+      "harness",
+      "worktree-delivery",
+      "apply.lock",
+    ))).toBe(false);
     expect(auditWorkspace(targetRoot).policies.find((policy) => policy.id === "workspace.cleanup-receipt"))
       .toMatchObject({ passing: false, evidence: [expect.stringContaining(planned.plan.id)] });
     const recoveryContext = resolveRepositoryContext(targetRoot);

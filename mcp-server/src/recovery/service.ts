@@ -1,4 +1,14 @@
-import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmdirSync,
+  unlinkSync,
+} from "node:fs";
+import { hostname } from "node:os";
 import { isAbsolute, join } from "node:path";
 import {
   durableWriteOnce,
@@ -75,6 +85,14 @@ export interface RecoveryFinding {
   quarantineSource?: { root: "project" | "common"; path: string };
 }
 
+interface MutationLockOwner {
+  schemaVersion: "mutation-lock/1.0";
+  host: string;
+  pid: number;
+  token: string;
+  acquiredAt: string;
+}
+
 export type RecoveryAction = "resume-apply" | "resume-rollback" | "quarantine-invalid-evidence";
 
 export function safeModeAllows(command: string): command is SafeModeCommand {
@@ -128,6 +146,61 @@ function invalidFinding(
   };
 }
 
+const ownedMutationLocks = new Map<string, string>();
+
+function validLockOwner(value: unknown): value is MutationLockOwner {
+  const owner = value as Partial<MutationLockOwner> | null;
+  return Boolean(owner && owner.schemaVersion === "mutation-lock/1.0" &&
+    typeof owner.host === "string" && Number.isSafeInteger(owner.pid) && (owner.pid ?? 0) > 0 &&
+    typeof owner.token === "string" && /^[a-f0-9-]{36}$/u.test(owner.token) &&
+    typeof owner.acquiredAt === "string" && Number.isFinite(Date.parse(owner.acquiredAt)));
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+function reclaimStaleMutationLock(lock: string): boolean {
+  let metadata;
+  try {
+    metadata = lstatSync(lock);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+  if (!metadata.isDirectory() || metadata.isSymbolicLink()) return false;
+  const entries = readdirSync(lock).sort();
+  let stale = false;
+  if (entries.length === 1 && entries[0] === "owner.json") {
+    try {
+      const owner = readJson<MutationLockOwner>(join(lock, "owner.json"));
+      stale = validLockOwner(owner) && owner.host === hostname() && !processIsAlive(owner.pid);
+    } catch {
+      stale = false;
+    }
+  }
+  if (!stale) return false;
+
+  const quarantine = `${lock}.stale-${randomUUID()}`;
+  try {
+    renameSync(lock, quarantine);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+  const quarantinedEntries = readdirSync(quarantine);
+  if (quarantinedEntries.length === 1 && quarantinedEntries[0] === "owner.json") {
+    unlinkSync(join(quarantine, "owner.json"));
+  }
+  if (readdirSync(quarantine).length === 0) rmdirSync(quarantine);
+  return true;
+}
+
 /** This is the same lock path used by the worktree lifecycle. */
 export function acquireMutationLock(context: RecoveryContext): string {
   const directory = context.repository === false
@@ -135,19 +208,62 @@ export function acquireMutationLock(context: RecoveryContext): string {
     : safePath(context.commonDir, "harness/worktree-delivery");
   mkdirSync(directory, { recursive: true });
   const lock = join(directory, "apply.lock");
-  try {
-    mkdirSync(lock);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      mkdirSync(lock);
+      const owner: MutationLockOwner = {
+        schemaVersion: "mutation-lock/1.0",
+        host: hostname(),
+        pid: process.pid,
+        token: randomUUID(),
+        acquiredAt: new Date().toISOString(),
+      };
+      try {
+        durableWriteOnce(join(lock, "owner.json"), prettyJson(owner));
+      } catch (error) {
+        if (existsSync(join(lock, "owner.json"))) unlinkSync(join(lock, "owner.json"));
+        if (existsSync(lock)) rmdirSync(lock);
+        throw error;
+      }
+      ownedMutationLocks.set(lock, owner.token);
+      return lock;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (attempt === 0 && reclaimStaleMutationLock(lock)) continue;
       throw new Error(`WORKSPACE_LOCKED: ${lock}`);
     }
-    throw error;
   }
-  return lock;
+  throw new Error(`WORKSPACE_LOCKED: ${lock}`);
 }
 
 export function releaseMutationLock(lock: string): void {
-  if (existsSync(lock)) rmdirSync(lock);
+  const token = ownedMutationLocks.get(lock);
+  if (!token) throw new Error(`WORKSPACE_LOCK_OWNERSHIP_LOST: ${lock}`);
+  const ownerPath = join(lock, "owner.json");
+  let owner: MutationLockOwner;
+  try {
+    owner = readJson<MutationLockOwner>(ownerPath);
+  } catch {
+    throw new Error(`WORKSPACE_LOCK_OWNERSHIP_LOST: ${lock}`);
+  }
+  if (!validLockOwner(owner) || owner.token !== token || owner.host !== hostname() || owner.pid !== process.pid) {
+    throw new Error(`WORKSPACE_LOCK_OWNERSHIP_LOST: ${lock}`);
+  }
+  unlinkSync(ownerPath);
+  rmdirSync(lock);
+  ownedMutationLocks.delete(lock);
+}
+
+export function rebindMutationLock(lock: string, movedLock: string): string {
+  const token = ownedMutationLocks.get(lock);
+  if (!token) throw new Error(`WORKSPACE_LOCK_OWNERSHIP_LOST: ${lock}`);
+  const owner = readJson<MutationLockOwner>(join(movedLock, "owner.json"));
+  if (!validLockOwner(owner) || owner.token !== token || owner.host !== hostname() || owner.pid !== process.pid) {
+    throw new Error(`WORKSPACE_LOCK_OWNERSHIP_LOST: ${movedLock}`);
+  }
+  ownedMutationLocks.delete(lock);
+  ownedMutationLocks.set(movedLock, token);
+  return movedLock;
 }
 
 function withoutJournalHash(journal: FileApplyJournal): Omit<FileApplyJournal, "journalHash"> {
