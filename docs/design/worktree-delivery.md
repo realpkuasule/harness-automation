@@ -14,9 +14,9 @@ It is exposed through two Skill entry points:
 
 The default is audit-only. Installing or upgrading the package creates no
 worktrees and deletes no state. Persistent operations require dry-run planning.
-Manual mode uses exact-hash apply. Legacy host-local `delegated-ai` policies are
-parseable for audit but remain blocked until DG-02 records its explicit human
-approval evidence.
+Manual mode uses exact-hash apply; an optional host-local `delegated-ai` policy
+may authorize explicitly allowlisted lifecycle plans through an independent,
+no-tools reviewer decision bound to the same plan hash.
 
 ## Layers
 
@@ -125,12 +125,15 @@ post-move state. Configure must never masquerade as migration.
 
 ### Delegated AI authorization
 
-New delegated bindings fail with `DG02_REVIEWER_CONFIGURATION_REQUIRED` until
-the product can persist a human-approved Provider, model, credential reference,
-private-content scope, and trust decision. Existing legacy bindings cannot
-authorize Apply: `worktree apply-ai` returns `ReviewPending` without invoking a
-reviewer or changing repository state. Reconfigure the host binding to `manual`
-to continue using exact-hash approval.
+The host binding may name one Claude Code model and an operation allowlist.
+`worktree apply-ai` runs that reviewer in a fresh no-tools, no-persistence
+process and records `approve`, `deny`, or `abstain` as a canonical decision.
+An approval binds the plan, plain-language intent, host policy, observation,
+model, and TTL. It does not replace deterministic validation: apply rechecks
+the plan under the repository lock and records the decision and policy hashes
+in its receipt. Reviewer failure or uncertainty creates no lifecycle mutation.
+Close and recover also require zero ignored, unique, and unpushed evidence.
+Configure and rollback are never AI-delegated.
 
 ### Allocate
 
