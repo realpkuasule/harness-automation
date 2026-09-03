@@ -1,23 +1,20 @@
 {
   "schemaVersion": "2.0",
-  "generatedAt": "2026-09-01T11:48:51.347Z",
+  "generatedAt": "2026-09-03T07:55:36.264Z",
   "profile": "custom",
   "stacks": [
     "typescript"
   ],
   "manifests": [
     "mcp-server/package.json",
-    "mcp-server/src/__fixtures__/mixed/package.json",
-    "package.json"
+    "mcp-server/src/__fixtures__/mixed/package.json"
   ],
   "lockfiles": [
-    "mcp-server/package-lock.json",
-    "package-lock.json"
+    "mcp-server/package-lock.json"
   ],
   "packages": [
     "mcp-server",
-    "mcp-server/src/__fixtures__/mixed",
-    "package.json"
+    "mcp-server/src/__fixtures__/mixed"
   ],
   "commands": {
     "npm:mcp-server:build": [
@@ -151,8 +148,7 @@
       "fact": "Detected stack profile: custom",
       "paths": [
         "mcp-server/package.json",
-        "mcp-server/src/__fixtures__/mixed/package.json",
-        "package.json"
+        "mcp-server/src/__fixtures__/mixed/package.json"
       ],
       "confidence": 0.5
     },
@@ -160,8 +156,7 @@
       "fact": "Detected stacks: typescript",
       "paths": [
         "mcp-server/package.json",
-        "mcp-server/src/__fixtures__/mixed/package.json",
-        "package.json"
+        "mcp-server/src/__fixtures__/mixed/package.json"
       ],
       "confidence": 0.9
     }

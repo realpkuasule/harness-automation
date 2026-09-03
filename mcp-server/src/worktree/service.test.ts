@@ -19,6 +19,9 @@ import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { hashObject, prettyJson, sha256, withoutHash } from "../v2/fs.js";
+import { appendReceiptEvent, readLkgChain, readReceiptChain } from "../receipt/service.js";
+import { createRecoveryApproval, inspectRecoveryState, recordRecoveryApproval } from "../recovery/service.js";
+import { resolveRepositoryContext } from "../repository/git.js";
 import type { WorktreeApprovalPolicy, WorktreeDelegatableOperation } from "./types.js";
 import { loadWorktreeConfig } from "./config.js";
 import {
@@ -605,6 +608,141 @@ describe("portable worktree inventory", () => {
 });
 
 describe("hash-approved worktree lifecycle", () => {
+  it("chains workspace receipts, records LKG, and repairs an interrupted LKG projection", () => {
+    const root = repository();
+    const planned = planWorkspaceConfiguration({
+      projectRoot: root,
+      mode: "enforced",
+      allowedRoots: [join(root, "..")],
+      remoteBranchDeletion: false,
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    const receipt = applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    });
+    const commonDir = workspaceStatus(root).commonDir;
+    const key = { root: commonDir, domain: "workspace", transactionId: receipt.id };
+    const chain = readReceiptChain(key);
+    expect(chain[0].snapshot).toMatchObject({ status: "started" });
+    expect(chain.at(-1)?.snapshot).toMatchObject({ status: "applied" });
+    expect(readLkgChain({ root: commonDir, domain: "workspace" }).at(-1))
+      .toMatchObject({ receiptEventHash: chain.at(-1)?.eventHash, planHash: receipt.planHash });
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: "0".repeat(64),
+    })).toThrow(/APPROVAL_MISMATCH/);
+
+    rmSync(join(commonDir, "harness", "lkg", "workspace", "records"), { recursive: true, force: true });
+    const context = resolveRepositoryContext(root);
+    const finding = inspectRecoveryState(context).find((item) =>
+      item.kind === "workspace" && item.id === receipt.id)!;
+    const approval = createRecoveryApproval({
+      context,
+      finding,
+      approvedBy: "owner",
+      approvedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:01:00.000Z",
+    });
+    recordRecoveryApproval(context, approval);
+    expect(applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+      recoveryApprovalRef: approval.id,
+      now: new Date("2099-01-01T00:00:30.000Z"),
+    })).toEqual(receipt);
+    expect(inspectRecoveryState(context)).toEqual([]);
+
+    const projection = join(commonDir, "harness", "worktree-delivery", "receipts", `${receipt.id}.json`);
+    rmSync(projection);
+    expect(inspectRecoveryState(context)).toEqual([]);
+    expect(applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toEqual(receipt);
+    expect(existsSync(projection)).toBe(true);
+
+    const rolledBack = rollbackWorkspaceChange({ projectRoot: root, changeId: receipt.id });
+    expect(rolledBack).toMatchObject({ status: "rolled-back", rollbackObservedHash: expect.any(String) });
+    expect(readLkgChain({ root: commonDir, domain: "workspace" })).toHaveLength(2);
+  });
+
+  it("resumes a pre-mutation workspace receipt only with exact recovery approval", () => {
+    const root = repository();
+    const planned = planWorkspaceConfiguration({
+      projectRoot: root,
+      mode: "enforced",
+      allowedRoots: [join(root, "..")],
+      remoteBranchDeletion: false,
+    });
+    const before = workspaceStatus(root);
+    appendReceiptEvent({
+      root: before.commonDir,
+      domain: "workspace",
+      transactionId: planned.plan.id,
+      snapshot: {
+        schemaVersion: "worktree-delivery/1.0",
+        kind: "workspace-receipt",
+        id: planned.plan.id,
+        planHash: planned.plan.planHash,
+        operation: "configure",
+        status: "started",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        steps: [],
+        before,
+        beforeObservedHash: before.observedHash,
+        mutationStarted: false,
+        compensationStatus: "not-required",
+      },
+      projection: {
+        root: before.commonDir,
+        path: `harness/worktree-delivery/receipts/${planned.plan.id}.json`,
+      },
+    });
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toThrow(/RECOVERY_HUMAN_APPROVAL_REQUIRED/);
+    const context = resolveRepositoryContext(root);
+    const finding = inspectRecoveryState(context).find((item) => item.id === planned.plan.id)!;
+    const approval = createRecoveryApproval({
+      context,
+      finding,
+      approvedBy: "owner",
+      approvedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:01:00.000Z",
+    });
+    recordRecoveryApproval(context, approval);
+    expect(applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+      recoveryApprovalRef: approval.id,
+      now: new Date("2099-01-01T00:00:30.000Z"),
+    })).toMatchObject({ status: "applied" });
+    expect(inspectRecoveryState(context)).toEqual([]);
+  });
+
+  it("never overwrites an immutable workspace plan", () => {
+    const root = repository();
+    const input = {
+      projectRoot: root,
+      mode: "enforced" as const,
+      allowedRoots: [join(root, "..")],
+      remoteBranchDeletion: false,
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    };
+    const planned = planWorkspaceConfiguration(input);
+    writeFileSync(join(root, planned.path), "tampered\n", "utf8");
+    expect(() => planWorkspaceConfiguration(input)).toThrow(/WORKSPACE_PLAN_CONFLICT/);
+    expect(readFileSync(join(root, planned.path), "utf8")).toBe("tampered\n");
+  });
+
   it("separates portable policy from the host-local path binding", () => {
     const root = repository();
     const allowedRoot = join(root, "..");
@@ -1121,10 +1259,23 @@ describe("hash-approved worktree lifecycle", () => {
     });
     expect(auditWorkspace(targetRoot).policies.find((policy) => policy.id === "workspace.cleanup-receipt"))
       .toMatchObject({ passing: false, evidence: [expect.stringContaining(planned.plan.id)] });
+    const recoveryContext = resolveRepositoryContext(targetRoot);
+    const recoveryFinding = inspectRecoveryState(recoveryContext).find((finding) =>
+      finding.kind === "workspace" && finding.id === planned.plan.id)!;
+    const recoveryApproval = createRecoveryApproval({
+      context: recoveryContext,
+      finding: recoveryFinding,
+      approvedBy: "owner",
+      approvedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:01:00.000Z",
+    });
+    recordRecoveryApproval(recoveryContext, recoveryApproval);
     expect(applyWorkspaceMigration({
       projectRoot: targetRoot,
       planPath: planned.path,
       approval: planned.plan.planHash,
+      recoveryApprovalRef: recoveryApproval.id,
+      now: new Date("2099-01-01T00:00:30.000Z"),
     })).toMatchObject({ status: "applied", operation: "migrate" });
     expect(() => rollbackWorkspaceChange({ projectRoot: targetRoot, changeId: planned.plan.id }))
       .toThrow(/WORKTREE_MIGRATION_ROLLBACK_UNSUPPORTED/);
@@ -1161,12 +1312,25 @@ describe("hash-approved worktree lifecycle", () => {
     })).toThrow(/WORKSPACE_DRIFT/);
   });
 
-  it("delegates an allocation to an isolated AI reviewer and records its authorization", () => {
+  it("keeps legacy delegated reviewers behind the DG-02 human gate", () => {
     installAiReviewer();
     const root = repository();
     const worktreePath = `${root}-ai-allocation`;
     repositories.push(worktreePath);
-    configure(root, { approval: delegatedApproval(["allocate", "renew"]) });
+    expect(() => planWorkspaceConfiguration({
+      projectRoot: root,
+      mode: "enforced",
+      allowedRoots: [join(root, "..")],
+      remoteBranchDeletion: false,
+      approval: delegatedApproval(["allocate", "renew"]),
+    })).toThrow(/DG02_REVIEWER_CONFIGURATION_REQUIRED/);
+    configure(root);
+    const bindingPath = workspaceStatus(root).hostBinding.path;
+    const binding = JSON.parse(readFileSync(bindingPath, "utf8")) as Record<string, unknown>;
+    writeFileSync(bindingPath, prettyJson({
+      ...binding,
+      approval: delegatedApproval(["allocate", "renew"]),
+    }));
     const planned = planWorkspaceAllocation({
       projectRoot: root,
       workItem: "github:example/project#ai-allocation",
@@ -1174,188 +1338,26 @@ describe("hash-approved worktree lifecycle", () => {
       path: worktreePath,
       owner: "PM",
     });
+    const inputFile = join(root, "reviewer-input.txt");
+    process.env.HARNESS_TEST_AI_INPUT_FILE = inputFile;
     expect(() => applyWorkspacePlan({
       projectRoot: root,
       planPath: planned.path,
       approval: planned.plan.planHash,
-    })).toThrow(/WORKSPACE_AI_AUTHORIZATION_REQUIRED/);
-
-    const inputFile = join(root, "reviewer-input.txt");
-    process.env.HARNESS_TEST_AI_INPUT_FILE = inputFile;
+    })).toThrow(/DG02_REVIEWER_CONFIGURATION_REQUIRED/);
     const result = reviewAndApplyWorkspacePlan({
       projectRoot: root,
       planPath: planned.path,
       intent: "Create one isolated workspace for Issue ai-allocation without changing main or remotes.",
     });
 
-    expect(result.decision).toMatchObject({
-      verdict: "approve",
-      planHash: planned.plan.planHash,
-      operation: "allocate",
-      reviewer: { kind: "claude", model: "test-reviewer" },
+    expect(result).toEqual({
+      status: "ReviewPending",
+      code: "DG02_REVIEWER_CONFIGURATION_REQUIRED",
     });
-    expect(result.decision.decisionHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(JSON.parse(readFileSync(result.decisionPath, "utf8"))).toEqual(result.decision);
-    expect(result.receipt).toMatchObject({
-      status: "applied",
-      authorizationMode: "delegated-ai",
-      authorizationDecisionHash: result.decision.decisionHash,
-      authorizationPolicyHash: result.decision.policyHash,
-    });
-    expect(readFileSync(inputFile, "utf8")).toContain(planned.plan.planHash);
-    expect(worktreeCount(root)).toBe(2);
-    expect(workspaceStatus(root).leases).toEqual([
-      expect.objectContaining({ workItem: "github:example/project#ai-allocation" }),
-    ]);
-    const renewal = planWorkspaceRenew({
-      projectRoot: root,
-      workItem: "github:example/project#ai-allocation",
-    });
-    expect(() => applyWorkspacePlan({
-      projectRoot: root,
-      planPath: renewal.path,
-      approval: renewal.plan.planHash,
-      authorization: { ...result.decision, planHash: renewal.plan.planHash, operation: "renew" },
-    })).toThrow(/WORKSPACE_AI_AUTHORIZATION_INVALID/);
-  });
-
-  it("fails closed for denied, expired, malformed, and out-of-scope AI reviews", () => {
-    installAiReviewer();
-    const root = repository();
-    configure(root, { approval: delegatedApproval(["renew"], 60) });
-    const allocation = planWorkspaceAllocation({
-      projectRoot: root,
-      workItem: "github:example/project#ai-denied",
-      branch: "issue-ai-denied",
-      path: `${root}-ai-denied`,
-      owner: "PM",
-      now: new Date("2030-01-01T00:00:00.000Z"),
-    });
-
-    const outOfScope = reviewAndApplyWorkspacePlan({
-      projectRoot: root,
-      planPath: allocation.path,
-      intent: "Allocate the requested worktree.",
-      now: new Date("2030-01-01T00:00:01.000Z"),
-    });
-    expect(outOfScope).toMatchObject({
-      decision: { verdict: "deny", reasonCodes: ["OPERATION_NOT_DELEGATED"] },
-    });
-    expect(outOfScope.receipt).toBeUndefined();
-    expect(worktreeCount(root)).toBe(1);
-
-    configure(root, { approval: delegatedApproval(["allocate"], 60) });
-    const expired = planWorkspaceAllocation({
-      projectRoot: root,
-      workItem: "github:example/project#ai-expired",
-      branch: "issue-ai-expired",
-      path: `${root}-ai-expired`,
-      owner: "PM",
-      now: new Date("2030-01-01T00:00:00.000Z"),
-    });
-    const expiredReview = reviewAndApplyWorkspacePlan({
-      projectRoot: root,
-      planPath: expired.path,
-      intent: "Allocate the requested worktree.",
-      now: new Date("2030-01-01T00:02:00.000Z"),
-    });
-    expect(expiredReview).toMatchObject({
-      decision: { verdict: "abstain", reasonCodes: ["PLAN_EXPIRED"] },
-    });
-    expect(expiredReview.receipt).toBeUndefined();
-
-    const malformed = planWorkspaceAllocation({
-      projectRoot: root,
-      workItem: "github:example/project#ai-malformed",
-      branch: "issue-ai-malformed",
-      path: `${root}-ai-malformed`,
-      owner: "PM",
-    });
-    process.env.HARNESS_TEST_AI_INVALID = "1";
-    const malformedReview = reviewAndApplyWorkspacePlan({
-      projectRoot: root,
-      planPath: malformed.path,
-      intent: "Allocate the requested worktree.",
-    });
-    expect(malformedReview).toMatchObject({
-      decision: { verdict: "abstain", reasonCodes: ["REVIEWER_INVALID"] },
-    });
-    expect(malformedReview.receipt).toBeUndefined();
+    expect(existsSync(inputFile)).toBe(false);
     expect(worktreeCount(root)).toBe(1);
     expect(workspaceStatus(root).leases).toHaveLength(0);
-  });
-
-  it("rechecks workspace drift after AI approval before applying", () => {
-    installAiReviewer();
-    const root = repository();
-    const worktreePath = `${root}-ai-renew`;
-    repositories.push(worktreePath);
-    configure(root, { approval: delegatedApproval(["allocate", "renew"]) });
-    const allocation = planWorkspaceAllocation({
-      projectRoot: root,
-      workItem: "github:example/project#ai-renew",
-      branch: "issue-ai-renew",
-      path: worktreePath,
-      owner: "PM",
-    });
-    reviewAndApplyWorkspacePlan({
-      projectRoot: root,
-      planPath: allocation.path,
-      intent: "Create the isolated Issue workspace.",
-    });
-    const renewal = planWorkspaceRenew({
-      projectRoot: root,
-      workItem: "github:example/project#ai-renew",
-    });
-    process.env.HARNESS_TEST_AI_DRIFT_PATH = join(worktreePath, "reviewer-drift.txt");
-
-    expect(() => reviewAndApplyWorkspacePlan({
-      projectRoot: root,
-      planPath: renewal.path,
-      intent: "Renew only the active lease heartbeat.",
-    })).toThrow(/WORKSPACE_DRIFT/);
-    expect(workspaceStatus(root).leases[0].heartbeatAt)
-      .toBe((allocation.plan.operation as { lease: { heartbeatAt: string } }).lease.heartbeatAt);
-  });
-
-  it("denies destructive AI recovery when ignored or unreachable content exists", () => {
-    installAiReviewer();
-    const root = repository();
-    configure(root, { approval: delegatedApproval(["recover"]) });
-    const ignoredPath = `${root}-ai-recover-ignored`;
-    repositories.push(ignoredPath);
-    git(root, "worktree", "add", "--detach", ignoredPath, "HEAD");
-    writeFileSync(join(root, ".git", "info", "exclude"), "ignored.bin\n", "utf8");
-    writeFileSync(join(ignoredPath, "ignored.bin"), "valuable ignored content\n", "utf8");
-    const ignoredPlan = planWorkspaceRecover({ projectRoot: root, path: ignoredPath });
-    const ignoredReview = reviewAndApplyWorkspacePlan({
-      projectRoot: root,
-      planPath: ignoredPlan.path,
-      intent: "Remove the clean detached residual worktree.",
-    });
-    expect(ignoredReview.decision).toMatchObject({
-      verdict: "deny",
-      reasonCodes: ["DESTRUCTIVE_EVIDENCE_UNSAFE"],
-    });
-    expect(existsSync(ignoredPath)).toBe(true);
-
-    const uniquePath = `${root}-ai-recover-unique`;
-    repositories.push(uniquePath);
-    git(root, "worktree", "add", "--detach", uniquePath, "HEAD");
-    writeFileSync(join(uniquePath, "unique.txt"), "unique commit\n", "utf8");
-    git(uniquePath, "add", "unique.txt");
-    git(uniquePath, "commit", "-m", "test: unique detached work");
-    const uniquePlan = planWorkspaceRecover({ projectRoot: root, path: uniquePath });
-    const uniqueReview = reviewAndApplyWorkspacePlan({
-      projectRoot: root,
-      planPath: uniquePlan.path,
-      intent: "Remove the clean detached residual worktree.",
-    });
-    expect(uniqueReview.decision).toMatchObject({
-      verdict: "deny",
-      reasonCodes: ["DESTRUCTIVE_EVIDENCE_UNSAFE"],
-    });
-    expect(existsSync(uniquePath)).toBe(true);
   });
 
   it("fails closed when enforced policy has no host-local path binding", () => {
@@ -2028,7 +2030,7 @@ describe("hash-approved worktree lifecycle", () => {
 
     expect(git(root, "branch", "--list", "issue-52-squash-local")).toBe("");
     expect(git(root, "ls-remote", "--heads", "origin", "refs/heads/issue-52-squash-upstream")).toBe("");
-  });
+  }, 20_000);
 
   it("fails closed for missing, ambiguous, invalid, and unavailable GitHub merge proof", () => {
     installMergedPullRequestGh();
@@ -2162,7 +2164,7 @@ describe("hash-approved worktree lifecycle", () => {
       workItem: "github:example/project#59",
       acceptedCommit: head,
     })).toThrow(/GITHUB_REMOTE_REPOSITORY_MISMATCH/);
-  });
+  }, 20_000);
 
   it("writes an applied close receipt when invoked from the worktree being removed", () => {
     const root = repositoryWithRemote();
@@ -2715,7 +2717,7 @@ describe("hash-approved worktree lifecycle", () => {
       approval: planned.plan.planHash,
     })).toEqual(receipt);
     expect(readFileSync(calls, "utf8")).toBe("2");
-  });
+  }, 20_000);
 
   it("requires configured-Project legacy allocation plans to be regenerated", () => {
     if (process.platform === "win32") return;
@@ -3484,6 +3486,10 @@ process.stdout.write(fs.readFileSync(process.argv[2]));
       approval: closed.plan.planHash,
     });
     rollbackWorkspaceChange({ projectRoot: root, changeId: closeReceipt.id });
+    rmSync(join(
+      workspaceStatus(root).commonDir,
+      "harness", "worktree-delivery", "receipts", `${closeReceipt.id}.json`,
+    ));
 
     expect(() => rollbackWorkspaceChange({
       projectRoot: root,

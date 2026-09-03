@@ -151,37 +151,12 @@ worktree.
 
 ### Delegated AI authorization
 
-Per-plan human approval remains the default. A host may instead delegate selected
-operations once through the same exact-hash configure transaction:
-
-```bash
-harness-automation worktree configure \
-  --project . \
-  --approval-mode delegated-ai \
-  --reviewer-model <pinned-claude-model> \
-  --delegate-operation allocate \
-  --delegate-operation renew
-```
-
-The delegation is host-local. It uses the already authenticated Claude Code CLI
-in safe mode with no tools or session persistence; credentials are never stored
-in policy, plans, decisions, or receipts. After generating a worktree plan, ask
-the reviewer to decide and apply it without copying the plan hash:
-
-```bash
-harness-automation worktree apply-ai \
-  --project . \
-  --plan .harness/plans/<plan>.json \
-  --intent "Create one isolated workspace for GitHub Issue #113."
-```
-
-The reviewer emits `approve`, `deny`, or `abstain`. Its durable decision binds
-the exact plan, intent, host policy, repository observation, reviewer model, and
-TTL. Apply still rechecks deterministic preconditions under the repository lock
-and writes the normal lifecycle receipt. Missing, expired, malformed,
-out-of-scope, or uncertain decisions make zero lifecycle writes. Delegated
-`close` and `recover` additionally require zero dirty, ignored, unique, and
-unpushed evidence. `configure` and rollback cannot be delegated.
+Per-plan human approval remains mandatory. New `delegated-ai` bindings are
+rejected with `DG02_REVIEWER_CONFIGURATION_REQUIRED` until DG-02 can persist a
+human-approved Provider, model, credential reference, private-content scope,
+and trust decision. Existing legacy bindings remain parseable for audit and can
+be reconfigured to `manual`; `worktree apply-ai` returns `ReviewPending` without
+invoking a reviewer or changing worktree state.
 
 This local mode separates normal execution from model review but is not a
 security boundary against a malicious process running as the same OS user.
@@ -314,6 +289,7 @@ gate on the local audit. CI reports the host-local gate as unavailable.
 
 ```bash
 harness-automation rollback --project . --change <receipt-id>
+harness-automation recovery status --project .
 ```
 
 Configuration rollback restores both the repository policy and host binding;
@@ -325,3 +301,9 @@ a new close plan instead.
 
 Never bypass a blocked result with force flags. Use the reported dirty evidence
 to prepare a separate, owner-approved rescue or disposition plan.
+
+When `recovery status` reports an invalid durable journal or receipt, it stays
+in safe mode. An owner may first create its bound recovery approval, then run
+`recovery quarantine --id <finding-id> --approval <approval-id>`. Quarantine
+moves exactly the currently approved evidence into the local recovery store;
+it never deletes or rewrites it and records immutable before/after receipts.

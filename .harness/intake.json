@@ -1,7 +1,7 @@
 {
   "schemaVersion": "2.0",
   "owner": "zhichao",
-  "approvedAt": "2026-09-01T11:48:39.095Z",
+  "approvedAt": "2026-09-03T07:55:36.082Z",
   "sources": [
     {
       "id": "prd",
@@ -46,6 +46,34 @@
       "approved": true
     },
     {
+      "id": "design-result-01-branch-worktree-collaboration-target",
+      "kind": "design",
+      "path": "docs/design/result-01-branch-worktree-collaboration-target.md",
+      "sha256": "83f8bacbfc1472a6e581d23fe1c4c492421f9a9b1da497e85458701b465d27f4",
+      "approved": true
+    },
+    {
+      "id": "design-result-02-harness-v3-scenario-feature-inventory",
+      "kind": "design",
+      "path": "docs/design/result-02-harness-v3-scenario-feature-inventory.md",
+      "sha256": "1f362297ec7b6be694a90efb63523e0ff137c48f1e6eb95467562327948d0ce2",
+      "approved": true
+    },
+    {
+      "id": "design-result-03-harness-v3-feature-contract",
+      "kind": "design",
+      "path": "docs/design/result-03-harness-v3-feature-contract.md",
+      "sha256": "f2689c89fef25c5ed544c16657988767551bde8b1d460fb8817b0ae193840d60",
+      "approved": true
+    },
+    {
+      "id": "design-result-04-harness-v3-requirements",
+      "kind": "design",
+      "path": "docs/design/result-04-harness-v3-requirements.md",
+      "sha256": "e7b598310403f7d7212075f59bad3ebf0b28698c3c842ec0e6829edcc6aa8ce6",
+      "approved": true
+    },
+    {
       "id": "design-typescript-naming-adoption-baseline",
       "kind": "design",
       "path": "docs/design/typescript-naming-adoption-baseline.md",
@@ -56,7 +84,7 @@
       "id": "design-worktree-delivery",
       "kind": "design",
       "path": "docs/design/worktree-delivery.md",
-      "sha256": "aaa32ed7b25f4870c8e8a0ca61a0f6fdd68698a85d8f2134c47d4c3e4f89a641",
+      "sha256": "31cd4272386dc703b4b033140636b0eae522cbe67f202396a5e1831753f91bbb",
       "approved": true
     },
     {

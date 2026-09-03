@@ -3,15 +3,17 @@ import {
   existsSync,
   closeSync,
   fsyncSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
@@ -90,6 +92,57 @@ export function atomicWrite(path: string, content: string): void {
     }
   } finally {
     if (existsSync(temporary)) rmSync(temporary, { force: true });
+  }
+}
+
+function fsyncDirectory(path: string): void {
+  const descriptor = openSync(path, "r");
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function durableMkdir(path: string): void {
+  const missing: string[] = [];
+  let current = resolve(path);
+  while (!existsSync(current)) {
+    missing.push(current);
+    const parent = dirname(current);
+    if (parent === current) throw new Error(`DURABLE_DIRECTORY_INVALID: ${path}`);
+    current = parent;
+  }
+  if (!lstatSync(current).isDirectory() || lstatSync(current).isSymbolicLink()) {
+    throw new Error(`DURABLE_DIRECTORY_INVALID: ${current}`);
+  }
+  for (const directory of missing.reverse()) {
+    mkdirSync(directory);
+    fsyncDirectory(dirname(directory));
+  }
+}
+
+/** Write a receipt exactly once and make both file and parent directory durable. */
+export function durableWriteOnce(path: string, content: string): void {
+  const directoryPath = dirname(path);
+  durableMkdir(directoryPath);
+  const stagingDirectory = dirname(directoryPath);
+  const temporary = join(stagingDirectory, `.${basename(path)}.harness-${process.pid}-${randomUUID()}.tmp`);
+  const descriptor = openSync(temporary, "wx");
+  try {
+    try {
+      writeFileSync(descriptor, content, "utf8");
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+    linkSync(temporary, path);
+    fsyncDirectory(directoryPath);
+  } finally {
+    if (existsSync(temporary)) {
+      unlinkSync(temporary);
+      fsyncDirectory(stagingDirectory);
+    }
   }
 }
 

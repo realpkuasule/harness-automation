@@ -452,7 +452,10 @@ export interface WorkspaceReceipt {
   rollbackObservedHash?: string;
   rollbackAfter?: WorkspaceStatus;
   leaseChanges?: WorkspaceLeaseChange[];
+  mutationStarted?: boolean;
   compensationStatus?: "not-required" | "completed" | "failed";
+  compensationObservedHash?: string;
+  rollbackStatus?: "started" | "completed" | "failed";
   createdDirectories?: string[];
   migration?: {
     sourceProjectDir: string;

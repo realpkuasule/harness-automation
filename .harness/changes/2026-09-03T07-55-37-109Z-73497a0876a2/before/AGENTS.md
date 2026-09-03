@@ -54,7 +54,7 @@ repository's own development workflow.
 <!-- harness-automation:v2:start -->
 ## Harness engineering continuity
 
-Effective policy digest: `00587659bb17926f4c98ac6d0cbd7d19dba7bf78f068c8e22d919bb61568f36e`
+Effective policy digest: `4d97d96717e18809f4b5e6810c78924d91a63937f2f493a1deb153442f864f9f`
 
 Before editing code in a new session:
 
