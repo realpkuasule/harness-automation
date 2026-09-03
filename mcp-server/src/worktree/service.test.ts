@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { hashObject, prettyJson, sha256, withoutHash } from "../v2/fs.js";
-import { readLkgChain, readReceiptChain } from "../receipt/service.js";
+import { appendReceiptEvent, readLkgChain, readReceiptChain } from "../receipt/service.js";
 import { createRecoveryApproval, inspectRecoveryState, recordRecoveryApproval } from "../recovery/service.js";
 import { resolveRepositoryContext } from "../repository/git.js";
 import type { WorktreeApprovalPolicy, WorktreeDelegatableOperation } from "./types.js";
@@ -669,6 +669,78 @@ describe("hash-approved worktree lifecycle", () => {
     const rolledBack = rollbackWorkspaceChange({ projectRoot: root, changeId: receipt.id });
     expect(rolledBack).toMatchObject({ status: "rolled-back", rollbackObservedHash: expect.any(String) });
     expect(readLkgChain({ root: commonDir, domain: "workspace" })).toHaveLength(2);
+  });
+
+  it("resumes a pre-mutation workspace receipt only with exact recovery approval", () => {
+    const root = repository();
+    const planned = planWorkspaceConfiguration({
+      projectRoot: root,
+      mode: "enforced",
+      allowedRoots: [join(root, "..")],
+      remoteBranchDeletion: false,
+    });
+    const before = workspaceStatus(root);
+    appendReceiptEvent({
+      root: before.commonDir,
+      domain: "workspace",
+      transactionId: planned.plan.id,
+      snapshot: {
+        schemaVersion: "worktree-delivery/1.0",
+        kind: "workspace-receipt",
+        id: planned.plan.id,
+        planHash: planned.plan.planHash,
+        operation: "configure",
+        status: "started",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        steps: [],
+        before,
+        beforeObservedHash: before.observedHash,
+        mutationStarted: false,
+        compensationStatus: "not-required",
+      },
+      projection: {
+        root: before.commonDir,
+        path: `harness/worktree-delivery/receipts/${planned.plan.id}.json`,
+      },
+    });
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+    })).toThrow(/RECOVERY_HUMAN_APPROVAL_REQUIRED/);
+    const context = resolveRepositoryContext(root);
+    const finding = inspectRecoveryState(context).find((item) => item.id === planned.plan.id)!;
+    const approval = createRecoveryApproval({
+      context,
+      finding,
+      approvedBy: "owner",
+      approvedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:01:00.000Z",
+    });
+    recordRecoveryApproval(context, approval);
+    expect(applyWorkspacePlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+      recoveryApprovalRef: approval.id,
+      now: new Date("2099-01-01T00:00:30.000Z"),
+    })).toMatchObject({ status: "applied" });
+    expect(inspectRecoveryState(context)).toEqual([]);
+  });
+
+  it("never overwrites an immutable workspace plan", () => {
+    const root = repository();
+    const input = {
+      projectRoot: root,
+      mode: "enforced" as const,
+      allowedRoots: [join(root, "..")],
+      remoteBranchDeletion: false,
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    };
+    const planned = planWorkspaceConfiguration(input);
+    writeFileSync(join(root, planned.path), "tampered\n", "utf8");
+    expect(() => planWorkspaceConfiguration(input)).toThrow(/WORKSPACE_PLAN_CONFLICT/);
+    expect(readFileSync(join(root, planned.path), "utf8")).toBe("tampered\n");
   });
 
   it("separates portable policy from the host-local path binding", () => {

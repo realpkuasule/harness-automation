@@ -3776,7 +3776,7 @@ function applyWorkspacePlanLocked(
       "WORKSPACE_PLAN_REPLAN_REQUIRED: legacy allocation plan does not bind GitHub Project state",
     );
   }
-  let before = workspaceStatus(root, {
+  const before = workspaceStatus(root, {
     providerWorkItems: plan.operation.kind === "allocate" &&
         plan.operation.providerObservationBound
       ? [plan.operation.lease.workItem]
