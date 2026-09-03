@@ -31,6 +31,8 @@ describe("v2 MCP transport", () => {
       "harness_apply",
       "harness_check",
       "harness_rollback",
+      "harness_recovery_status",
+      "harness_lkg",
       "harness_worktree_status",
       "harness_worktree_audit",
       "harness_worktree_configure",
@@ -108,6 +110,15 @@ describe("v2 MCP transport", () => {
     writeFileSync(join(projectDir, "README.md"), "# fixture\n", "utf8");
     execFileSync("git", ["add", "README.md"], { cwd: projectDir });
     execFileSync("git", ["commit", "-m", "test: initialize fixture"], { cwd: projectDir });
+    const recoveryResult = await client.callTool({
+      name: "harness_recovery_status",
+      arguments: { projectDir },
+    });
+    expect(JSON.parse((recoveryResult.content[0] as { type: "text"; text: string }).text))
+      .toEqual({ findings: [] });
+    const lkgResult = await client.callTool({ name: "harness_lkg", arguments: { projectDir } });
+    expect(JSON.parse((lkgResult.content[0] as { type: "text"; text: string }).text))
+      .toEqual({ records: [] });
     const configuredResult = await client.callTool({
       name: "harness_worktree_configure",
       arguments: {
