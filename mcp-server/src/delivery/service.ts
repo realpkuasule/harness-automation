@@ -6,6 +6,7 @@ import { commandJson } from "../worktree/provider.js";
 import { loadWorktreeConfig } from "../worktree/config.js";
 import { runGit, runGitCommand } from "../repository/git.js";
 import { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
+import { readDeliveryPrepareTransactions } from "./prepare.js";
 import {
   DELIVERY_AUTHORIZATION_SCHEMA_VERSION,
   DELIVERY_RECEIPT_SCHEMA_VERSION,
@@ -81,6 +82,25 @@ function receiptDirectory(common: string): string {
 
 function receiptPath(common: string, id: string): string {
   return safePath(common, `harness/worktree-delivery/receipts/${id}.json`);
+}
+
+function canonicalGitHubWorkItem(value: string): string | null {
+  const match = /^github:([^/\s]+)\/([^#\s]+)#([0-9]+)$/iu.exec(value.trim());
+  if (!match) return null;
+  const issue = match[3].replace(/^0+(?=[0-9])/u, "");
+  return `github:${match[1].toLowerCase()}/${match[2].toLowerCase()}#${issue}`;
+}
+
+function coordinationBlock(common: string, workItem: string): boolean {
+  const expected = canonicalGitHubWorkItem(workItem);
+  if (!expected) return false;
+  return readDeliveryPrepareTransactions(common).some((transaction) => transaction.events.some((event) =>
+    event.snapshot.mode === "github" && event.snapshot.workItem !== null &&
+    canonicalGitHubWorkItem(event.snapshot.workItem) === expected));
+}
+
+function assertLegacyCoordinationAllowed(root: string, workItem: string): void {
+  if (coordinationBlock(commonDir(root), workItem)) throw new Error("CoordinationBackendRequired");
 }
 
 function withoutAuthorizationHash(authorization: DeliveryAuthorization): Omit<DeliveryAuthorization, "authorizationHash"> {
@@ -315,10 +335,11 @@ export function authorizeDelivery(options: {
   const observedRepository = githubEndpointRepository(endpoint.value, remote).toLowerCase();
   const repository = (options.repository?.trim() || observedRepository).toLowerCase();
   if (repository !== observedRepository) throw new Error("DELIVERY_REMOTE_REPOSITORY_MISMATCH");
-  if (!/^github:[^/]+\/[^#]+#\d+$/u.test(options.workItem.trim()) ||
-      !options.workItem.toLowerCase().startsWith(`github:${repository}#`)) {
+  const workItem = canonicalGitHubWorkItem(options.workItem);
+  if (!workItem || !workItem.startsWith(`github:${repository}#`)) {
     throw new Error(`DELIVERY_WORK_ITEM_REPOSITORY_MISMATCH: ${options.workItem}`);
   }
+  assertLegacyCoordinationAllowed(root, workItem);
   const baseBranch = options.baseBranch.trim();
   const featureBranch = options.featureBranch?.trim() || currentBranch(root);
   if (!baseBranch || !featureBranch || baseBranch === featureBranch) throw new Error("DELIVERY_BRANCH_INVALID");
@@ -344,13 +365,13 @@ export function authorizeDelivery(options: {
   const authorization: DeliveryAuthorization = {
     schemaVersion: DELIVERY_AUTHORIZATION_SCHEMA_VERSION,
     kind: "delivery-authorization",
-    id: `delivery-${options.workItem.trim().split("#").at(-1)}-${sha256(`${options.workItem}\n${featureBranch}\n${issuedAt}`).slice(0, 12)}`,
+    id: `delivery-${workItem.split("#").at(-1)}-${sha256(`${workItem}\n${featureBranch}\n${issuedAt}`).slice(0, 12)}`,
     issuedAt,
     approval: { source: approvalSource, sourceHash: sha256(approvalSource) },
     supersedes: options.supersedes,
     intent,
     intentHash: sha256(intent),
-    workItem: options.workItem.trim(),
+    workItem,
     repository,
     remote: { name: remote, endpointHash: endpoint.hash },
     baseBranch,
@@ -386,10 +407,12 @@ export function latestDeliveryAuthorization(projectRoot: string, workItem: strin
   const root = repositoryRoot(projectRoot);
   const directory = receiptDirectory(commonDir(root));
   if (!existsSync(directory)) return null;
+  const expected = canonicalGitHubWorkItem(workItem);
+  if (!expected) return null;
   const values = readdirSync(directory)
     .filter((name) => name.startsWith("delivery-authorization-") && name.endsWith(".json"))
     .map((name) => readJson<DeliveryAuthorization>(join(directory, name)))
-    .filter((authorization) => authorization.workItem === workItem)
+    .filter((authorization) => canonicalGitHubWorkItem(authorization.workItem) === expected)
     .map(ensureAuthorization);
   if (values.length <= 1) return values[0] ?? null;
   const superseded = new Set(values.flatMap((authorization) => authorization.supersedes ? [authorization.supersedes] : []));
@@ -410,7 +433,8 @@ export function deliveryStatus(projectRoot: string, authorizationHash: string): 
   const currentHead = commit(featureRoot, "HEAD");
   const receipts = readReceipts(commonDir(root), authorization.authorizationHash);
   let invalidation: string | undefined;
-  if (currentBranch(featureRoot) !== authorization.featureBranch) invalidation = "DELIVERY_FEATURE_BRANCH_DRIFT";
+  if (coordinationBlock(commonDir(root), authorization.workItem)) invalidation = "CoordinationBackendRequired";
+  else if (currentBranch(featureRoot) !== authorization.featureBranch) invalidation = "DELIVERY_FEATURE_BRANCH_DRIFT";
   else if (remotePushEndpoint(root, authorization.remote.name).hash !== authorization.remote.endpointHash) invalidation = "DELIVERY_REMOTE_ENDPOINT_DRIFT";
   else if (currentPolicyHash(root) !== authorization.policyHash) invalidation = "DELIVERY_POLICY_DRIFT";
   else {

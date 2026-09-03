@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { atomicWrite, hashObject, prettyJson, sha256 } from "../v2/fs.js";
@@ -75,6 +75,42 @@ describe("recovery safe mode", () => {
       kind: "file-apply", id: "change-one", action: "resume-apply", approvalRef: approval.id,
       now: new Date("2026-01-01T00:02:00.000Z"),
     })).toThrow("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+  });
+
+  it("reclaims an exact local dead-owner lock but preserves unknown and foreign locks", () => {
+    const ctx = context();
+    const lock = join(ctx.projectDir, ".harness", "locks", "apply.lock");
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(join(lock, "owner.json"), prettyJson({
+      schemaVersion: "mutation-lock/1.0",
+      host: hostname(),
+      pid: 2_147_483_647,
+      token: randomUUID(),
+      acquiredAt: "2026-01-01T00:00:00.000Z",
+    }));
+    const reclaimed = acquireMutationLock(ctx);
+    expect(reclaimed).toBe(lock);
+    releaseMutationLock(reclaimed);
+
+    mkdirSync(lock);
+    expect(() => acquireMutationLock(ctx)).toThrow("WORKSPACE_LOCKED");
+    rmSync(lock, { recursive: true });
+
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner.json"), prettyJson({
+      schemaVersion: "mutation-lock/1.0",
+      host: `${hostname()}-other`,
+      pid: 2_147_483_647,
+      token: randomUUID(),
+      acquiredAt: "2026-01-01T00:00:00.000Z",
+    }));
+    expect(() => acquireMutationLock(ctx)).toThrow("WORKSPACE_LOCKED");
+    rmSync(lock, { recursive: true });
+
+    mkdirSync(lock);
+    writeFileSync(join(lock, "unexpected"), "preserve\n");
+    expect(() => acquireMutationLock(ctx)).toThrow("WORKSPACE_LOCKED");
+    expect(existsSync(join(lock, "unexpected"))).toBe(true);
   });
 
   it("recovers one exact target even when another transaction is also pending", () => {

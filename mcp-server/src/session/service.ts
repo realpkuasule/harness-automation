@@ -1,11 +1,20 @@
-import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-import { atomicWrite, readJson, safePath, sha256 } from "../v2/fs.js";
+import { spawnSync } from "node:child_process";
+import { existsSync, lstatSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { atomicWrite, durableWriteOnce, fileHash, hashObject, readJson, safePath, sha256 } from "../v2/fs.js";
+import { readLkgChain, readReceiptChain } from "../receipt/service.js";
+import { acquireMutationLock, releaseMutationLock } from "../recovery/service.js";
+import {
+  localBoardSchema,
+  readDeliveryPrepareTransactions,
+  type DeliveryPrepareJournal,
+} from "../delivery/prepare.js";
 import { observeProvider } from "../worktree/provider.js";
 import { loadWorktreeConfig } from "../worktree/config.js";
 import { runGitCommand } from "../repository/git.js";
 import { deliveryStatus, latestDeliveryAuthorization } from "../delivery/service.js";
-import type { WorktreeDeliveryConfig } from "../worktree/types.js";
+import type { WorkspaceLease, WorktreeDeliveryConfig } from "../worktree/types.js";
 import {
   appendReceiptsComment,
   readIssue,
@@ -26,11 +35,14 @@ import {
   parseWorkItem,
   type HandoffCommitEntry,
   type HandoffDocValidation,
+  type GitHubParsedWorkItem,
+  type LocalParsedWorkItem,
   type ParsedWorkItem,
   type SessionReceipt,
 } from "./types.js";
 
 const SEED_SECTION_HEADING = "## SEED（由 CLI 确定性生成，勿手改）";
+const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 
 const HANDOFF_SECTIONS = [
   "## 目标与验收标准",
@@ -113,6 +125,18 @@ function receiptLibrary(projectRoot: string, commonDir: string): Map<string, str
       if (!lstatSync(path).isFile()) continue;
       entries.set(name.slice(0, -".json".length), path);
     }
+  }
+  const prepareReceipts = safePath(commonDir, "harness/receipts/delivery-prepare");
+  if (existsSync(prepareReceipts) && lstatSync(prepareReceipts).isDirectory()) {
+    for (const transactionId of readdirSync(prepareReceipts).sort()) {
+      if (!/^prepare-[a-f0-9]{24}$/u.test(transactionId)) continue;
+      for (const event of readReceiptChain({ root: commonDir, domain: "delivery-prepare", transactionId })) {
+        entries.set(event.eventHash, safePath(prepareReceipts, `${transactionId}/events/${String(event.sequence).padStart(12, "0")}.json`));
+      }
+    }
+  }
+  for (const record of readLkgChain({ root: commonDir, domain: "delivery-prepare" })) {
+    entries.set(record.recordHash, safePath(commonDir, `harness/lkg/delivery-prepare/records/${String(record.sequence).padStart(12, "0")}.json`));
   }
   return entries;
 }
@@ -202,7 +226,9 @@ function validateHandoffDoc(
 }
 
 function handoffDocPath(projectRoot: string, workItem: ParsedWorkItem): string {
-  return safePath(projectRoot, `docs/HANDOFF-${workItem.number}.md`);
+  return safePath(projectRoot, workItem.provider === "github"
+    ? `docs/HANDOFF-${workItem.number}.md`
+    : `docs/HANDOFF-local-${workItem.id}.md`);
 }
 
 function withSeedSection(content: string, seed: string): string {
@@ -229,7 +255,7 @@ function acceptanceValue(
   loaded: LoadedWorkflow,
   root: string,
   config: WorktreeDeliveryConfig,
-  workItem: ParsedWorkItem,
+  workItem: GitHubParsedWorkItem,
   body: string,
   url: string,
 ): string {
@@ -295,6 +321,8 @@ export interface SessionCommandOptions {
   session?: string;
   toStatus?: string;
   dryRun?: boolean;
+  /** Deterministic test seam immediately before Local-only task status CAS. */
+  testBeforeLocalStatusCas?: () => void;
 }
 
 function parseSessionId(session: string | undefined): string {
@@ -308,7 +336,7 @@ function parseSessionId(session: string | undefined): string {
 function parsedWorkItem(input: string | undefined): ParsedWorkItem {
   if (!input) throw new Error("ARGUMENT_REQUIRED: --work-item");
   const parsed = parseWorkItem(input);
-  if (!parsed) throw new Error(`SESSION_WORK_ITEM_INVALID: expected github:<owner>/<repo>#<number>, got ${input}`);
+  if (!parsed) throw new Error(`SESSION_WORK_ITEM_INVALID: expected github:<owner>/<repo>#<number> or local:<id>, got ${input}`);
   return parsed;
 }
 
@@ -333,7 +361,7 @@ function providerProject(
   return project;
 }
 
-function assertRepositoryMatch(config: WorktreeDeliveryConfig, workItem: ParsedWorkItem): void {
+function assertRepositoryMatch(config: WorktreeDeliveryConfig, workItem: GitHubParsedWorkItem): void {
   const repository = config.provider.kind === "github" ? config.provider.repository?.trim().toLowerCase() : undefined;
   const expected = `${workItem.owner}/${workItem.repository}`.toLowerCase();
   if (repository !== expected) {
@@ -341,11 +369,140 @@ function assertRepositoryMatch(config: WorktreeDeliveryConfig, workItem: ParsedW
   }
 }
 
+interface LocalSessionEvidence {
+  task: ReturnType<typeof localBoardSchema.parse>["tasks"][number];
+  lease: WorkspaceLease;
+  worktree: LocalWorktreeEvidence;
+  journal: DeliveryPrepareJournal;
+  receiptEventHash: string;
+  lkgRecordHash: string;
+}
+
+interface LocalWorktreeEvidence {
+  path: string;
+  branch: string;
+  head: string;
+  dirty: boolean;
+  bare: boolean;
+  detached: boolean;
+  locked: boolean;
+  prunable: boolean;
+}
+
+function localLease(commonDir: string, workItem: LocalParsedWorkItem): WorkspaceLease {
+  const path = safePath(commonDir, `harness/worktree-delivery/leases/${sha256(workItem.workItem)}.json`);
+  if (!existsSync(path) || !lstatSync(path).isFile()) throw new Error(`SESSION_LOCAL_LEASE_INVALID: ${workItem.workItem}`);
+  const lease = readJson<Partial<WorkspaceLease>>(path);
+  const required = ["workItem", "branch", "path", "owner", "acceptedCommit", "createdAt", "heartbeatAt", "status"] as const;
+  if (lease.schemaVersion !== "1.0" || lease.workItem !== workItem.workItem ||
+      required.some((key) => typeof lease[key] !== "string") ||
+      !["active", "review", "done"].includes(String(lease.status)) ||
+      !Number.isFinite(Date.parse(String(lease.createdAt))) || !Number.isFinite(Date.parse(String(lease.heartbeatAt)))) {
+    throw new Error(`SESSION_LOCAL_LEASE_INVALID: ${workItem.workItem}`);
+  }
+  return lease as WorkspaceLease;
+}
+
+function localWorktree(root: string, lease: WorkspaceLease): LocalWorktreeEvidence {
+  type Entry = Omit<LocalWorktreeEvidence, "dirty">;
+  const entries: Entry[] = [];
+  let current: Entry | null = null;
+  for (const token of git(root, ["worktree", "list", "--porcelain", "-z"]).split("\0")) {
+    if (!token) {
+      if (current) entries.push(current);
+      current = null;
+      continue;
+    }
+    const separator = token.indexOf(" ");
+    const key = separator === -1 ? token : token.slice(0, separator);
+    const value = separator === -1 ? "" : token.slice(separator + 1);
+    if (key === "worktree") {
+      if (current) entries.push(current);
+      current = { path: value, branch: "", head: "", bare: false, detached: false, locked: false, prunable: false };
+    } else if (!current) {
+      throw new Error("SESSION_LOCAL_WORKTREE_INVALID");
+    } else if (key === "HEAD") current.head = value;
+    else if (key === "branch") current.branch = value.replace(/^refs\/heads\//u, "");
+    else if (key === "bare") current.bare = true;
+    else if (key === "detached") current.detached = true;
+    else if (key === "locked") current.locked = true;
+    else if (key === "prunable") current.prunable = true;
+  }
+  if (current) entries.push(current);
+  const matches = entries.filter((entry) => resolve(entry.path) === resolve(lease.path) && entry.branch === lease.branch);
+  if (matches.length !== 1) throw new Error(`SESSION_LOCAL_WORKTREE_INVALID: ${lease.workItem}`);
+  return {
+    ...matches[0],
+    dirty: git(lease.path, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]).length > 0,
+  };
+}
+
+function localSessionEvidence(root: string, workItem: LocalParsedWorkItem): LocalSessionEvidence {
+  const commonDir = gitCommonDir(root);
+  const boardPath = safePath(commonDir, "harness/local-tracking/TASK.json");
+  if (!existsSync(boardPath)) throw new Error(`SESSION_LOCAL_TASK_NOT_FOUND: ${workItem.workItem}`);
+  const board = localBoardSchema.parse(readJson<unknown>(boardPath));
+  const tasks = board.tasks.filter((task) => task.id === workItem.id && task.status !== "deleted");
+  if (tasks.length !== 1) throw new Error(`SESSION_LOCAL_TASK_INVALID: ${workItem.workItem}`);
+
+  const lease = localLease(commonDir, workItem);
+  if (lease.status !== "active") throw new Error(`SESSION_LOCAL_LEASE_INVALID: ${workItem.workItem}`);
+  const worktree = localWorktree(root, lease);
+  if (worktree.detached || worktree.bare || worktree.locked || worktree.prunable) {
+    throw new Error(`SESSION_LOCAL_WORKTREE_INVALID: ${workItem.workItem}`);
+  }
+  const ancestry = runGitCommand(lease.path, ["merge-base", "--is-ancestor", lease.acceptedCommit, worktree.head], process.env);
+  if (ancestry.error || ancestry.status !== 0) throw new Error(`SESSION_LOCAL_HEAD_DRIFT: ${workItem.workItem}`);
+
+  const prepared = readDeliveryPrepareTransactions(commonDir).flatMap((transaction) => {
+    const event = transaction.latest;
+    const journal = event.snapshot;
+    return journal.mode === "local-only" && journal.workItem === workItem.workItem &&
+      journal.state === "Prepared" && journal.outcome === "PreparedNotOpened"
+      ? [{ journal, receiptEventHash: event.eventHash }]
+      : [];
+  });
+  if (prepared.length !== 1) throw new Error(`SESSION_LOCAL_PREPARE_INVALID: ${workItem.workItem}`);
+  const evidence = prepared[0];
+  if (evidence.journal.branch !== lease.branch || resolve(evidence.journal.path ?? "") !== resolve(lease.path)) {
+    throw new Error(`SESSION_LOCAL_BINDING_DRIFT: ${workItem.workItem}`);
+  }
+  const lkg = readLkgChain({ root: commonDir, domain: "delivery-prepare" })
+    .filter((record) => record.transactionId === evidence.journal.transactionId && record.receiptEventHash === evidence.receiptEventHash);
+  if (lkg.length !== 1) throw new Error(`SESSION_LOCAL_LKG_INVALID: ${workItem.workItem}`);
+  return {
+    task: tasks[0],
+    lease,
+    worktree,
+    journal: evidence.journal,
+    receiptEventHash: evidence.receiptEventHash,
+    lkgRecordHash: lkg[0].recordHash,
+  };
+}
+
+function localSeed(root: string, loaded: LoadedWorkflow, workItem: LocalParsedWorkItem): { seed: string; evidence: LocalSessionEvidence } {
+  const evidence = localSessionEvidence(root, workItem);
+  const path = `docs/HANDOFF-local-${workItem.id}.md`;
+  const seed = renderSeed(loaded, {
+    projectName: basename(root),
+    repoUrl: `local:${root}`,
+    goal: evidence.task.title,
+    acceptance: evidence.task.description.replace(/\n\n<!-- harness-automation:delivery-prepare:[^>]+ -->\s*$/u, ""),
+    handoffPath: path,
+    constraints: loaded.workflow.seed.constraints,
+  });
+  return {
+    evidence,
+    seed: `${seed}\n\n【本地持久证据】TASK ${workItem.workItem}\n分支：${evidence.lease.branch}\n路径：${evidence.lease.path}\nHEAD：${evidence.worktree.head}\nPrepare 回执：${evidence.receiptEventHash}\nLKG：${evidence.lkgRecordHash}`,
+  };
+}
+
 /** `session seed`：仅渲染 seed prompt，不落盘、不流转。 */
 export function sessionSeed(options: SessionCommandOptions): { ok: true; seed: string } {
   const root = options.projectRoot;
   const workItem = parsedWorkItem(options.workItem);
   const loaded = loadSessionWorkflow(root);
+  if (workItem.provider === "local") return { ok: true, seed: localSeed(root, loaded, workItem).seed };
   const authorization = latestDeliveryAuthorization(root, workItem.workItem);
   const configured = loadWorktreeConfig(root);
   if (configured.config.provider.kind === "github") assertRepositoryMatch(configured.config, workItem);
@@ -394,6 +551,11 @@ export function sessionStatus(options: SessionCommandOptions): {
     const docsDir = safePath(root, "docs");
     if (existsSync(docsDir) && lstatSync(docsDir).isDirectory()) {
       for (const name of readdirSync(docsDir).sort()) {
+        const localMatch = /^HANDOFF-local-([A-Za-z0-9][A-Za-z0-9._-]*)\.md$/u.exec(name);
+        if (localMatch) {
+          items.push(parseWorkItem(`local:${localMatch[1]}`) as ParsedWorkItem);
+          continue;
+        }
         const match = /^HANDOFF-(\d+)\.md$/u.exec(name);
         if (!match) continue;
         try {
@@ -418,6 +580,49 @@ export function sessionStatus(options: SessionCommandOptions): {
       ? validateHandoffDoc(root, commonDir, docPath)
       : { exists: existsSync(docPath), valid: false, problems: ["GIT_REPOSITORY_REQUIRED"], referencedFiles: [], receiptIds: [], placeholders: [] };
     const last = commonDir ? lastReceiptFor(root, commonDir, workItem.workItem) : null;
+    if (workItem.provider === "local") {
+      try {
+        const evidence = localSessionEvidence(root, workItem);
+        return {
+          workItem: workItem.workItem,
+          task: {
+            available: true,
+            title: evidence.task.title,
+            description: evidence.task.description,
+            status: evidence.task.status,
+            priority: evidence.task.priority,
+          },
+          workspace: {
+            branch: evidence.lease.branch,
+            path: evidence.lease.path,
+            head: evidence.worktree.head,
+            dirty: evidence.worktree.dirty,
+          },
+          prepare: {
+            transactionId: evidence.journal.transactionId,
+            outcome: evidence.journal.outcome,
+            receiptEventHash: evidence.receiptEventHash,
+            lkgRecordHash: evidence.lkgRecordHash,
+          },
+          handoffDoc: { path: docPath, ...doc },
+          lastReceipt: last ? {
+            id: last.receipt.id,
+            at: last.receipt.at,
+            commit: last.receipt.commit,
+            handoffDocHash: last.receipt.handoffDocHash,
+          } : null,
+          delivery: null,
+        };
+      } catch (error) {
+        return {
+          workItem: workItem.workItem,
+          task: { available: false, error: error instanceof Error ? error.message : String(error) },
+          handoffDoc: { path: docPath, ...doc },
+          lastReceipt: null,
+          delivery: null,
+        };
+      }
+    }
     let delivery: Record<string, unknown> | null = null;
     try {
       const authorization = latestDeliveryAuthorization(root, workItem.workItem);
@@ -527,6 +732,395 @@ function displayStatus(kebab: string, statusValues: Record<string, string>): str
   return statusValues[kebab] ?? kebab;
 }
 
+function bundledTaskScript(): string {
+  const scriptDirectory = [
+    join(moduleDirectory, "..", "scripts"),
+    join(moduleDirectory, "..", "..", "..", "scripts"),
+  ].find((candidate) => {
+    const task = join(candidate, "task.py");
+    const helper = join(candidate, "local_tracking.py");
+    return existsSync(task) && existsSync(helper) && lstatSync(task).isFile() && !lstatSync(task).isSymbolicLink() &&
+      lstatSync(helper).isFile() && !lstatSync(helper).isSymbolicLink();
+  });
+  if (!scriptDirectory) throw new Error("SESSION_LOCAL_TRACKING_SCRIPT_REQUIRED");
+  return join(scriptDirectory, "task.py");
+}
+
+function updateLocalTaskStatusCas(
+  root: string,
+  workItem: LocalParsedWorkItem,
+  expectedStatus: string,
+  nextStatus: "in_progress",
+  actor: string,
+): { status: string; updatedBy: string } {
+  const result = spawnSync(process.platform === "win32" ? "python" : "python3", [
+    bundledTaskScript(),
+    "--local-only",
+    "update",
+    workItem.id,
+    "--status",
+    nextStatus,
+    "--expected-status",
+    expectedStatus,
+    "--by",
+    actor,
+  ], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 30_000,
+    maxBuffer: 1024 * 1024,
+    env: {
+      PATH: process.env.PATH,
+      LANG: process.env.LANG ?? "C.UTF-8",
+      HARNESS_REPO_ROOT: root,
+      PYTHONDONTWRITEBYTECODE: "1",
+      ...(process.platform === "win32" ? {
+        SystemRoot: process.env.SystemRoot,
+        WINDIR: process.env.WINDIR,
+        COMSPEC: process.env.COMSPEC,
+        PATHEXT: process.env.PATHEXT,
+      } : {}),
+    },
+  });
+  const detail = `${result.stderr || result.stdout || result.error?.message || ""}`.trim();
+  if (result.error || result.status !== 0) {
+    throw new Error(`SESSION_LOCAL_TRACKING_UPDATE_FAILED: ${detail || `exit ${result.status ?? "unknown"}`}`);
+  }
+  const board = localBoardSchema.parse(readJson<unknown>(safePath(gitCommonDir(root), "harness/local-tracking/TASK.json")));
+  const matches = board.tasks.filter((task) => task.id === workItem.id && task.status !== "deleted");
+  if (matches.length !== 1 || matches[0].status !== nextStatus || matches[0].updatedBy !== actor) {
+    throw new Error(`SESSION_LOCAL_TRACKING_READBACK_FAILED: ${workItem.workItem}`);
+  }
+  return { status: matches[0].status, updatedBy: matches[0].updatedBy };
+}
+
+interface LocalHandoffTransaction {
+  schemaVersion: "session-handoff-transaction/1.0";
+  kind: "session-handoff-transaction";
+  id: string;
+  receipt: SessionReceipt;
+  docBeforeHash: string;
+  docContentHash: string;
+  journalHash: string;
+}
+
+function parseLocalHandoffTransaction(value: unknown): LocalHandoffTransaction {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_INVALID");
+  }
+  const transaction = value as LocalHandoffTransaction;
+  const unhashed = { ...transaction };
+  delete (unhashed as Partial<LocalHandoffTransaction>).journalHash;
+  if (transaction.schemaVersion !== "session-handoff-transaction/1.0" ||
+      transaction.kind !== "session-handoff-transaction" ||
+      typeof transaction.id !== "string" || !transaction.receipt || typeof transaction.receipt !== "object" ||
+      transaction.receipt.id !== transaction.id ||
+      !/^[a-f0-9]{64}$/u.test(transaction.docBeforeHash) ||
+      !/^[a-f0-9]{64}$/u.test(transaction.docContentHash) ||
+      transaction.journalHash !== hashObject(unhashed)) {
+    throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_INVALID");
+  }
+  return transaction;
+}
+
+function localReceiptMatches(
+  stored: SessionReceipt,
+  expected: Omit<SessionReceipt, "fromStatus" | "at">,
+): boolean {
+  return stored.schemaVersion === expected.schemaVersion &&
+    stored.kind === expected.kind &&
+    stored.id === expected.id &&
+    stored.workItem === expected.workItem &&
+    stored.session === expected.session &&
+    stored.handoffDocPath === expected.handoffDocPath &&
+    stored.handoffDocHash === expected.handoffDocHash &&
+    stored.commit === expected.commit &&
+    Array.isArray(stored.receiptIds) && stored.receiptIds.every((value) => typeof value === "string") &&
+    JSON.stringify(stored.receiptIds) === JSON.stringify(expected.receiptIds) &&
+    (stored.fromStatus === "pending" || stored.fromStatus === "in-progress") &&
+    stored.toStatus === expected.toStatus &&
+    typeof stored.at === "string" && Number.isFinite(Date.parse(stored.at));
+}
+
+function readLocalReceipt(path: string, id: string): SessionReceipt {
+  try {
+    const metadata = lstatSync(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error("invalid receipt file");
+    const value = readJson<unknown>(path);
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid receipt body");
+    return value as SessionReceipt;
+  } catch {
+    throw new Error(`SESSION_LOCAL_HANDOFF_RECEIPT_CONFLICT: ${id}`);
+  }
+}
+
+function receiptPreview(receipt: SessionReceipt): NonNullable<SessionHandoffResult["receipt"]> {
+  return {
+    id: receipt.id,
+    handoffDocHash: receipt.handoffDocHash,
+    commit: receipt.commit,
+    fromStatus: receipt.fromStatus,
+    toStatus: receipt.toStatus,
+  };
+}
+
+const sessionLockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
+
+function acquireSessionMutationLock(commonDir: string): string {
+  const deadline = Date.now() + 30_000;
+  while (true) {
+    try {
+      return acquireMutationLock({ projectDir: commonDir, commonDir, repository: true });
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith("WORKSPACE_LOCKED:") || Date.now() >= deadline) throw error;
+      Atomics.wait(sessionLockWaitBuffer, 0, 0, 25);
+    }
+  }
+}
+
+function localSessionHandoffLocked(
+  options: SessionCommandOptions,
+  workItem: LocalParsedWorkItem,
+  sessionId: string,
+  toStatus: string,
+  loaded: LoadedWorkflow,
+  commonDir: string,
+): SessionHandoffResult {
+  const root = options.projectRoot;
+  const dryRun = options.dryRun === true;
+  if (toStatus !== HANDOFF_CONTINUATION_STATUS) {
+    throw new Error(`SESSION_LOCAL_STATUS_UNSUPPORTED: ${toStatus} has no TASK.json status mapping`);
+  }
+  const { seed, evidence } = localSeed(root, loaded, workItem);
+  if (evidence.task.status !== "pending" && evidence.task.status !== "in_progress") {
+    throw new Error(`SESSION_LOCAL_TASK_STATUS_INVALID: ${evidence.task.status}`);
+  }
+  const repositoryPath = resolve(git(root, ["rev-parse", "--show-toplevel"]).trim());
+  if (repositoryPath !== resolve(evidence.lease.path) || currentBranchForSession(root) !== evidence.lease.branch) {
+    throw new Error(`SESSION_LOCAL_BINDING_DRIFT: ${workItem.workItem}`);
+  }
+  const docPath = handoffDocPath(root, workItem);
+  const relativeDocPath = `docs/HANDOFF-local-${workItem.id}.md`;
+  const lastReceipt = lastReceiptFor(root, commonDir, workItem.workItem);
+  const commit = headCommit(root);
+
+  if (!existsSync(docPath)) {
+    const completed = commitsSince(root, lastReceipt?.receipt.commit ?? null)
+      .map((entry) => `- ${entry.sha} ${entry.subject}`.trimEnd())
+      .join("\n");
+    const draft = renderTemplate(readTemplate(loaded, "handoff"), {
+      issueNumber: workItem.workItem,
+      goal: evidence.task.title,
+      acceptance: evidence.task.description,
+      completed,
+      seed,
+    });
+    if (!dryRun) atomicWrite(docPath, draft);
+    return {
+      ok: true,
+      phase: "draft",
+      dryRun,
+      handoffDocPath: docPath,
+      seed,
+      nextSteps: [
+        "填充交接文档各内容段，并引用 Prepare 回执或 LKG",
+        `重新运行 session handoff --work-item ${workItem.workItem} --session ${sessionId}`,
+      ],
+    };
+  }
+
+  const existing = readFileSync(docPath, "utf8");
+  const initialValidation = validateDocContent(root, commonDir, existing);
+  if (!initialValidation.valid) throw new Error(`SESSION_HANDOFF_DOC_INVALID: ${initialValidation.problems.join("; ")}`);
+  const content = withSeedSection(existing, seed);
+  const finalValidation = validateDocContent(root, commonDir, content);
+  if (!finalValidation.valid) throw new Error(`SESSION_HANDOFF_DOC_INVALID: ${finalValidation.problems.join("; ")}`);
+  if (!finalValidation.receiptIds.includes(evidence.receiptEventHash) && !finalValidation.receiptIds.includes(evidence.lkgRecordHash)) {
+    throw new Error("SESSION_LOCAL_PREPARE_EVIDENCE_REQUIRED");
+  }
+  const handoffDocHash = sha256(content);
+  const receiptId = `handoff-local-${workItem.id}-${handoffDocHash.slice(0, 12)}`;
+  const fromStatus = evidence.task.status === "in_progress" ? "in-progress" : evidence.task.status;
+  const expectedReceipt = {
+    schemaVersion: SESSION_HANDOFF_RECEIPT_SCHEMA_VERSION,
+    kind: "session-handoff-receipt" as const,
+    id: receiptId,
+    workItem: workItem.workItem,
+    session: sessionId,
+    handoffDocPath: relativeDocPath,
+    handoffDocHash,
+    commit,
+    receiptIds: finalValidation.receiptIds,
+    toStatus,
+  };
+  const preview = { id: receiptId, handoffDocHash, commit, fromStatus, toStatus };
+  const receiptPath = safePath(commonDir, `harness/session-handoff/receipts/${receiptId}.json`);
+  if (existsSync(receiptPath)) {
+    const stored = readLocalReceipt(receiptPath, receiptId);
+    const stable = localReceiptMatches(stored, expectedReceipt) &&
+      evidence.task.status === "in_progress" &&
+      evidence.task.updatedBy === stored.session &&
+      sha256(existing) === stored.handoffDocHash;
+    if (!stable) throw new Error(`SESSION_LOCAL_HANDOFF_RECEIPT_CONFLICT: ${receiptId}`);
+    return {
+      ok: true,
+      phase: "ready",
+      dryRun,
+      handoffDocPath: docPath,
+      seed,
+      receipt: receiptPreview(stored),
+      nextSteps: ["新会话从本地 TASK、lease、Prepare 回执与 LKG 恢复，不以聊天摘要覆盖持久证据"],
+    };
+  }
+  if (dryRun) {
+    return {
+      ok: true,
+      phase: "ready",
+      dryRun: true,
+      handoffDocPath: docPath,
+      seed,
+      receipt: preview,
+      nextSteps: [`去掉 --dry-run 执行本地交接：session handoff --work-item ${workItem.workItem} --session ${sessionId}`],
+    };
+  }
+
+  const transactionDirectory = safePath(commonDir, "harness/session-handoff/transactions");
+  if (evidence.task.status === "in_progress" && evidence.task.updatedBy !== sessionId) {
+    throw new Error(`SESSION_LOCAL_TASK_OWNER_MISMATCH: ${workItem.workItem}`);
+  }
+  let transaction: LocalHandoffTransaction | null = null;
+  let createdTransaction: { path: string; hash: string; dev: number; ino: number } | null = null;
+  if (existsSync(transactionDirectory)) {
+    const metadata = lstatSync(transactionDirectory);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_INVALID");
+    for (const name of readdirSync(transactionDirectory).sort()) {
+      if (!name.endsWith(".json")) throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_INVALID");
+      const path = safePath(transactionDirectory, name);
+      const pathMetadata = lstatSync(path);
+      if (!pathMetadata.isFile() || pathMetadata.isSymbolicLink()) {
+        throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_INVALID");
+      }
+      const candidate = parseLocalHandoffTransaction(readJson<unknown>(path));
+      if (name !== `${candidate.id}.json`) throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_INVALID");
+      const candidateReceiptPath = safePath(commonDir, `harness/session-handoff/receipts/${candidate.receipt.id}.json`);
+      if (candidate.receipt.workItem !== workItem.workItem || existsSync(candidateReceiptPath)) continue;
+      if (transaction || candidate.id !== receiptId) throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_CONFLICT");
+      transaction = candidate;
+    }
+  }
+  if (transaction) {
+    if (!localReceiptMatches(transaction.receipt, expectedReceipt) ||
+        transaction.docContentHash !== handoffDocHash ||
+        (transaction.docBeforeHash !== sha256(existing) && transaction.docContentHash !== sha256(existing))) {
+      throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_CONFLICT");
+    }
+  } else {
+    const receipt: SessionReceipt = { ...expectedReceipt, fromStatus, at: new Date().toISOString() };
+    const draft: LocalHandoffTransaction = {
+      schemaVersion: "session-handoff-transaction/1.0",
+      kind: "session-handoff-transaction",
+      id: receiptId,
+      receipt,
+      docBeforeHash: sha256(existing),
+      docContentHash: handoffDocHash,
+      journalHash: "",
+    };
+    const unhashed = { ...draft };
+    delete (unhashed as Partial<LocalHandoffTransaction>).journalHash;
+    draft.journalHash = hashObject(unhashed);
+    const transactionPath = safePath(transactionDirectory, `${receiptId}.json`);
+    const transactionContent = `${JSON.stringify(draft, null, 2)}\n`;
+    durableWriteOnce(transactionPath, transactionContent);
+    const transactionMetadata = lstatSync(transactionPath);
+    createdTransaction = {
+      path: transactionPath,
+      hash: sha256(transactionContent),
+      dev: transactionMetadata.dev,
+      ino: transactionMetadata.ino,
+    };
+    transaction = draft;
+  }
+
+  if (evidence.task.status === "pending") {
+    options.testBeforeLocalStatusCas?.();
+    try {
+      updateLocalTaskStatusCas(root, workItem, "pending", "in_progress", sessionId);
+    } catch (casError) {
+      let authoritativeTask: { status: string; updatedBy: string };
+      try {
+        const board = localBoardSchema.parse(readJson<unknown>(safePath(commonDir, "harness/local-tracking/TASK.json")));
+        const matches = board.tasks.filter((task) => task.id === workItem.id);
+        if (matches.length !== 1) throw new Error("TASK identity is not unique");
+        authoritativeTask = { status: matches[0].status, updatedBy: matches[0].updatedBy };
+      } catch (readbackError) {
+        const detail = readbackError instanceof Error ? readbackError.message : String(readbackError);
+        throw new Error(`SESSION_LOCAL_HANDOFF_RECOVERY_REQUIRED: TASK readback unknown: ${detail}`);
+      }
+      if (authoritativeTask.status !== "in_progress" || authoritativeTask.updatedBy !== sessionId) {
+        if (!createdTransaction) {
+          throw new Error("SESSION_LOCAL_HANDOFF_RECOVERY_REQUIRED: failed CAS did not own this transaction journal");
+        }
+        try {
+          const metadata = lstatSync(createdTransaction.path);
+          if (!metadata.isFile() || metadata.isSymbolicLink() ||
+              metadata.dev !== createdTransaction.dev || metadata.ino !== createdTransaction.ino ||
+              fileHash(createdTransaction.path) !== createdTransaction.hash || existsSync(receiptPath)) {
+            throw new Error("transaction journal changed after creation");
+          }
+          unlinkSync(createdTransaction.path);
+        } catch (cleanupError) {
+          const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+          throw new Error(`SESSION_LOCAL_HANDOFF_RECOVERY_REQUIRED: transaction journal cleanup unsafe: ${detail}`);
+        }
+        throw casError;
+      }
+    }
+  }
+  if (sha256(existing) !== handoffDocHash) atomicWrite(docPath, content);
+  let committedReceipt = transaction.receipt;
+  try {
+    durableWriteOnce(receiptPath, `${JSON.stringify(transaction.receipt, null, 2)}\n`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const stored = readLocalReceipt(receiptPath, receiptId);
+    const refreshed = localSessionEvidence(root, workItem);
+    if (!localReceiptMatches(stored, expectedReceipt) || refreshed.task.status !== "in_progress" ||
+        refreshed.task.updatedBy !== stored.session || sha256(readFileSync(docPath, "utf8")) !== stored.handoffDocHash) {
+      throw new Error(`SESSION_LOCAL_HANDOFF_RECEIPT_CONFLICT: ${receiptId}`);
+    }
+    committedReceipt = stored;
+  }
+  return {
+    ok: true,
+    phase: "ready",
+    dryRun: false,
+    handoffDocPath: docPath,
+    seed,
+    receipt: receiptPreview(committedReceipt),
+    nextSteps: ["新会话从本地 TASK、lease、Prepare 回执与 LKG 恢复，不以聊天摘要覆盖持久证据"],
+  };
+}
+
+function localSessionHandoff(
+  options: SessionCommandOptions,
+  workItem: LocalParsedWorkItem,
+  sessionId: string,
+  toStatus: string,
+  loaded: LoadedWorkflow,
+): SessionHandoffResult {
+  const commonDir = gitCommonDir(options.projectRoot);
+  const lock = acquireSessionMutationLock(commonDir);
+  try {
+    return localSessionHandoffLocked(options, workItem, sessionId, toStatus, loaded, commonDir);
+  } finally {
+    releaseMutationLock(lock);
+  }
+}
+
+function currentBranchForSession(root: string): string {
+  return git(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]).trim();
+}
+
 /** `session handoff`：两阶段。文档缺失时生成模板骨架（不流转）；文档齐备时校验、回执、issue 更新。 */
 export function sessionHandoff(options: SessionCommandOptions): SessionHandoffResult {
   const root = options.projectRoot;
@@ -538,6 +1132,7 @@ export function sessionHandoff(options: SessionCommandOptions): SessionHandoffRe
     throw new Error(`SESSION_TO_STATUS_UNSUPPORTED: choose ${HANDOFF_CONTINUATION_STATUS} or explicit ${HANDOFF_REVIEW_STATUS}`);
   }
   const loaded = loadSessionWorkflow(root);
+  if (workItem.provider === "local") return localSessionHandoff(options, workItem, sessionId, toStatus, loaded);
   const config = githubProviderConfig(root);
   assertRepositoryMatch(config.config, workItem);
   const project = providerProject(config.config);

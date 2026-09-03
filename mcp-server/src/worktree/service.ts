@@ -76,7 +76,13 @@ import {
 } from "./config.js";
 import { resolveRepositoryContext, runGit, runGitCommand, runGitToFile } from "../repository/git.js";
 import { createSemanticApprovalPacket, reviewSemanticApprovalWithHistory, type ApprovalActionKind } from "../approval/service.js";
-import { inspectRecoveryState, requireMutationAllowed } from "../recovery/service.js";
+import {
+  acquireMutationLock,
+  inspectRecoveryState,
+  rebindMutationLock,
+  releaseMutationLock,
+  requireMutationAllowed,
+} from "../recovery/service.js";
 import {
   appendLkgRecord,
   appendReceiptEvent,
@@ -2906,11 +2912,11 @@ export function reviewAndApplyWorkspacePlan(args: {
 }
 
 function acquireLock(commonDir: string): string {
-  return acquireNamedLock(commonDir, "apply.lock");
+  return acquireMutationLock({ projectDir: commonDir, commonDir, repository: true });
 }
 
 function releaseLock(lock: string): void {
-  if (existsSync(lock)) rmdirSync(lock);
+  releaseMutationLock(lock);
 }
 
 const workspaceReceiptOperations = new Set<WorkspaceReceipt["operation"]>([
@@ -3119,6 +3125,132 @@ function appliedReceipt(root: string, plan: WorkspacePlan): WorkspaceReceipt | n
   return null;
 }
 
+type AllocationRecovery = {
+  receipt: WorkspaceReceipt;
+  current: WorkspaceStatus;
+  stage: "before" | "worktree" | "lease" | "applied";
+};
+
+function allocationRefs(root: string): Array<[string, string]> {
+  return git(root, [
+    "for-each-ref", "--format=%(refname)%09%(objectname)", "refs/heads", "refs/remotes",
+  ]).split(/\r?\n/u).filter(Boolean).map((line) => {
+    const separator = line.indexOf("\t");
+    if (separator <= 0) throw new Error("WORKTREE_ALLOCATION_RECOVERY_UNSAFE: refs are malformed");
+    return [line.slice(0, separator), line.slice(separator + 1)];
+  });
+}
+
+function allocationPreflightHash(status: WorkspaceStatus): string {
+  return hashObject({
+    configHash: fileHash(join(status.projectDir, ".harness", "worktree-delivery.json")),
+    hostBindingHash: status.hostBinding.hash,
+    projectDir: status.projectDir,
+    commonDir: status.commonDir,
+  });
+}
+
+function reconcileAllocation(
+  root: string,
+  plan: WorkspacePlan,
+  finish = false,
+  now?: Date,
+): AllocationRecovery | null {
+  if (plan.operation.kind !== "allocate") return null;
+  const stored = inspectWorkspaceReceipt(plan.commonDir, plan.id);
+  if (!stored || stored.receipt.status !== "started") return null;
+  const receipt = stored.receipt;
+  const preflight = receipt.steps.filter((step) => step.id === "allocation-preflight");
+  assertWorkspaceReceiptPlan(receipt, plan);
+  if (receipt.completedAt || receipt.error || receipt.rollbackStatus ||
+      receipt.compensationStatus === "failed" || preflight.length !== 1 ||
+      !/^[a-f0-9]{64}$/u.test(preflight[0].detail) ||
+      receipt.steps.some((step) => step.status !== "applied" ||
+        !["allocation-preflight", "add-worktree", "write-lease"].includes(step.id))) {
+    throw new Error(`WORKTREE_ALLOCATION_RECOVERY_UNSAFE: ${plan.id} receipt state changed`);
+  }
+
+  const operation = plan.operation;
+  let current = workspaceStatus(root, { providerObservation: receipt.before.provider });
+  const refs = allocationRefs(root);
+  const leasePath = leaseFile(plan.commonDir, operation.lease.workItem);
+  const expectedLeaseHash = sha256(prettyJson(operation.lease));
+  const actualLeaseHash = fileHash(leasePath);
+  const branchRef = `refs/heads/${operation.lease.branch}`;
+  const branchRefs = refs.filter(([ref]) => ref === branchRef);
+
+  if (current.observedHash === plan.observedHash) {
+    if (allocationPreflightHash(current) !== preflight[0].detail ||
+        directoryState(operation.lease.path) !== "absent" || actualLeaseHash !== null ||
+        (operation.createBranch ? branchRefs.length !== 0 :
+          branchRefs.length !== 1 || branchRefs[0][1] !== operation.lease.acceptedCommit)) {
+      throw new Error(`WORKTREE_ALLOCATION_RECOVERY_UNSAFE: ${plan.id} before state changed`);
+    }
+    return { receipt, current, stage: "before" };
+  }
+
+  const metadata = existsSync(operation.lease.path) ? lstatSync(operation.lease.path) : null;
+  const target = current.worktrees.filter((worktree) =>
+    samePath(worktree.path, operation.lease.path));
+  const targetLease = current.leases.filter((lease) => lease.workItem === operation.lease.workItem);
+  const conflictingLeases = current.leases.filter((lease) =>
+    lease.workItem !== operation.lease.workItem &&
+    (samePath(lease.path, operation.lease.path) || lease.branch === operation.lease.branch));
+  const stage = actualLeaseHash === null && targetLease.length === 0 ? "worktree" :
+    actualLeaseHash === expectedLeaseHash && targetLease.length === 1 &&
+      hashObject(targetLease[0]) === hashObject(operation.lease) ? "lease" : null;
+  const expectedLeases = [
+    ...receipt.before.leases,
+    ...(stage === "lease" ? [operation.lease] : []),
+  ].sort((left, right) => left.workItem.localeCompare(right.workItem));
+  const currentLeases = [...current.leases]
+    .sort((left, right) => left.workItem.localeCompare(right.workItem));
+  if (!receipt.mutationStarted || !metadata?.isDirectory() || metadata.isSymbolicLink() ||
+      target.length !== 1 || target[0].branch !== operation.lease.branch ||
+      target[0].head !== operation.lease.acceptedCommit || target[0].bare || target[0].detached ||
+      target[0].locked || target[0].prunable || target[0].dirty ||
+      !target[0].gitTopLevel || !samePath(target[0].gitTopLevel, operation.lease.path) ||
+      ignoredPaths(root, operation.lease.path).length !== 0 || branchRefs.length !== 1 ||
+      branchRefs[0][1] !== operation.lease.acceptedCommit || conflictingLeases.length !== 0 ||
+      current.errors.length !== 0 || !stage || hashObject(currentLeases) !== hashObject(expectedLeases) ||
+      current.capacity.limit !== receipt.before.capacity.limit ||
+      current.capacity.used !== receipt.before.capacity.used + (stage === "lease" ? 1 : 0) ||
+      allocationPreflightHash(current) !== preflight[0].detail) {
+    throw new Error(`WORKTREE_ALLOCATION_RECOVERY_UNSAFE: ${plan.id} allocation state changed`);
+  }
+  if (!finish) return { receipt, current, stage };
+
+  if (stage === "worktree") {
+    atomicWrite(leasePath, prettyJson(operation.lease));
+    assertCurrentHash(leasePath, expectedLeaseHash);
+  }
+  const verified = reconcileAllocation(root, plan);
+  if (!verified || verified.stage !== "lease") {
+    throw new Error(`WORKTREE_ALLOCATION_RECOVERY_UNSAFE: ${plan.id} completion changed`);
+  }
+  current = verified.current;
+  receipt.steps.push(
+    ...(!receipt.steps.some((step) => step.id === "add-worktree")
+      ? [{ id: "add-worktree" as const, status: "applied" as const, detail: operation.lease.path }]
+      : []),
+    ...(!receipt.steps.some((step) => step.id === "write-lease")
+      ? [{ id: "write-lease" as const, status: "applied" as const, detail: operation.lease.workItem }]
+      : []),
+  );
+  receipt.leaseChanges = [{
+    action: "create", workItem: operation.lease.workItem, path: operation.lease.path,
+    branch: operation.lease.branch, leasePath: leaseRelativePath(operation.lease.workItem),
+    beforeHash: null, afterHash: expectedLeaseHash,
+  }];
+  Object.assign(receipt, {
+    status: "applied", completedAt: (now ?? new Date()).toISOString(),
+    after: current, afterObservedHash: current.observedHash,
+  });
+  const event = writeReceipt(plan.commonDir, receipt);
+  writeWorkspaceLkg(plan.commonDir, receipt, event);
+  return { receipt, current, stage: "applied" };
+}
+
 function adoptionLeaseChanges(
   operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>,
   includeRemovals = false,
@@ -3259,14 +3391,14 @@ function applyWorkspaceAdoptionPlan(
   const lock = acquireLock(plan.commonDir);
   try {
     const context = resolveRepositoryContext(root);
+    const previous = appliedReceipt(root, plan);
+    if (previous) return previous;
     const pending = inspectRecoveryState(context).some((finding) =>
       finding.kind === "workspace" && finding.id === plan.id && finding.action === "resume-apply");
     requireMutationAllowed(context, pending ? {
       kind: "workspace", id: plan.id, action: "resume-apply",
       approvalRef: args.recoveryApprovalRef, now: args.now,
     } : undefined);
-    const previous = appliedReceipt(root, plan);
-    if (previous) return previous;
     const providerWorkItems = plan.operation.providerObservationBound
       ? plan.operation.items.map((item) => item.lease.workItem)
       : undefined;
@@ -3593,7 +3725,7 @@ export function applyWorkspaceMigration(args: {
       assertCurrentHash(hostBindingFile(plan.commonDir), operation.preflight.hostBindingHash);
       renameSync(root, topology.managementCheckout);
       moved = true;
-      lock = migratedPath(root, topology.managementCheckout, lock);
+      lock = rebindMutationLock(lock, migratedPath(root, topology.managementCheckout, lock));
       receipt.migration!.recoveryState = "after-move";
       receipt.steps.push({ id: "move-management-checkout", status: "applied", detail: `${root} -> ${topology.managementCheckout}` });
       checkpoint();
@@ -3679,6 +3811,8 @@ export function applyWorkspacePlan(args: {
   testFailAfterLeaseWrites?: number;
   testFailCloseAfterWorktreeRemove?: boolean;
   testFailRemoteDeleteAfterPush?: boolean;
+  testCrashAfterWorktreeAdd?: boolean;
+  testCrashAfterLeaseWrite?: boolean;
 }): WorkspaceReceipt {
   const root = repositoryRoot(args.projectRoot);
   const plan = loadWorkspacePlan(root, args.planPath);
@@ -3700,12 +3834,25 @@ export function applyWorkspacePlan(args: {
   const lock = acquireLock(plan.commonDir);
   try {
     const context = resolveRepositoryContext(root);
-    const pending = inspectRecoveryState(context).some((finding) =>
+    const previous = appliedReceipt(root, plan);
+    if (previous) return previous;
+    const findings = inspectRecoveryState(context);
+    const pending = findings.some((finding) =>
       finding.kind === "workspace" && finding.id === plan.id && finding.action === "resume-apply");
-    requireMutationAllowed(context, pending ? {
-      kind: "workspace", id: plan.id, action: "resume-apply",
-      approvalRef: args.recoveryApprovalRef, now: args.now,
-    } : undefined);
+    let automaticAllocationRecovery = false;
+    if (pending && findings.length === 1 && plan.operation.kind === "allocate") {
+      try {
+        automaticAllocationRecovery = reconcileAllocation(root, plan) !== null;
+      } catch {
+        automaticAllocationRecovery = false;
+      }
+    }
+    if (!automaticAllocationRecovery) {
+      requireMutationAllowed(context, pending ? {
+        kind: "workspace", id: plan.id, action: "resume-apply",
+        approvalRef: args.recoveryApprovalRef, now: args.now,
+      } : undefined);
+    }
     return applyWorkspacePlanLocked(root, plan, authorization, args);
   } finally {
     releaseLock(lock);
@@ -3722,10 +3869,18 @@ function applyWorkspacePlanLocked(
     now?: Date;
     testFailCloseAfterWorktreeRemove?: boolean;
     testFailRemoteDeleteAfterPush?: boolean;
+    testCrashAfterWorktreeAdd?: boolean;
+    testCrashAfterLeaseWrite?: boolean;
   },
 ): WorkspaceReceipt {
   const previous = appliedReceipt(root, plan);
   if (previous) return previous;
+  const allocationRecovery = plan.operation.kind === "allocate"
+    ? reconcileAllocation(root, plan)
+    : null;
+  if (allocationRecovery && allocationRecovery.stage !== "before") {
+    return reconcileAllocation(root, plan, true, args.now)!.receipt;
+  }
   const config = loadConfig(root).config;
   if (
     plan.operation.kind === "allocate" &&
@@ -3737,7 +3892,7 @@ function applyWorkspacePlanLocked(
       "WORKSPACE_PLAN_REPLAN_REQUIRED: legacy allocation plan does not bind GitHub Project state",
     );
   }
-  const before = workspaceStatus(root, {
+  const before = allocationRecovery?.current ?? workspaceStatus(root, {
     providerWorkItems: plan.operation.kind === "allocate" &&
         plan.operation.providerObservationBound
       ? [plan.operation.lease.workItem]
@@ -3751,7 +3906,7 @@ function applyWorkspacePlanLocked(
     ? survivingManagementCheckout(before, plan.operation.lease.path)
     : root;
   const receiptPath = receiptFile(plan.commonDir, plan.id);
-  const receipt: WorkspaceReceipt = {
+  const receipt: WorkspaceReceipt = allocationRecovery?.receipt ?? {
     schemaVersion: "worktree-delivery/1.0",
     kind: "workspace-receipt",
     id: plan.id,
@@ -3759,7 +3914,13 @@ function applyWorkspacePlanLocked(
     operation: plan.operation.kind,
     status: "started",
     startedAt: (args.now ?? new Date()).toISOString(),
-    steps: [],
+    steps: plan.operation.kind === "allocate"
+      ? [{
+          id: "allocation-preflight",
+          status: "applied",
+          detail: allocationPreflightHash(before),
+        }]
+      : [],
     before,
     beforeObservedHash: before.observedHash,
     mutationStarted: false,
@@ -3778,6 +3939,7 @@ function applyWorkspacePlanLocked(
   let remoteBranchDeleted = false;
   let recoveryRemoved = false;
   let transactionCommitted = false;
+  let simulatedCrash = false;
   const checkpointMutation = (): void => {
     if (receipt.mutationStarted) return;
     receipt.mutationStarted = true;
@@ -3853,12 +4015,20 @@ function applyWorkspacePlanLocked(
       checkpointMutation();
       git(root, argv);
       worktreeCreated = true;
+      if (args.testCrashAfterWorktreeAdd) {
+        simulatedCrash = true;
+        throw new Error("TEST_ALLOCATION_CRASH_AFTER_WORKTREE_ADD");
+      }
       receipt.steps.push({ id: "add-worktree", status: "applied", detail: operation.lease.path });
       const actualHead = git(root, ["-C", operation.lease.path, "rev-parse", "HEAD"]).trim();
       if (actualHead !== operation.lease.acceptedCommit) {
         throw new Error(`WORKTREE_HEAD_DRIFT: expected ${operation.lease.acceptedCommit}, observed ${actualHead}`);
       }
       atomicWrite(leaseFile(plan.commonDir, operation.lease.workItem), prettyJson(operation.lease));
+      if (args.testCrashAfterLeaseWrite) {
+        simulatedCrash = true;
+        throw new Error("TEST_ALLOCATION_CRASH_AFTER_LEASE_WRITE");
+      }
       receipt.steps.push({ id: "write-lease", status: "applied", detail: operation.lease.workItem });
       receipt.leaseChanges = [{
         action: "create",
@@ -4063,7 +4233,7 @@ function applyWorkspacePlanLocked(
     writeWorkspaceLkg(plan.commonDir, receipt, event);
     return receipt;
   } catch (error) {
-    if (transactionCommitted) throw error;
+    if (transactionCommitted || simulatedCrash) throw error;
     const message = error instanceof Error ? error.message : String(error);
     let finalError: unknown = error;
     let compensationFailed = plan.operation.kind === "close" && remoteBranchDeleted;
@@ -4601,6 +4771,10 @@ function acquireNamedLock(commonDir: string, name: string): string {
   return lock;
 }
 
+function releaseNamedLock(lock: string): void {
+  if (existsSync(lock)) rmdirSync(lock);
+}
+
 export function reviewWorkspace(args: {
   projectRoot: string;
   commit: string;
@@ -4746,7 +4920,7 @@ function reviewWorkspaceLocked(args: {
     atomicWrite(receiptPath, prettyJson(receipt));
     return receipt;
   } finally {
-    releaseLock(lock);
+    releaseNamedLock(lock);
   }
 }
 

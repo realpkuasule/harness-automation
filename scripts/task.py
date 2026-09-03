@@ -6,7 +6,7 @@
   python3 scripts/task.py add <phase> <title> <description> [--priority high|medium|low] [--blocked-by id1,id2] [--blocks id1,id2] [--files path1,path2] [--by agent-name]
   python3 scripts/task.py list [--status pending|completed|in_progress|deleted] [--phase <n>] [--priority high|medium|low|critical]
   python3 scripts/task.py show <id>
-  python3 scripts/task.py update <id> [--status <s>] [--title <t>] [--description <d>] [--phase <n>] [--priority <p>] [--blocked-by id1,id2] [--blocks id1,id2] [--files path1,path2] [--by agent-name]
+  python3 scripts/task.py update <id> [--status <s>] [--expected-status <s>] [--title <t>] [--description <d>] [--phase <n>] [--priority <p>] [--blocked-by id1,id2] [--blocks id1,id2] [--files path1,path2] [--by agent-name]
   python3 scripts/task.py summary
 
 TASK.json 每条任务的结构:
@@ -285,7 +285,7 @@ def cmd_show(args: list[str]) -> None:
 def cmd_update(args: list[str]) -> None:
     positional, opts = split_positional(args)
     if len(positional) < 1:
-        print("Usage: task.py update <id> [--status <s>] [--title <t>] [--description <d>] [--phase <n>] [--priority <p>] [--blocked-by id1,id2] [--blocks id1,id2] [--files path1,path2] [--by agent-name]", file=sys.stderr)
+        print("Usage: task.py update <id> [--status <s>] [--expected-status <s>] [--title <t>] [--description <d>] [--phase <n>] [--priority <p>] [--blocked-by id1,id2] [--blocks id1,id2] [--files path1,path2] [--by agent-name]", file=sys.stderr)
         sys.exit(1)
 
     task_id = positional[0]
@@ -299,6 +299,17 @@ def cmd_update(args: list[str]) -> None:
         for t in tasks:
             if t["id"] != task_id:
                 continue
+            if "expected_status" in opts:
+                expected = opts["expected_status"]
+                if expected not in VALID_STATUS:
+                    print(f"Invalid expected status: {expected}. Valid: {VALID_STATUS}", file=sys.stderr)
+                    sys.exit(1)
+                if t["status"] != expected:
+                    print(
+                        f"LOCAL_TRACKING_STATUS_CAS_FAILED: {task_id}: expected {expected}, found {t['status']}",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
             if "status" in opts:
                 s = opts["status"]
                 if s not in VALID_STATUS:

@@ -1,6 +1,6 @@
 import { commandJson } from "../worktree/provider.js";
 import type { WorktreeDeliveryConfig } from "../worktree/types.js";
-import type { ParsedWorkItem } from "./types.js";
+import type { GitHubParsedWorkItem } from "./types.js";
 
 /**
  * session 命令组的 GitHub provider 适配：复用 worktree 命令组同一 `gh` CLI 凭据通道
@@ -9,7 +9,7 @@ import type { ParsedWorkItem } from "./types.js";
 
 export function readIssue(
   root: string,
-  workItem: ParsedWorkItem,
+  workItem: GitHubParsedWorkItem,
 ): { state: string; title: string; body: string; url: string } {
   const result = commandJson(root, "gh", [
     "api",
@@ -240,7 +240,7 @@ export function updateProjectField(
 /** 向 issue 追加 receipts 评论；body 为确定性 JSON 列表（回执 id 列表）。 */
 export function appendReceiptsComment(
   root: string,
-  workItem: ParsedWorkItem,
+  workItem: GitHubParsedWorkItem,
   receiptIds: string[],
 ): { applied: boolean; error?: string } {
   try {
