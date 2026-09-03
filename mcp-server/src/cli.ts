@@ -647,7 +647,7 @@ Usage:
   harness-automation worktree retention-audit [--receipt-scope host-global|project] [--project .]
   harness-automation worktree integration-check --work-item <provider:id> [--target <local-ref>] [--project .]
   harness-automation github audit --project <absolute-repository> [--organization <github-organization>]
-  harness-automation worktree configure [--mode audit-only|enforced] [--management-branch <branch>] [--topology container-v1 --workspace-container <absolute-path>] [--allow-root <absolute-path>] [--approval-mode manual|delegated-ai] [--reviewer-model <model>] [--delegate-operation <kind>] [--project .]
+  harness-automation worktree configure [--mode audit-only|enforced] [--management-branch <branch>] [--topology container-v1 --workspace-container <absolute-path>] [--allow-root <absolute-path>] [--approval-mode manual] [--project .]
   harness-automation worktree migrate --workspace-container <absolute-path> [--project .]
   harness-automation worktree migrate apply --plan <relative-plan-path> --approve <sha256> [--recovery-approval <recovery-id>] [--project .]
   harness-automation worktree allocate --work-item <provider:id> --branch <name> [--path <absolute-path>] --owner <name> [--project .]
@@ -656,7 +656,7 @@ Usage:
   harness-automation worktree close --work-item <provider:id> --accepted-commit <sha> [--project .]
   harness-automation worktree renew --work-item <provider:id> [--project .]
   harness-automation worktree recover --path <absolute-path> [--project .]
-  harness-automation worktree apply-ai --plan <relative-path> --intent <plain-language intent> [--project .]
+  harness-automation worktree apply-ai --plan <relative-path> --intent <plain-language intent> [--project .]  # legacy bindings return ReviewPending until DG-02
   harness-automation delivery authorize --work-item <github:owner/repo#issue> --base <branch> --allow-path <path-or-directory/> [--allow-path <path-or-directory/>...] --intent <approved-intent> --approval-source <immutable-user-authorization-reference> [--branch <branch>] [--repository <owner/repo>] [--remote <name>] [--merge-mode manual|checks-green] [--retry-limit <n>] [--supersedes <authorization-hash>] [--project .]
   harness-automation delivery status --authorization <sha256> [--project .]
   harness-automation delivery push --authorization <sha256> [--project .]

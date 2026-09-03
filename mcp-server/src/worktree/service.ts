@@ -2737,50 +2737,6 @@ function buildAiDecision(args: {
   return decision;
 }
 
-function validateAiAuthorization(
-  plan: WorkspacePlan,
-  policy: Extract<WorktreeApprovalPolicy, { mode: "delegated-ai" }>,
-  decision: WorkspaceAiDecision | undefined,
-  now: Date,
-): WorkspaceAiDecision {
-  if (!decision) throw new Error("WORKSPACE_AI_AUTHORIZATION_REQUIRED");
-  const output = aiReviewerOutputSchema.safeParse({
-    verdict: decision.verdict,
-    reasonCodes: decision.reasonCodes,
-    summary: decision.summary,
-  });
-  if (
-    decision.schemaVersion !== "worktree-ai-decision/1.0" ||
-    decision.kind !== "workspace-ai-decision" ||
-    !decision.id ||
-    !decision.intent ||
-    decision.intentHash !== sha256(decision.intent) ||
-    !/^[a-f0-9]{64}$/u.test(decision.planHash) ||
-    !/^[a-f0-9]{64}$/u.test(decision.policyHash) ||
-    !/^[a-f0-9]{64}$/u.test(decision.observedHash) ||
-    !/^[a-f0-9]{64}$/u.test(decision.decisionHash) ||
-    !output.success ||
-    hashObject(decisionWithoutHash(decision)) !== decision.decisionHash ||
-    decision.verdict !== "approve" ||
-    decision.planHash !== plan.planHash ||
-    decision.policyHash !== hashObject(policy) ||
-    decision.projectDir !== plan.projectDir ||
-    decision.commonDir !== plan.commonDir ||
-    decision.observedHash !== plan.observedHash ||
-    decision.operation !== plan.operation.kind ||
-    decision.reviewer.kind !== policy.reviewer.kind ||
-    decision.reviewer.model !== policy.reviewer.model ||
-    !policy.allowedOperations.includes(decision.operation) ||
-    !Number.isFinite(Date.parse(decision.issuedAt)) ||
-    !Number.isFinite(Date.parse(decision.expiresAt)) ||
-    Date.parse(decision.issuedAt) > now.getTime() ||
-    Date.parse(decision.expiresAt) <= now.getTime()
-  ) {
-    throw new Error("WORKSPACE_AI_AUTHORIZATION_INVALID");
-  }
-  return decision;
-}
-
 function workspaceAuthorization(args: {
   root: string;
   plan: WorkspacePlan;
