@@ -1,5 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { scrubSensitive } from "../credentials/service.js";
 import { validSemanticApprovalPacket, type SemanticApprovalPacket } from "../approval/service.js";
 import { requireMutationAllowed, type RecoveryApproval } from "../recovery/service.js";
@@ -21,6 +23,7 @@ export interface TransactionPlan {
   inputDigest: string;
   policyDigest: string;
   observedHash: string;
+  observations: Array<{ path: string; hash: string | null }>;
   writes: TransactionWrite[];
   planHash: string;
 }
@@ -173,10 +176,24 @@ export function createTransactionApproval(input: Omit<TransactionApproval, "sche
 export function validateTransactionPlan(plan: TransactionPlan, expectedProjectDir: string, expectedCommonDir: string, observedHash: string): void {
   if (plan.schemaVersion !== "transaction-plan/3.0" || plan.kind !== "transaction-plan" || !validId(plan.id) ||
       plan.planHash !== hashObject(withoutHash(plan)) || plan.projectDir !== expectedProjectDir || plan.commonDir !== expectedCommonDir ||
-      plan.observedHash !== observedHash || !plan.inputDigest || !plan.policyDigest || plan.writes.length === 0 ||
+      plan.observedHash !== observedHash || plan.observedHash !== hashObject(plan.observations) || !plan.inputDigest || !plan.policyDigest || plan.observations.length === 0 || plan.writes.length === 0 ||
       plan.writes.some((write) => write.beforeHash === null ? write.beforeContent !== null : write.beforeContent === null || sha256(write.beforeContent) !== write.beforeHash) ||
-      plan.writes.some((write) => !write.path || write.path.split(/[\\/]/u).includes("..")) ||
+      plan.writes.some((write) => !write.path || write.path.split(/[\\/]/u).includes("..")) || plan.observations.some((item) => !item.path || item.path.split(/[\\/]/u).includes("..") || plan.writes.some((write) => write.path === item.path)) ||
       new Set(plan.writes.map((write) => write.path)).size !== plan.writes.length) throw new Error("TRANSACTION_PLAN_INVALID");
+}
+
+function trustedContext(args: { projectRoot: string; testContext?: { projectDir: string; commonDir: string } }, plan: TransactionPlan): { projectDir: string; commonDir: string; observedHash: string } {
+  const projectDir = args.testContext?.projectDir ?? (() => {
+    const output = spawnSync("git", ["-C", resolve(args.projectRoot), "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+    if (output.status !== 0) throw new Error("TRANSACTION_CONTEXT_UNTRUSTED");
+    return output.stdout.trim();
+  })();
+  const commonDir = args.testContext?.commonDir ?? (() => {
+    const output = spawnSync("git", ["-C", projectDir, "rev-parse", "--git-common-dir"], { encoding: "utf8" });
+    if (output.status !== 0) throw new Error("TRANSACTION_CONTEXT_UNTRUSTED");
+    return resolve(projectDir, output.stdout.trim());
+  })();
+  return { projectDir, commonDir, observedHash: hashObject(plan.observations.map((item) => ({ path: item.path, hash: fileHash(safePath(projectDir, item.path)) }))) };
 }
 
 function validateApproval(plan: TransactionPlan, approval: TransactionApproval, now: Date): void {
@@ -192,9 +209,9 @@ function validateApproval(plan: TransactionPlan, approval: TransactionApproval, 
 export function applyTransactionPlan(args: {
   plan: TransactionPlan;
   approval: TransactionApproval;
-  expectedProjectDir: string;
-  expectedCommonDir: string;
-  reobserveIndependent: () => string;
+  projectRoot: string;
+  /** Explicit test seam; production derives repository and common-dir from projectRoot. */
+  testContext?: { projectDir: string; commonDir: string };
   recoveryApproval?: RecoveryApproval;
   safeMode?: boolean;
   now?: Date;
@@ -202,29 +219,30 @@ export function applyTransactionPlan(args: {
 }): TransactionReceipt {
   const { plan } = args;
   requireMutationAllowed({ safeMode: args.safeMode });
-  validateTransactionPlan(plan, args.expectedProjectDir, args.expectedCommonDir, args.reobserveIndependent());
+  const context = trustedContext(args, plan);
+  validateTransactionPlan(plan, context.projectDir, context.commonDir, context.observedHash);
   validateApproval(plan, args.approval, args.now ?? new Date());
-  const held = lock(args.expectedCommonDir);
+  const held = lock(context.commonDir);
   try {
-    const chain = readTransactionReceipts(args.expectedCommonDir);
+    const chain = readTransactionReceipts(context.commonDir);
     const prior = chain.find((receipt) => receipt.planHash === plan.planHash && receipt.status === "applied");
     if (prior) {
-      for (const write of plan.writes) if (fileHash(safePath(args.expectedProjectDir, write.path)) !== sha256(write.afterContent)) throw new Error("TRANSACTION_IDEMPOTENCY_DRIFT");
+      for (const write of plan.writes) if (fileHash(safePath(context.projectDir, write.path)) !== sha256(write.afterContent)) throw new Error("TRANSACTION_IDEMPOTENCY_DRIFT");
       return prior;
     }
     // A started receipt is recoverable only when it is the newest receipt for this exact plan.
     const started = chain.at(-1)?.planHash === plan.planHash && chain.at(-1)?.status === "started" ? chain.at(-1) : undefined;
     if (started) requireMutationAllowed({ recoveryApproval: args.recoveryApproval, recoveryPlanHash: plan.planHash, recoveryPacketHash: args.approval.packetHash });
     for (const write of plan.writes) {
-      const current = fileHash(safePath(args.expectedProjectDir, write.path));
+      const current = fileHash(safePath(context.projectDir, write.path));
       if (current !== write.beforeHash && (!started || current !== sha256(write.afterContent))) throw new Error("RECOVERY_REQUIRED: transaction target drifted");
     }
-    if (!started) appendReceipt(args.expectedCommonDir, nextReceipt(chain, plan, args.approval, "started", []));
+    if (!started) appendReceipt(context.commonDir, nextReceipt(chain, plan, args.approval, "started", []));
     const changed: Array<{ write: TransactionWrite; afterHash: string }> = [];
     const entries: TransactionReceipt["writes"] = [];
     try {
       for (const write of plan.writes) {
-        const path = safePath(args.expectedProjectDir, write.path);
+        const path = safePath(context.projectDir, write.path);
         const afterHash = sha256(write.afterContent);
         if (fileHash(path) === afterHash) {
           entries.push({ path: write.path, beforeHash: write.beforeHash, afterHash, status: "unchanged" });
@@ -236,19 +254,19 @@ export function applyTransactionPlan(args: {
         entries.push({ path: write.path, beforeHash: write.beforeHash, afterHash, status: "applied" });
         if (args.testInterruptAfterWrites === changed.length) throw new Error("TEST_TRANSACTION_INTERRUPT");
       }
-      appendReceipt(args.expectedCommonDir, nextReceipt(readTransactionReceipts(args.expectedCommonDir), plan, args.approval, "applied", entries));
-      return readTransactionReceipts(args.expectedCommonDir).at(-1)!;
+      appendReceipt(context.commonDir, nextReceipt(readTransactionReceipts(context.commonDir), plan, args.approval, "applied", entries));
+      return readTransactionReceipts(context.commonDir).at(-1)!;
     } catch (error) {
       if (error instanceof Error && error.message === "TEST_TRANSACTION_INTERRUPT") throw error;
       for (const item of changed.reverse()) {
-        const path = safePath(args.expectedProjectDir, item.write.path);
+        const path = safePath(context.projectDir, item.write.path);
         if (fileHash(path) === item.afterHash) {
           if (item.write.beforeContent === null) unlinkSync(path); else atomicWrite(path, item.write.beforeContent);
           if (fileHash(path) === item.write.beforeHash) entries.find((entry) => entry.path === item.write.path)!.status = "compensated";
         } else entries.find((entry) => entry.path === item.write.path)!.status = "uncompensated";
       }
       const message = error instanceof Error ? error.message : String(error);
-      appendReceipt(args.expectedCommonDir, nextReceipt(readTransactionReceipts(args.expectedCommonDir), plan, args.approval, "failed", entries, message));
+      appendReceipt(context.commonDir, nextReceipt(readTransactionReceipts(context.commonDir), plan, args.approval, "failed", entries, message));
       throw error;
     }
   } finally {

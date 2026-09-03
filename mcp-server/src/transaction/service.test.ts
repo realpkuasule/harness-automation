@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { fileHash, sha256 } from "../v2/fs.js";
+import { fileHash, hashObject, sha256 } from "../v2/fs.js";
 import { createSemanticApprovalPacket } from "../approval/service.js";
 import { applyTransactionPlan, createTransactionApproval, createTransactionPlan, readTransactionReceipts } from "./service.js";
 
@@ -11,8 +11,14 @@ const now = new Date("2026-09-03T00:00:00.000Z");
 
 function fixture(): string {
   const root = mkdtempSync(join(tmpdir(), "harness-transaction-"));
+  writeFileSync(join(root, "context"), "context\n", "utf8");
   roots.push(root);
   return root;
+}
+
+function observation(root: string) {
+  const observations = [{ path: "context", hash: fileHash(join(root, "context")) }];
+  return { observations, observedHash: hashObject(observations) };
 }
 
 function approved(plan: ReturnType<typeof createTransactionPlan>) {
@@ -29,8 +35,7 @@ function approved(plan: ReturnType<typeof createTransactionPlan>) {
 
 function apply(root: string, plan: ReturnType<typeof createTransactionPlan>, overrides: Partial<Parameters<typeof applyTransactionPlan>[0]> = {}) {
   return applyTransactionPlan({
-    plan, approval: approved(plan), expectedProjectDir: root, expectedCommonDir: root,
-    reobserveIndependent: () => "observed", now, ...overrides,
+    plan, approval: approved(plan), projectRoot: root, testContext: { projectDir: root, commonDir: root }, now, ...overrides,
   });
 }
 
@@ -46,11 +51,11 @@ describe("transaction plan", () => {
     const path = join(root, "policy.json");
     writeFileSync(path, "before\n", "utf8");
     const plan = createTransactionPlan({
-      id: "policy", projectDir: root, commonDir: root, inputDigest: "input", policyDigest: "policy", observedHash: "observed",
+      id: "policy", projectDir: root, commonDir: root, inputDigest: "input", policyDigest: "policy", ...observation(root),
       writes: [{ path: "policy.json", beforeHash: fileHash(path), beforeContent: "before\n", afterContent: "after\n" }],
     });
     expect(() => apply(root, { ...plan, observedHash: "tampered" })).toThrow("TRANSACTION_PLAN_INVALID");
-    expect(() => apply(root, plan, { expectedProjectDir: join(root, "other") })).toThrow("TRANSACTION_PLAN_INVALID");
+    expect(() => apply(root, plan, { testContext: { projectDir: join(root, "other"), commonDir: root } })).toThrow("TRANSACTION_PLAN_INVALID");
     expect(() => apply(root, plan, { approval: { ...approved(plan), inputDigest: "wrong" } })).toThrow("TRANSACTION_APPROVAL_INVALID");
     expect(() => apply(root, plan, { approval: { ...approved(plan), risk: "unknown" as never, actorType: "human" } })).toThrow("TRANSACTION_APPROVAL_INVALID");
     expect(() => apply(root, plan, { approval: { ...approved(plan), packetHash: "f".repeat(64) } })).toThrow("TRANSACTION_APPROVAL_INVALID");
@@ -65,14 +70,14 @@ describe("transaction plan", () => {
     const path = join(root, "first");
     writeFileSync(path, "old\n", "utf8");
     const plan = createTransactionPlan({
-      id: "../escape", projectDir: root, commonDir: root, inputDigest: "input", policyDigest: "policy", observedHash: "observed",
+      id: "../escape", projectDir: root, commonDir: root, inputDigest: "input", policyDigest: "policy", ...observation(root),
       writes: [{ path: "first", beforeHash: fileHash(path), beforeContent: "old\n", afterContent: "new\n" }],
     });
     expect(() => apply(root, plan)).toThrow("TRANSACTION_PLAN_INVALID");
     mkdirSync(join(root, "harness/transactions/receipts"), { recursive: true });
     writeFileSync(join(root, "harness/transactions/receipts/forged.json"), "{}", "utf8");
     const valid = createTransactionPlan({
-      id: "valid", projectDir: root, commonDir: root, inputDigest: "input", policyDigest: "policy", observedHash: "observed",
+      id: "valid", projectDir: root, commonDir: root, inputDigest: "input", policyDigest: "policy", ...observation(root),
       writes: [{ path: "first", beforeHash: fileHash(path), beforeContent: "old\n", afterContent: "new\n" }],
     });
     expect(() => apply(root, valid)).toThrow("RECEIPT_TAMPERED");
@@ -85,14 +90,16 @@ describe("transaction plan", () => {
     writeFileSync(first, "one\n", "utf8");
     writeFileSync(second, "two\n", "utf8");
     const plan = createTransactionPlan({
-      id: "resume", projectDir: root, commonDir: root, inputDigest: "input", policyDigest: "policy", observedHash: "observed",
+      id: "resume", projectDir: root, commonDir: root, inputDigest: "input", policyDigest: "policy", ...observation(root),
       writes: [
         { path: "first", beforeHash: fileHash(first), beforeContent: "one\n", afterContent: "ONE\n" },
         { path: "second", beforeHash: fileHash(second), beforeContent: "two\n", afterContent: "TWO\n" },
       ],
     });
     expect(() => apply(root, plan, { testInterruptAfterWrites: 1 })).toThrow("TEST_TRANSACTION_INTERRUPT");
-    expect(() => apply(root, plan, { reobserveIndependent: () => "external-drift", recoveryApproval: recovery(plan) })).toThrow("TRANSACTION_PLAN_INVALID");
+    writeFileSync(join(root, "context"), "external drift\n", "utf8");
+    expect(() => apply(root, plan, { recoveryApproval: recovery(plan) })).toThrow("TRANSACTION_PLAN_INVALID");
+    writeFileSync(join(root, "context"), "context\n", "utf8");
     expect(apply(root, plan, { recoveryApproval: recovery(plan) }).status).toBe("applied");
     const chain = readTransactionReceipts(root);
     expect(chain.map((receipt) => receipt.sequence)).toEqual([1, 2]);
@@ -106,7 +113,7 @@ describe("transaction plan", () => {
     const path = join(root, "target");
     writeFileSync(path, "before\n", "utf8");
     const plan = createTransactionPlan({
-      id: "drift", projectDir: root, commonDir: root, inputDigest: "input", policyDigest: "policy", observedHash: "observed",
+      id: "drift", projectDir: root, commonDir: root, inputDigest: "input", policyDigest: "policy", ...observation(root),
       writes: [{ path: "target", beforeHash: fileHash(path), beforeContent: "before\n", afterContent: "after\n" }],
     });
     writeFileSync(path, "user change\n", "utf8");
@@ -120,7 +127,7 @@ describe("transaction plan", () => {
     const path = join(root, "target");
     writeFileSync(path, "before\n", "utf8");
     const plan = createTransactionPlan({
-      id: "redaction", projectDir: root, commonDir: root, inputDigest: "input", policyDigest: "policy", observedHash: "observed",
+      id: "redaction", projectDir: root, commonDir: root, inputDigest: "input", policyDigest: "policy", ...observation(root),
       writes: [{ path: "target", beforeHash: fileHash(path), beforeContent: "before\n", afterContent: "secret-canary\n" }],
     });
     expect(apply(root, plan).writes[0].afterHash).toBe(sha256("secret-canary\n"));
@@ -134,7 +141,7 @@ describe("transaction plan", () => {
     mkdirSync(join(root, "harness/transactions/apply.lock"), { recursive: true });
     writeFileSync(join(root, "harness/transactions/apply.lock/owner.json"), JSON.stringify({ pid: 999_999_999 }), "utf8");
     const plan = createTransactionPlan({
-      id: "stale-lock", projectDir: root, commonDir: root, inputDigest: "input", policyDigest: "policy", observedHash: "observed",
+      id: "stale-lock", projectDir: root, commonDir: root, inputDigest: "input", policyDigest: "policy", ...observation(root),
       writes: [{ path: "target", beforeHash: fileHash(path), beforeContent: "before\n", afterContent: "after\n" }],
     });
     expect(apply(root, plan).status).toBe("applied");
