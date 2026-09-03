@@ -1447,13 +1447,19 @@ function applyFilePlan(args: {
     }
   } catch (error) {
     let uncompensated = false;
-    for (const { item, content } of written.reverse()) {
+    const allWritten = new Set([...(existingJournal?.written ?? []), ...written.map((entry) => entry.item.path)]);
+    for (const item of [...plan.operations].reverse()) {
+      if (!allWritten.has(item.path)) continue;
       const target = safePath(root, item.path);
       if (fileHash(target) !== item.afterHash) { uncompensated = true; continue; }
-      if (content === null) rmSync(target, { force: true });
-      else atomicWrite(target, content);
+      if (item.beforeHash === null) rmSync(target, { force: true });
+      else {
+        const backup = harnessPath(root, `changes/${plan.id}/before/${item.path}`);
+        if (!existsSync(backup) || fileHash(backup) !== item.beforeHash) { uncompensated = true; continue; }
+        atomicWrite(target, readFileSync(backup, "utf8"));
+      }
     }
-    checkpoint(uncompensated ? "failed-uncompensated" : "failed-compensated", [...(existingJournal?.written ?? []), ...written.map((entry) => entry.item.path)]);
+    checkpoint(uncompensated ? "failed-uncompensated" : "failed-compensated", [...allWritten]);
     throw error;
   }
 

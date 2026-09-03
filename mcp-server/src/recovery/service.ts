@@ -42,6 +42,7 @@ export function inspectRecoveryState(context: { projectDir: string; commonDir: s
   for (const id of readdirSync(changes)) {
     const journal = join(changes, id, "apply.json");
     if (!existsSync(journal)) continue;
+    if (existsSync(join(changes, id, "change.json"))) continue;
     const state = readJson<{ status?: string }>(journal);
     if (state.status === "started" || state.status === "failed-uncompensated") throw new Error(`RECOVERY_REQUIRED: ${id}`);
   }
