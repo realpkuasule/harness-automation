@@ -26,6 +26,8 @@ describe("semantic approval", () => {
       .toMatchObject({ state: "NeedsHuman", code: "REVIEWER_INVALID" });
     expect(reviewSemanticApproval({ packet: base(), adapter: { identity: "reviewer", review: () => ({} as never) } }))
       .toMatchObject({ state: "NeedsHuman", code: "REVIEWER_INVALID" });
+    expect(reviewSemanticApproval({ packet: base(), adapter: { identity: "reviewer", review: () => { throw new Error("offline"); } } }))
+      .toMatchObject({ state: "ReviewPending", code: "DG02_REVIEWER_CONFIGURATION_REQUIRED" });
   });
 
   it("requires a human for protected or non-reversible plans", () => {
@@ -35,6 +37,22 @@ describe("semantic approval", () => {
       actions: [{ id: "protect", kind: "protected", summary: "change ruleset", before: "old", after: "new", reversible: true, protected: true, recovery: "restore" }],
     });
     expect(reviewSemanticApproval({ packet: protectedPacket })).toMatchObject({ state: "NeedsHuman", code: "HUMAN_APPROVAL_REQUIRED" });
+
+    const nonReversiblePacket = createSemanticApprovalPacket({
+      planHash: "a".repeat(64), inputHash: "b".repeat(64), producerIdentity: "producer",
+      binding: { planHash: "a".repeat(64), contextDigest: "c".repeat(64), inputDigest: "b".repeat(64), policyDigest: "d".repeat(64), observedHash: "e".repeat(64) },
+      actions: [{ id: "delete", kind: "delete", summary: "delete data", before: "present", after: "absent", reversible: false, recovery: "restore backup" }],
+    });
+    expect(reviewSemanticApproval({ packet: nonReversiblePacket })).toMatchObject({ state: "NeedsHuman", code: "HUMAN_APPROVAL_REQUIRED", packet: { risk: "human-required" } });
+  });
+
+  it("auto-approves an empty read-only plan", () => {
+    const packet = createSemanticApprovalPacket({
+      planHash: "a".repeat(64), inputHash: "b".repeat(64), producerIdentity: "producer",
+      binding: { planHash: "a".repeat(64), contextDigest: "c".repeat(64), inputDigest: "b".repeat(64), policyDigest: "d".repeat(64), observedHash: "e".repeat(64) },
+      actions: [],
+    });
+    expect(reviewSemanticApproval({ packet })).toMatchObject({ state: "Approved", packet: { risk: "read-only" } });
   });
 
   it("derives the bounded review attempt from durable history", () => {
