@@ -15,6 +15,15 @@ from pathlib import Path
 from typing import Any, Iterator, TextIO
 
 
+def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"LOCAL_TRACKING_DUPLICATE_KEY: {key}")
+        value[key] = item
+    return value
+
+
 def reject_symlink(path: Path) -> None:
     try:
         if stat.S_ISLNK(path.lstat().st_mode):
@@ -115,7 +124,7 @@ def locked(root: Path) -> Iterator[None]:
 def load_json(path: Path) -> Any:
     try:
         with open_text_read(path) as handle:
-            return json.load(handle)
+            return json.load(handle, object_pairs_hook=unique_object)
     except json.JSONDecodeError as error:
         raise ValueError(f"LOCAL_TRACKING_CORRUPT_JSON: {path}: {error}") from error
 
