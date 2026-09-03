@@ -2,8 +2,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { atomicWrite, durableWriteOnce, readJson, safePath, sha256 } from "../v2/fs.js";
+import { atomicWrite, durableWriteOnce, hashObject, readJson, safePath, sha256 } from "../v2/fs.js";
 import { readLkgChain, readReceiptChain } from "../receipt/service.js";
+import { acquireMutationLock, releaseMutationLock } from "../recovery/service.js";
 import {
   localBoardSchema,
   readDeliveryPrepareTransactions,
@@ -751,7 +752,7 @@ function updateLocalTaskStatusCas(
   expectedStatus: string,
   nextStatus: "in_progress",
   actor: string,
-): void {
+): { status: string; updatedBy: string } {
   const result = spawnSync(process.platform === "win32" ? "python" : "python3", [
     bundledTaskScript(),
     "--local-only",
@@ -787,17 +788,103 @@ function updateLocalTaskStatusCas(
   }
   const board = localBoardSchema.parse(readJson<unknown>(safePath(gitCommonDir(root), "harness/local-tracking/TASK.json")));
   const matches = board.tasks.filter((task) => task.id === workItem.id && task.status !== "deleted");
-  if (matches.length !== 1 || matches[0].status !== nextStatus) {
+  if (matches.length !== 1 || matches[0].status !== nextStatus || matches[0].updatedBy !== actor) {
     throw new Error(`SESSION_LOCAL_TRACKING_READBACK_FAILED: ${workItem.workItem}`);
+  }
+  return { status: matches[0].status, updatedBy: matches[0].updatedBy };
+}
+
+interface LocalHandoffTransaction {
+  schemaVersion: "session-handoff-transaction/1.0";
+  kind: "session-handoff-transaction";
+  id: string;
+  receipt: SessionReceipt;
+  docBeforeHash: string;
+  docContentHash: string;
+  journalHash: string;
+}
+
+function parseLocalHandoffTransaction(value: unknown): LocalHandoffTransaction {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_INVALID");
+  }
+  const transaction = value as LocalHandoffTransaction;
+  const unhashed = { ...transaction };
+  delete (unhashed as Partial<LocalHandoffTransaction>).journalHash;
+  if (transaction.schemaVersion !== "session-handoff-transaction/1.0" ||
+      transaction.kind !== "session-handoff-transaction" ||
+      typeof transaction.id !== "string" || !transaction.receipt || typeof transaction.receipt !== "object" ||
+      transaction.receipt.id !== transaction.id ||
+      !/^[a-f0-9]{64}$/u.test(transaction.docBeforeHash) ||
+      !/^[a-f0-9]{64}$/u.test(transaction.docContentHash) ||
+      transaction.journalHash !== hashObject(unhashed)) {
+    throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_INVALID");
+  }
+  return transaction;
+}
+
+function localReceiptMatches(
+  stored: SessionReceipt,
+  expected: Omit<SessionReceipt, "fromStatus" | "at">,
+): boolean {
+  return stored.schemaVersion === expected.schemaVersion &&
+    stored.kind === expected.kind &&
+    stored.id === expected.id &&
+    stored.workItem === expected.workItem &&
+    stored.session === expected.session &&
+    stored.handoffDocPath === expected.handoffDocPath &&
+    stored.handoffDocHash === expected.handoffDocHash &&
+    stored.commit === expected.commit &&
+    Array.isArray(stored.receiptIds) && stored.receiptIds.every((value) => typeof value === "string") &&
+    JSON.stringify(stored.receiptIds) === JSON.stringify(expected.receiptIds) &&
+    (stored.fromStatus === "pending" || stored.fromStatus === "in-progress") &&
+    stored.toStatus === expected.toStatus &&
+    typeof stored.at === "string" && Number.isFinite(Date.parse(stored.at));
+}
+
+function readLocalReceipt(path: string, id: string): SessionReceipt {
+  try {
+    const metadata = lstatSync(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error("invalid receipt file");
+    const value = readJson<unknown>(path);
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid receipt body");
+    return value as SessionReceipt;
+  } catch {
+    throw new Error(`SESSION_LOCAL_HANDOFF_RECEIPT_CONFLICT: ${id}`);
   }
 }
 
-function localSessionHandoff(
+function receiptPreview(receipt: SessionReceipt): NonNullable<SessionHandoffResult["receipt"]> {
+  return {
+    id: receipt.id,
+    handoffDocHash: receipt.handoffDocHash,
+    commit: receipt.commit,
+    fromStatus: receipt.fromStatus,
+    toStatus: receipt.toStatus,
+  };
+}
+
+const sessionLockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
+
+function acquireSessionMutationLock(commonDir: string): string {
+  const deadline = Date.now() + 30_000;
+  while (true) {
+    try {
+      return acquireMutationLock({ projectDir: commonDir, commonDir, repository: true });
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith("WORKSPACE_LOCKED:") || Date.now() >= deadline) throw error;
+      Atomics.wait(sessionLockWaitBuffer, 0, 0, 25);
+    }
+  }
+}
+
+function localSessionHandoffLocked(
   options: SessionCommandOptions,
   workItem: LocalParsedWorkItem,
   sessionId: string,
   toStatus: string,
   loaded: LoadedWorkflow,
+  commonDir: string,
 ): SessionHandoffResult {
   const root = options.projectRoot;
   const dryRun = options.dryRun === true;
@@ -814,7 +901,6 @@ function localSessionHandoff(
   }
   const docPath = handoffDocPath(root, workItem);
   const relativeDocPath = `docs/HANDOFF-local-${workItem.id}.md`;
-  const commonDir = gitCommonDir(root);
   const lastReceipt = lastReceiptFor(root, commonDir, workItem.workItem);
   const commit = headCommit(root);
 
@@ -855,33 +941,25 @@ function localSessionHandoff(
   const handoffDocHash = sha256(content);
   const receiptId = `handoff-local-${workItem.id}-${handoffDocHash.slice(0, 12)}`;
   const fromStatus = evidence.task.status === "in_progress" ? "in-progress" : evidence.task.status;
-  const receiptPreview = { id: receiptId, handoffDocHash, commit, fromStatus, toStatus };
+  const expectedReceipt = {
+    schemaVersion: SESSION_HANDOFF_RECEIPT_SCHEMA_VERSION,
+    kind: "session-handoff-receipt" as const,
+    id: receiptId,
+    workItem: workItem.workItem,
+    session: sessionId,
+    handoffDocPath: relativeDocPath,
+    handoffDocHash,
+    commit,
+    receiptIds: finalValidation.receiptIds,
+    toStatus,
+  };
+  const preview = { id: receiptId, handoffDocHash, commit, fromStatus, toStatus };
   const receiptPath = safePath(commonDir, `harness/session-handoff/receipts/${receiptId}.json`);
   if (existsSync(receiptPath)) {
-    let stored: SessionReceipt;
-    try {
-      const metadata = lstatSync(receiptPath);
-      if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error("invalid receipt file");
-      const value = readJson<unknown>(receiptPath);
-      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid receipt body");
-      stored = value as SessionReceipt;
-    } catch {
-      throw new Error(`SESSION_LOCAL_HANDOFF_RECEIPT_CONFLICT: ${receiptId}`);
-    }
-    const stable = stored.schemaVersion === SESSION_HANDOFF_RECEIPT_SCHEMA_VERSION &&
-      stored.kind === "session-handoff-receipt" &&
-      stored.id === receiptId &&
-      stored.workItem === workItem.workItem &&
-      stored.session === sessionId &&
-      stored.handoffDocPath === relativeDocPath &&
-      stored.handoffDocHash === handoffDocHash &&
-      stored.commit === commit &&
-      Array.isArray(stored.receiptIds) && stored.receiptIds.every((value) => typeof value === "string") &&
-      JSON.stringify(stored.receiptIds) === JSON.stringify(finalValidation.receiptIds) &&
-      (stored.fromStatus === "pending" || stored.fromStatus === "in-progress") &&
-      stored.toStatus === toStatus &&
-      typeof stored.at === "string" && Number.isFinite(Date.parse(stored.at)) &&
+    const stored = readLocalReceipt(receiptPath, receiptId);
+    const stable = localReceiptMatches(stored, expectedReceipt) &&
       evidence.task.status === "in_progress" &&
+      evidence.task.updatedBy === stored.session &&
       sha256(existing) === stored.handoffDocHash;
     if (!stable) throw new Error(`SESSION_LOCAL_HANDOFF_RECEIPT_CONFLICT: ${receiptId}`);
     return {
@@ -890,13 +968,7 @@ function localSessionHandoff(
       dryRun,
       handoffDocPath: docPath,
       seed,
-      receipt: {
-        id: stored.id,
-        handoffDocHash: stored.handoffDocHash,
-        commit: stored.commit,
-        fromStatus: stored.fromStatus,
-        toStatus: stored.toStatus,
-      },
+      receipt: receiptPreview(stored),
       nextSteps: ["新会话从本地 TASK、lease、Prepare 回执与 LKG 恢复，不以聊天摘要覆盖持久证据"],
     };
   }
@@ -907,38 +979,101 @@ function localSessionHandoff(
       dryRun: true,
       handoffDocPath: docPath,
       seed,
-      receipt: receiptPreview,
+      receipt: preview,
       nextSteps: [`去掉 --dry-run 执行本地交接：session handoff --work-item ${workItem.workItem} --session ${sessionId}`],
     };
   }
 
-  options.testBeforeLocalStatusCas?.();
-  atomicWrite(docPath, content);
-  updateLocalTaskStatusCas(root, workItem, evidence.task.status, "in_progress", sessionId);
-  const receipt: SessionReceipt = {
-    schemaVersion: SESSION_HANDOFF_RECEIPT_SCHEMA_VERSION,
-    kind: "session-handoff-receipt",
-    id: receiptId,
-    workItem: workItem.workItem,
-    session: sessionId,
-    handoffDocPath: relativeDocPath,
-    handoffDocHash,
-    commit,
-    receiptIds: finalValidation.receiptIds,
-    fromStatus,
-    toStatus,
-    at: new Date().toISOString(),
-  };
-  durableWriteOnce(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+  const transactionDirectory = safePath(commonDir, "harness/session-handoff/transactions");
+  if (evidence.task.status === "in_progress" && evidence.task.updatedBy !== sessionId) {
+    throw new Error(`SESSION_LOCAL_TASK_OWNER_MISMATCH: ${workItem.workItem}`);
+  }
+  let transaction: LocalHandoffTransaction | null = null;
+  if (existsSync(transactionDirectory)) {
+    const metadata = lstatSync(transactionDirectory);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_INVALID");
+    for (const name of readdirSync(transactionDirectory).sort()) {
+      if (!name.endsWith(".json")) throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_INVALID");
+      const path = safePath(transactionDirectory, name);
+      const pathMetadata = lstatSync(path);
+      if (!pathMetadata.isFile() || pathMetadata.isSymbolicLink()) {
+        throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_INVALID");
+      }
+      const candidate = parseLocalHandoffTransaction(readJson<unknown>(path));
+      if (name !== `${candidate.id}.json`) throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_INVALID");
+      const candidateReceiptPath = safePath(commonDir, `harness/session-handoff/receipts/${candidate.receipt.id}.json`);
+      if (candidate.receipt.workItem !== workItem.workItem || existsSync(candidateReceiptPath)) continue;
+      if (transaction || candidate.id !== receiptId) throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_CONFLICT");
+      transaction = candidate;
+    }
+  }
+  if (transaction) {
+    if (!localReceiptMatches(transaction.receipt, expectedReceipt) ||
+        transaction.docContentHash !== handoffDocHash ||
+        (transaction.docBeforeHash !== sha256(existing) && transaction.docContentHash !== sha256(existing))) {
+      throw new Error("SESSION_LOCAL_HANDOFF_TRANSACTION_CONFLICT");
+    }
+  } else {
+    const receipt: SessionReceipt = { ...expectedReceipt, fromStatus, at: new Date().toISOString() };
+    const draft: LocalHandoffTransaction = {
+      schemaVersion: "session-handoff-transaction/1.0",
+      kind: "session-handoff-transaction",
+      id: receiptId,
+      receipt,
+      docBeforeHash: sha256(existing),
+      docContentHash: handoffDocHash,
+      journalHash: "",
+    };
+    const unhashed = { ...draft };
+    delete (unhashed as Partial<LocalHandoffTransaction>).journalHash;
+    draft.journalHash = hashObject(unhashed);
+    durableWriteOnce(safePath(transactionDirectory, `${receiptId}.json`), `${JSON.stringify(draft, null, 2)}\n`);
+    transaction = draft;
+  }
+
+  if (evidence.task.status === "pending") {
+    options.testBeforeLocalStatusCas?.();
+    updateLocalTaskStatusCas(root, workItem, "pending", "in_progress", sessionId);
+  }
+  if (sha256(existing) !== handoffDocHash) atomicWrite(docPath, content);
+  let committedReceipt = transaction.receipt;
+  try {
+    durableWriteOnce(receiptPath, `${JSON.stringify(transaction.receipt, null, 2)}\n`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const stored = readLocalReceipt(receiptPath, receiptId);
+    const refreshed = localSessionEvidence(root, workItem);
+    if (!localReceiptMatches(stored, expectedReceipt) || refreshed.task.status !== "in_progress" ||
+        refreshed.task.updatedBy !== stored.session || sha256(readFileSync(docPath, "utf8")) !== stored.handoffDocHash) {
+      throw new Error(`SESSION_LOCAL_HANDOFF_RECEIPT_CONFLICT: ${receiptId}`);
+    }
+    committedReceipt = stored;
+  }
   return {
     ok: true,
     phase: "ready",
     dryRun: false,
     handoffDocPath: docPath,
     seed,
-    receipt: receiptPreview,
+    receipt: receiptPreview(committedReceipt),
     nextSteps: ["新会话从本地 TASK、lease、Prepare 回执与 LKG 恢复，不以聊天摘要覆盖持久证据"],
   };
+}
+
+function localSessionHandoff(
+  options: SessionCommandOptions,
+  workItem: LocalParsedWorkItem,
+  sessionId: string,
+  toStatus: string,
+  loaded: LoadedWorkflow,
+): SessionHandoffResult {
+  const commonDir = gitCommonDir(options.projectRoot);
+  const lock = acquireSessionMutationLock(commonDir);
+  try {
+    return localSessionHandoffLocked(options, workItem, sessionId, toStatus, loaded, commonDir);
+  } finally {
+    releaseMutationLock(lock);
+  }
 }
 
 function currentBranchForSession(root: string): string {
