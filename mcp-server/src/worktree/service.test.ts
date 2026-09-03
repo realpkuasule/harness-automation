@@ -20,11 +20,13 @@ import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { hashObject, prettyJson, sha256, withoutHash } from "../v2/fs.js";
 import type { WorktreeApprovalPolicy, WorktreeDelegatableOperation } from "./types.js";
+import { loadWorktreeConfig } from "./config.js";
 import {
   applyWorkspacePlan,
   applyWorkspaceMigration,
   auditWorkspace,
   integrationCheckWorkspace,
+  loadConfig,
   parseWorkspaceAdoptionManifest,
   parseWorktreePorcelain,
   planWorkspaceAdoption,
@@ -302,6 +304,12 @@ afterEach(async () => {
 });
 
 describe("portable worktree inventory", () => {
+  it("keeps the public configuration observation compatible with the extracted seam", () => {
+    const root = repository();
+
+    expect(loadConfig(root)).toEqual(loadWorktreeConfig(root));
+  });
+
   it("uses 2 persistent worktrees and a 72-hour lease for new projects", () => {
     const root = repository();
 

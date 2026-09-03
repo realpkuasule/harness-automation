@@ -1,10 +1,11 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { z } from "zod";
 import { atomicWrite, hashObject, prettyJson, readJson, safePath, sha256 } from "../v2/fs.js";
 import { commandJson } from "../worktree/provider.js";
-import { githubEndpointRepository, loadConfig, remotePushEndpoint, remoteRefHead } from "../worktree/service.js";
+import { loadWorktreeConfig } from "../worktree/config.js";
+import { runGit, runGitCommand } from "../repository/git.js";
+import { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
 import {
   DELIVERY_AUTHORIZATION_SCHEMA_VERSION,
   DELIVERY_RECEIPT_SCHEMA_VERSION,
@@ -18,11 +19,7 @@ import {
 } from "./types.js";
 
 function git(root: string, args: string[], allowFailure = false): string {
-  const result = spawnSync("git", args, { cwd: root, encoding: "utf8", timeout: 30_000 });
-  if (result.error || (!allowFailure && result.status !== 0)) {
-    throw new Error(`GIT_COMMAND_FAILED: git ${args.join(" ")}: ${(result.stderr || result.error?.message || "unknown error").trim()}`);
-  }
-  return result.status === 0 ? result.stdout.trim() : "";
+  return runGit(root, args, { allowFailure, fallbackError: true }).trim();
 }
 
 function repositoryRoot(root: string): string {
@@ -59,13 +56,9 @@ function commit(root: string, ref: string): string {
 }
 
 function isAncestor(root: string, ancestor: string, descendant: string): boolean {
-  const result = spawnSync("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
-    cwd: root,
-    encoding: "utf8",
-    timeout: 30_000,
-  });
+  const result = runGitCommand(root, ["merge-base", "--is-ancestor", ancestor, descendant], process.env);
   if (result.error || (result.status !== 0 && result.status !== 1)) {
-    throw new Error(`GIT_COMMAND_FAILED: git merge-base --is-ancestor: ${(result.stderr || result.error?.message || "unknown error").trim()}`);
+    throw new Error(`GIT_COMMAND_FAILED: git merge-base --is-ancestor: ${(result.stderr || result.error || "unknown error").trim()}`);
   }
   return result.status === 0;
 }
@@ -269,7 +262,7 @@ function currentBaseHead(root: string, authorization: DeliveryAuthorization): st
 }
 
 function currentPolicyHash(root: string): string {
-  const loaded = loadConfig(root);
+  const loaded = loadWorktreeConfig(root);
   return hashObject({ configured: loaded.configured, config: loaded.config, legacyBinding: loaded.legacyBinding });
 }
 
