@@ -1,9 +1,11 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
-import { sha256 } from "../v2/fs.js";
+import { admitSession } from "./admission.js";
+import { prepareDelivery } from "../delivery/prepare.js";
+import { hashObject, sha256 } from "../v2/fs.js";
 import { sessionHandoff, sessionSeed, sessionStatus } from "./service.js";
 
 const directories: string[] = [];
@@ -209,6 +211,96 @@ const HANDOFF_ARGS = {
 
 function readdirOrEmpty(dir: string): string[] {
   return existsSync(dir) ? readdirSync(dir) : [];
+}
+
+async function localFixture(): Promise<{ root: string; target: string; receiptEventHash: string; branch: string; workItem: string }> {
+  const root = directory();
+  const target = `${root}-delivery`;
+  directories.push(target);
+  initRepo(root);
+  const branch = git(root, ["symbolic-ref", "--short", "HEAD"]);
+  write(root, ".harness/policy.yaml", JSON.stringify({
+    schemaVersion: "2.0",
+    project: { owner: "local-owner" },
+    policies: [],
+  }, null, 2));
+  write(root, ".harness/worktree-delivery.json", JSON.stringify({
+    schemaVersion: "1.0",
+    mode: "enforced",
+    managementBranch: branch,
+    maxPersistentWorktrees: 4,
+    leaseTtlHours: 168,
+    reviewTtlMinutes: 120,
+    remoteBranchRetentionDays: 1,
+    remoteBranchDeletion: true,
+    provider: { kind: "none" },
+  }, null, 2));
+  const policy = JSON.parse(readFileSync(join(root, ".harness/policy.yaml"), "utf8")) as unknown;
+  write(root, ".harness/sessions/context.json", JSON.stringify({
+    schemaVersion: "2.0",
+    startedAt: "2026-09-03T12:00:00.000Z",
+    policyDigest: hashObject(policy),
+    owner: "local-owner",
+    agent: "codex",
+  }, null, 2));
+  git(root, ["add", "."]);
+  git(root, ["commit", "-q", "-m", "configure local delivery"]);
+  const commonDir = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  write(commonDir, "harness/worktree-delivery/host-binding.json", JSON.stringify({
+    schemaVersion: "1.0",
+    allowedRoots: [tmpdir()],
+    protectedRoots: [root, commonDir, "/"],
+    approval: { mode: "manual" },
+  }, null, 2));
+  const now = new Date("2026-09-03T12:00:00.000Z");
+  admitSession({ projectRoot: root, session: "local-prepare", intent: "new-code", contextReceipt: ".harness/sessions/context.json", now });
+  const prepared = await prepareDelivery({
+    projectRoot: root,
+    session: "local-prepare",
+    confirmation: "prepare local task and workspace",
+    baseRef: `refs/heads/${branch}`,
+    baseSha: git(root, ["rev-parse", "HEAD"]),
+    localOnly: true,
+    title: "Local export",
+    description: "Export without a remote provider.",
+    owner: "local-owner",
+    path: target,
+    now,
+  });
+  return { root, target, receiptEventHash: prepared.receiptEventHash, branch: prepared.branch!, workItem: prepared.workItem };
+}
+
+function filledLocalDoc(receipt: string): string {
+  return `# HANDOFF local:P0-1 — Local export
+
+## 目标与验收标准
+
+Local export
+
+## 已完成（附 commit / 回执）
+
+回执: ${receipt}
+
+## 当前状态（跑通什么、依赖什么、密钥位置）
+
+Prepared local workspace
+
+## 已知问题与未决项
+
+无
+
+## 下一步建议（编号列表，供新会话认领）
+
+1. Continue
+
+## 引用文件（路径列表，新会话必须读）
+
+README.md
+
+## SEED（由 CLI 确定性生成，勿手改）
+
+conflicting chat summary
+`;
 }
 
 describe("session seed", () => {
@@ -464,5 +556,33 @@ describe("session status", () => {
     expect(status.ok).toBe(true);
     expect((status.items[0] as Record<string, unknown>).issue)
       .toMatchObject({ available: false, error: expect.stringContaining("GITHUB_ISSUE_QUERY_FAILED") });
+  });
+
+  it("restores Local-only status, seed, and handoff from TASK, lease, Prepare receipt, and LKG", async () => {
+    const local = await localFixture();
+    const status = sessionStatus({ projectRoot: local.target, workItem: local.workItem });
+    expect(status.items[0]).toMatchObject({
+      workItem: local.workItem,
+      task: { available: true, title: "Local export" },
+      workspace: { branch: local.branch, path: realpathSync.native(local.target) },
+      prepare: { outcome: "PreparedNotOpened", receiptEventHash: local.receiptEventHash },
+    });
+    const seed = sessionSeed({ projectRoot: local.target, workItem: local.workItem }).seed;
+    expect(seed).toContain("Local export");
+    expect(seed).toContain(local.branch);
+    expect(seed).toContain(local.receiptEventHash);
+
+    const draft = sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-next" });
+    expect(draft.phase).toBe("draft");
+    expect(draft).not.toHaveProperty("issueUpdates");
+    write(local.target, "docs/HANDOFF-local-P0-1.md", filledLocalDoc("not-a-real-receipt"));
+    expect(() => sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-next" }))
+      .toThrow(/UNKNOWN_RECEIPT/);
+
+    write(local.target, "docs/HANDOFF-local-P0-1.md", filledLocalDoc(local.receiptEventHash));
+    const ready = sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-next" });
+    expect(ready).toMatchObject({ phase: "ready", dryRun: false });
+    expect(ready).not.toHaveProperty("issueUpdates");
+    expect(readFileSync(join(local.target, "docs/HANDOFF-local-P0-1.md"), "utf8")).not.toContain("conflicting chat summary");
   });
 });

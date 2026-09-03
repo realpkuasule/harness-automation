@@ -58,10 +58,10 @@ export interface SessionAdmissionResult extends SessionAdmissionRecord {
   receiptEventHash: string;
 }
 
-/** GitHub 形式的 work item：github:<owner>/<repo>#<number> */
-export const WORK_ITEM_PATTERN = /^github:([^/]+)\/([^/]+)#(\d+)$/u;
+/** Durable work-item identities. */
+export const WORK_ITEM_PATTERN = /^(?:github:([^/]+)\/([^/]+)#(\d+)|local:([A-Za-z0-9][A-Za-z0-9._-]*))$/u;
 
-export interface ParsedWorkItem {
+export interface GitHubParsedWorkItem {
   provider: "github";
   owner: string;
   repository: string;
@@ -70,9 +70,18 @@ export interface ParsedWorkItem {
   workItem: string;
 }
 
+export interface LocalParsedWorkItem {
+  provider: "local";
+  id: string;
+  workItem: string;
+}
+
+export type ParsedWorkItem = GitHubParsedWorkItem | LocalParsedWorkItem;
+
 export function parseWorkItem(input: string): ParsedWorkItem | null {
   const match = WORK_ITEM_PATTERN.exec(input.trim());
   if (!match) return null;
+  if (match[4]) return { provider: "local", id: match[4], workItem: `local:${match[4]}` };
   return {
     provider: "github",
     owner: match[1],

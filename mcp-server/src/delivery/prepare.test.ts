@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   cpSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -18,6 +19,7 @@ import { readLkgChain, readReceiptChain } from "../receipt/service.js";
 import { admitSession } from "../session/admission.js";
 import { hashObject, sha256, withoutHash } from "../v2/fs.js";
 import { workspaceStatus } from "../worktree/service.js";
+import { authorizeDelivery, pushDelivery } from "./service.js";
 import {
   deliveryPrepareJournalSchema,
   deliveryPreparePlanSchema,
@@ -256,6 +258,30 @@ describe("delivery prepare", () => {
     expect(readdirSync(join(item.root, ".harness/plans")).filter((name) => name.endsWith(".json"))).toHaveLength(0);
   });
 
+  it("single-flights concurrent retries of the same transaction", async () => {
+    const item = fixture("none", "concurrent");
+    const [first, second] = await Promise.all([
+      prepareDelivery(item.options),
+      prepareDelivery(item.options),
+    ]);
+
+    expect(first.transactionId).toBe(second.transactionId);
+    expect(first.planHash).toBe(second.planHash);
+    expect(first.receiptEventHash).toBe(second.receiptEventHash);
+    expect(first.lkgRecordHash).toBe(second.lkgRecordHash);
+    expect((board(item).tasks as unknown[])).toHaveLength(1);
+    const status = workspaceStatus(item.root);
+    expect(status.leases.filter((lease) => lease.workItem === first.workItem)).toHaveLength(1);
+    expect(status.worktrees.filter((worktree) => worktree.path === realpathSync.native(item.target))).toHaveLength(1);
+    const chain = readReceiptChain({ root: item.commonDir, domain: "delivery-prepare", transactionId: first.transactionId });
+    const semanticPhases = chain.map((event) => (event.snapshot as { phase: string }).phase)
+      .filter((phase, index, phases) => index === 0 || phase !== phases[index - 1]);
+    expect(semanticPhases).toEqual([
+      "planned", "work-item-admitted", "claim-acquired", "workspace-established", "binding-seeded", "prepared",
+    ]);
+    expect(readLkgChain({ root: item.commonDir, domain: "delivery-prepare" })).toHaveLength(1);
+  });
+
   it.each(["working-tree", "index", "head", "plan"] as const)(
     "does not hide %s drift behind an orphan workspace plan",
     async (drift) => {
@@ -275,7 +301,9 @@ describe("delivery prepare", () => {
         if (drift === "head") git(item.root, "commit", "-q", "-m", "unrelated drift");
       }
 
-      await expect(prepareDelivery(item.options)).rejects.toThrow("DELIVERY_PREPARE_RECOVERY_REQUIRED");
+      await expect(prepareDelivery(item.options)).rejects.toThrow(
+        drift === "head" ? "DELIVERY_PREPARE_ADMISSION_DRIFT" : "DELIVERY_PREPARE_RECOVERY_REQUIRED",
+      );
       expect(existsSync(item.target)).toBe(false);
       expect(workspaceStatus(item.root).leases).toHaveLength(0);
     },
@@ -328,6 +356,33 @@ describe("delivery prepare", () => {
     expect(managementEvidence(item.root)).toEqual(before);
     expect(workspaceStatus(item.root).leases).toEqual(expect.arrayContaining([
       expect.objectContaining({ workItem: "local:P0-1", branch, path: realpathSync.native(item.target) }),
+    ]));
+  });
+
+  it("adopts a clean committed Worktree ahead of management without rewriting it", async () => {
+    const item = fixture("none", "adopt-ahead");
+    execFileSync("python3", [
+      join(repositoryRoot, "scripts/task.py"), "--local-only", "add", "0", "Existing task", "Already admitted", "--by", "fixture-owner",
+    ], {
+      cwd: item.root,
+      env: { PATH: process.env.PATH, LANG: process.env.LANG ?? "C.UTF-8", HARNESS_REPO_ROOT: item.root, PYTHONDONTWRITEBYTECODE: "1" },
+    });
+    const branch = "codex/P0-1-adopt-ahead";
+    git(item.root, "worktree", "add", "-q", "-b", branch, item.target, item.options.baseSha);
+    write(item.target, "ahead.txt", "committed ahead\n");
+    git(item.target, "add", "ahead.txt");
+    git(item.target, "commit", "-q", "-m", "feat: ahead worktree commit");
+    const adoptedHead = git(item.target, "rev-parse", "HEAD");
+    const before = managementEvidence(item.root);
+
+    const result = await prepareDelivery({ ...item.options, workItem: "local:P0-1", branch, path: item.target });
+
+    expect(result).toMatchObject({ state: "Prepared", branch, path: realpathSync.native(item.target) });
+    expect(git(item.target, "rev-parse", "HEAD")).toBe(adoptedHead);
+    expect(git(item.target, "symbolic-ref", "--short", "HEAD")).toBe(branch);
+    expect(managementEvidence(item.root)).toEqual(before);
+    expect(workspaceStatus(item.root).leases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ workItem: "local:P0-1", branch, acceptedCommit: adoptedHead }),
     ]));
   });
 
@@ -390,10 +445,36 @@ describe("delivery prepare", () => {
     git(item.root, "add", "README.md");
     git(item.root, "commit", "-q", "-m", "advance management");
 
-    await expect(prepareDelivery(item.options)).rejects.toThrow("DELIVERY_PREPARE_MANAGEMENT_CHECKOUT_DRIFT");
+    await expect(prepareDelivery(item.options)).rejects.toThrow("DELIVERY_PREPARE_ADMISSION_DRIFT");
     expect(existsSync(join(item.commonDir, "harness/local-tracking/TASK.json"))).toBe(false);
     expect(existsSync(item.target)).toBe(false);
     expect(workspaceStatus(item.root).leases).toHaveLength(0);
+  });
+
+  it("revalidates admission host binding before resuming any mutation", async () => {
+    const item = fixture("none", "admission-drift");
+    await expect(prepareDelivery({ ...item.options, testFailAfter: "planned" }))
+      .rejects.toThrow("DELIVERY_PREPARE_RECOVERY_REQUIRED");
+    const bindingPath = join(item.commonDir, "harness/worktree-delivery/host-binding.json");
+    const binding = JSON.parse(readFileSync(bindingPath, "utf8")) as { allowedRoots: string[] };
+    binding.allowedRoots.push(join(tmpdir(), "another-root"));
+    writeFileSync(bindingPath, `${JSON.stringify(binding, null, 2)}\n`, "utf8");
+
+    await expect(prepareDelivery(item.options)).rejects.toThrow(/DELIVERY_PREPARE_ADMISSION_DRIFT|DELIVERY_PREPARE_RECOVERY_REQUIRED/);
+    expect(existsSync(join(item.commonDir, "harness/local-tracking/TASK.json"))).toBe(false);
+    expect(existsSync(item.target)).toBe(false);
+  });
+
+  it("binds dirty and untracked bytes rather than only porcelain path names", async () => {
+    const item = fixture("none", "dirty-bytes");
+    write(item.root, "scratch.txt", "first bytes\n");
+    await expect(prepareDelivery({ ...item.options, testFailAfter: "planned" }))
+      .rejects.toThrow("DELIVERY_PREPARE_RECOVERY_REQUIRED");
+    write(item.root, "scratch.txt", "other bytes\n");
+
+    await expect(prepareDelivery(item.options)).rejects.toThrow("DELIVERY_PREPARE_MANAGEMENT_CHECKOUT_DRIFT");
+    expect(existsSync(join(item.commonDir, "harness/local-tracking/TASK.json"))).toBe(false);
+    expect(existsSync(item.target)).toBe(false);
   });
 
   it("creates and verifies a GitHub Issue, then fails closed before branch or worktree creation", async () => {
@@ -446,6 +527,68 @@ describe("delivery prepare", () => {
     expect(readLkgChain({ root: item.commonDir, domain: "delivery-prepare" })).toHaveLength(0);
     expect((await prepareDelivery({ ...item.options, githubRequest: request }))).toMatchObject({ reused: true });
     expect(issueCreates).toBe(1);
+  });
+
+  it("blocks legacy authorize and push after Prepare records CoordinationBackendRequired", async () => {
+    const item = fixture("github", "github-bypass");
+    const branch = "codex/7-manual";
+    git(item.root, "worktree", "add", "-q", "-b", branch, item.target, item.options.baseSha);
+    const authorization = authorizeDelivery({
+      projectRoot: item.target,
+      workItem: "github:example/project#7",
+      baseBranch: "main",
+      featureBranch: branch,
+      allowedPaths: ["README.md"],
+      intent: "Deliver manually created worktree",
+      approvalSource: "test-before-prepare",
+      now: fixedNow,
+    }).authorization;
+    const request = (_root: string, args: string[]): { ok: boolean; value?: unknown; error?: string } => {
+      if (!args.includes("GET")) return { ok: false, error: "unexpected request" };
+      return { ok: true, value: {
+        number: 7,
+        node_id: "ISSUE_7",
+        state: "open",
+        title: "Export data",
+        body: "",
+        html_url: "https://github.com/example/project/issues/7",
+        updated_at: fixedNow.toISOString(),
+      } };
+    };
+    const blocked = await prepareDelivery({ ...item.options, workItem: "github:example/project#7", githubRequest: request });
+    expect(blocked.outcome).toBe("CoordinationBackendRequired");
+
+    const fakeBin = mkdtempSync(join(tmpdir(), "harness-prepare-push-"));
+    fixtures.push(fakeBin);
+    const pushed = join(fakeBin, "pushed");
+    writeFileSync(join(fakeBin, "git"), `#!/bin/sh
+if [ "$1" = "ls-remote" ]; then exit 0; fi
+if [ "$1" = "push" ]; then touch ${JSON.stringify(pushed)}; exit 0; fi
+exec /usr/bin/git "$@"
+`, "utf8");
+    chmodSync(join(fakeBin, "git"), 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${fakeBin}:${savedPath ?? ""}`;
+    try {
+      expect(() => pushDelivery({ projectRoot: item.target, authorizationHash: authorization.authorizationHash }))
+        .toThrow("CoordinationBackendRequired");
+      expect(existsSync(pushed)).toBe(false);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+
+    const receiptDirectory = join(item.commonDir, "harness/worktree-delivery/receipts");
+    const beforeAuthorizations = readdirSync(receiptDirectory).filter((name) => name.startsWith("delivery-authorization-")).length;
+    expect(() => authorizeDelivery({
+      projectRoot: item.target,
+      workItem: blocked.workItem,
+      baseBranch: "main",
+      featureBranch: branch,
+      allowedPaths: ["README.md"],
+      intent: "Retry legacy authorization",
+      approvalSource: "test-after-prepare",
+    })).toThrow("CoordinationBackendRequired");
+    expect(readdirSync(receiptDirectory).filter((name) => name.startsWith("delivery-authorization-"))).toHaveLength(beforeAuthorizations);
   });
 
   it("does not switch a GitHub project to Local-only when the network is unavailable", async () => {

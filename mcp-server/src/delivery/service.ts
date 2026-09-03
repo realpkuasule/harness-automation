@@ -6,6 +6,8 @@ import { commandJson } from "../worktree/provider.js";
 import { loadWorktreeConfig } from "../worktree/config.js";
 import { runGit, runGitCommand } from "../repository/git.js";
 import { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
+import { readLatestReceiptEvent } from "../receipt/service.js";
+import { deliveryPrepareJournalSchema, type DeliveryPrepareJournal } from "./prepare.js";
 import {
   DELIVERY_AUTHORIZATION_SCHEMA_VERSION,
   DELIVERY_RECEIPT_SCHEMA_VERSION,
@@ -81,6 +83,34 @@ function receiptDirectory(common: string): string {
 
 function receiptPath(common: string, id: string): string {
   return safePath(common, `harness/worktree-delivery/receipts/${id}.json`);
+}
+
+function coordinationBlock(common: string, workItem: string): boolean {
+  const directory = safePath(common, "harness/delivery-prepare/journals");
+  if (!existsSync(directory)) return false;
+  for (const name of readdirSync(directory).filter((entry) => /^prepare-[a-f0-9]{24}\.json$/u.test(entry)).sort()) {
+    const transactionId = name.slice(0, -".json".length);
+    const projection = readJson<unknown>(join(directory, name));
+    const parsedProjection = deliveryPrepareJournalSchema.safeParse(projection);
+    if (!parsedProjection.success) throw new Error("DELIVERY_PREPARE_JOURNAL_INVALID");
+    const event = readLatestReceiptEvent<DeliveryPrepareJournal>({
+      root: common,
+      domain: "delivery-prepare",
+      transactionId,
+      compatibilitySnapshot: parsedProjection.data,
+    });
+    if (!event) continue;
+    const latest = deliveryPrepareJournalSchema.parse(event.snapshot);
+    const unhashed = { ...latest };
+    delete (unhashed as Partial<DeliveryPrepareJournal>).journalHash;
+    if (latest.journalHash !== hashObject(unhashed)) throw new Error("DELIVERY_PREPARE_JOURNAL_INVALID");
+    if (latest.workItem === workItem && latest.outcome === "CoordinationBackendRequired" && latest.blocked) return true;
+  }
+  return false;
+}
+
+function assertLegacyCoordinationAllowed(root: string, workItem: string): void {
+  if (coordinationBlock(commonDir(root), workItem)) throw new Error("CoordinationBackendRequired");
 }
 
 function withoutAuthorizationHash(authorization: DeliveryAuthorization): Omit<DeliveryAuthorization, "authorizationHash"> {
@@ -319,6 +349,7 @@ export function authorizeDelivery(options: {
       !options.workItem.toLowerCase().startsWith(`github:${repository}#`)) {
     throw new Error(`DELIVERY_WORK_ITEM_REPOSITORY_MISMATCH: ${options.workItem}`);
   }
+  assertLegacyCoordinationAllowed(root, options.workItem.trim());
   const baseBranch = options.baseBranch.trim();
   const featureBranch = options.featureBranch?.trim() || currentBranch(root);
   if (!baseBranch || !featureBranch || baseBranch === featureBranch) throw new Error("DELIVERY_BRANCH_INVALID");
@@ -410,7 +441,8 @@ export function deliveryStatus(projectRoot: string, authorizationHash: string): 
   const currentHead = commit(featureRoot, "HEAD");
   const receipts = readReceipts(commonDir(root), authorization.authorizationHash);
   let invalidation: string | undefined;
-  if (currentBranch(featureRoot) !== authorization.featureBranch) invalidation = "DELIVERY_FEATURE_BRANCH_DRIFT";
+  if (coordinationBlock(commonDir(root), authorization.workItem)) invalidation = "CoordinationBackendRequired";
+  else if (currentBranch(featureRoot) !== authorization.featureBranch) invalidation = "DELIVERY_FEATURE_BRANCH_DRIFT";
   else if (remotePushEndpoint(root, authorization.remote.name).hash !== authorization.remote.endpointHash) invalidation = "DELIVERY_REMOTE_ENDPOINT_DRIFT";
   else if (currentPolicyHash(root) !== authorization.policyHash) invalidation = "DELIVERY_POLICY_DRIFT";
   else {

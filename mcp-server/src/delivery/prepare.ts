@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
-import { existsSync, lstatSync, readdirSync, unlinkSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, readFileSync, readlinkSync, readdirSync, realpathSync, unlinkSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
@@ -76,6 +77,7 @@ export const deliveryPreparePlanSchema = z.object({
   requestedPath: nullableText,
   baseRef: z.string().min(1),
   baseSha: gitObjectSchema,
+  adoptedHead: gitObjectSchema.nullable(),
   management: z.object({
     projectDir: z.string().min(1),
     commonDir: z.string().min(1),
@@ -162,7 +164,7 @@ export interface DeliveryPrepareOptions {
   testCrashAfterWorkspacePlan?: boolean;
 }
 
-const localTaskSchema = z.object({
+export const localTaskSchema = z.object({
   id: z.string().min(1),
   phase: z.number().int().min(0),
   status: z.enum(["pending", "in_progress", "completed", "deleted"]),
@@ -177,7 +179,7 @@ const localTaskSchema = z.object({
   updatedBy: z.string().min(1),
   relatedFiles: z.array(z.string().min(1)),
 }).strict();
-const localBoardSchema = z.object({
+export const localBoardSchema = z.object({
   schemaVersion: z.literal("1.0"),
   meta: z.object({ project: z.string().min(1), updated: z.string().min(1) }).strict(),
   tasks: z.array(localTaskSchema),
@@ -245,7 +247,7 @@ function managementSnapshot(root: string, commonDir: string, ignoredPlanPath?: s
     branch,
     head: runGit(root, ["rev-parse", "HEAD"]).trim(),
     indexHash: runGit(root, ["write-tree"]).trim(),
-    workingTreeHash: sha256(managementStatus(root, ignoredPlanPath)),
+    workingTreeHash: workingTreeEvidence(root, ignoredPlanPath),
   };
 }
 
@@ -270,6 +272,7 @@ function confirmationHash(plan: Omit<DeliveryPreparePlan, "planHash"> | Delivery
     pathSelector: plan.requestedPath ?? "configured-worktree-root/{id}",
     baseRef: plan.baseRef,
     baseSha: plan.baseSha,
+    adoptedHead: plan.adoptedHead,
     management: plan.management,
   });
 }
@@ -349,11 +352,15 @@ function journalSnapshot(
 
 function appendJournal(
   plan: DeliveryPreparePlan,
-  previous: DeliveryPrepareJournal | null,
+  previous: { journal: DeliveryPrepareJournal; event: ReceiptEvent<DeliveryPrepareJournal> } | null,
   update: Parameters<typeof journalSnapshot>[2],
   now: Date,
 ): { journal: DeliveryPrepareJournal; event: ReceiptEvent<DeliveryPrepareJournal> } {
-  const journal = journalSnapshot(plan, previous, update, now);
+  const latest = currentJournal(plan.management.commonDir, plan.transactionId);
+  if ((latest?.event.eventHash ?? null) !== (previous?.event.eventHash ?? null)) {
+    fail("DELIVERY_PREPARE_JOURNAL_CONCURRENT_UPDATE");
+  }
+  const journal = journalSnapshot(plan, previous?.journal ?? null, update, now);
   const event = appendReceiptEvent({
     root: plan.management.commonDir,
     domain: "delivery-prepare",
@@ -387,6 +394,64 @@ function modeFor(root: string, localOnly: boolean): PrepareMode {
   if (localOnly) fail("DELIVERY_PREPARE_TRACKING_MODE_MISMATCH", "a configured remote provider cannot fall back to Local-only");
   if (loaded.config.provider.kind !== "github") fail("DELIVERY_PREPARE_PROVIDER_UNSUPPORTED");
   return "github";
+}
+
+function contentDigest(path: string): string {
+  const stat = lstatSync(path);
+  const hash = createHash("sha256");
+  if (stat.isSymbolicLink()) hash.update(`symlink\0${readlinkSync(path)}`);
+  else if (stat.isFile()) hash.update(readFileSync(path));
+  else hash.update(`other\0${stat.mode}\0${stat.size}`);
+  return hash.digest("hex");
+}
+
+function workingTreeEvidence(root: string, ignoredPlanPath?: string): string {
+  const untracked = runGit(root, ["ls-files", "--others", "--exclude-standard", "-z"])
+    .split("\0")
+    .filter((path) => path && path !== ignoredPlanPath)
+    .sort()
+    .map((path) => ({ path, digest: contentDigest(safePath(root, path)) }));
+  return hashObject({
+    porcelain: managementStatus(root, ignoredPlanPath),
+    trackedDiff: sha256(runGit(root, ["diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD", "--"])),
+    untracked,
+  });
+}
+
+function adoptedHead(
+  root: string,
+  requestedWorkItem: string | null,
+  requestedBranch: string | null,
+  requestedPath: string | null,
+): string | null {
+  if (!requestedWorkItem || !requestedBranch || !requestedPath || !existsSync(requestedPath)) return null;
+  const id = requestedWorkItem.slice(Math.max(requestedWorkItem.lastIndexOf(":"), requestedWorkItem.lastIndexOf("#")) + 1);
+  const branch = requestedBranch.replaceAll("{id}", id);
+  const status = workspaceStatus(root, { adoptionSafe: true, providerWorkItems: [requestedWorkItem] });
+  const canonicalPath = (path: string): string => existsSync(path) ? realpathSync.native(path) : resolve(path);
+  const matches = status.worktrees.filter((worktree) => canonicalPath(worktree.path) === canonicalPath(requestedPath) && worktree.branch === branch);
+  if (matches.length !== 1 || matches[0].detached || matches[0].bare || matches[0].locked || matches[0].prunable || matches[0].dirty) {
+    fail("DELIVERY_PREPARE_ADOPTION_FACTS_INVALID");
+  }
+  return matches[0].head;
+}
+
+function validateAdmission(plan: DeliveryPreparePlan, now?: Date): void {
+  const current = admitSession({ projectRoot: plan.management.projectDir, session: plan.session, now });
+  if (current.receiptEventHash !== plan.admissionEventHash || current.factsFingerprint !== plan.admissionFactsHash ||
+      current.intent !== "new-code" || current.decision !== "prepare-required" || current.managedWriteAllowed ||
+      current.facts.repository !== plan.management.projectDir || current.facts.commonDir !== plan.management.commonDir ||
+      current.facts.branch !== plan.management.branch || current.facts.head !== plan.management.head ||
+      !current.facts.managementCheckout) {
+    fail("DELIVERY_PREPARE_ADMISSION_DRIFT");
+  }
+}
+
+function validateAdoptedHead(plan: DeliveryPreparePlan): void {
+  if (plan.adoptedHead !== null && (
+    !plan.requestedPath || !existsSync(plan.requestedPath) ||
+    runGit(plan.requestedPath, ["rev-parse", "HEAD"]).trim() !== plan.adoptedHead
+  )) fail("DELIVERY_PREPARE_ADOPTION_HEAD_DRIFT");
 }
 
 function loadOrCreatePlan(options: DeliveryPrepareOptions): DeliveryPreparePlan {
@@ -443,6 +508,12 @@ function loadOrCreatePlan(options: DeliveryPrepareOptions): DeliveryPreparePlan 
       runGit(context.projectDir, ["rev-parse", "--verify", `${baseRef}^{commit}`]).trim() !== baseSha || baseSha !== management.head) {
     fail("DELIVERY_PREPARE_BASE_DRIFT");
   }
+  const selectedAdoptedHead = adoptedHead(
+    context.projectDir,
+    requestedWorkItem,
+    requestedBranch,
+    requestedPath,
+  );
   const draft: DeliveryPreparePlan = {
     schemaVersion: DELIVERY_PREPARE_SCHEMA_VERSION,
     kind: "delivery-prepare-plan",
@@ -467,6 +538,7 @@ function loadOrCreatePlan(options: DeliveryPrepareOptions): DeliveryPreparePlan 
     requestedPath,
     baseRef,
     baseSha,
+    adoptedHead: selectedAdoptedHead,
     management,
     createdAt: (options.now ?? new Date()).toISOString(),
     planHash: "0".repeat(64),
@@ -724,6 +796,8 @@ function transactionOwnedOrphanWorkspacePlan(
   branch: string,
   adoption: boolean,
 ): OrphanWorkspacePlan | null {
+  const expectedHead = adoption ? plan.adoptedHead : plan.baseSha;
+  if (!expectedHead) fail("DELIVERY_PREPARE_ADOPTION_HEAD_REQUIRED");
   const directory = safePath(plan.management.projectDir, ".harness/plans");
   if (!existsSync(directory)) return null;
   const matches: OrphanWorkspacePlan[] = [];
@@ -740,7 +814,7 @@ function transactionOwnedOrphanWorkspacePlan(
           candidate.operation.kind !== (adoption ? "adopt" : "allocate")) continue;
       const lease = preparedLease(candidate);
       if (lease.workItem !== workItem || lease.branch !== branch || lease.owner !== plan.owner ||
-          lease.thread !== plan.session || lease.acceptedCommit !== plan.baseSha || lease.createdAt !== plan.createdAt ||
+          lease.thread !== plan.session || lease.acceptedCommit !== expectedHead || lease.createdAt !== plan.createdAt ||
           lease.heartbeatAt !== plan.createdAt || lease.status !== "active") continue;
       if (candidate.operation.kind === "allocate" && (
         !candidate.operation.createBranch || candidate.operation.startPoint !== plan.baseSha ||
@@ -769,6 +843,7 @@ function verifyPreparedWorkspace(
   receipt: WorkspaceReceipt,
 ): string {
   const lease = preparedLease(workspacePlan);
+  const expectedHead = plan.adoptedHead ?? plan.baseSha;
   if (receipt.status !== "applied" || receipt.operation !== workspacePlan.operation.kind) {
     fail("DELIVERY_PREPARE_WORKSPACE_APPLY_FAILED");
   }
@@ -779,9 +854,9 @@ function verifyPreparedWorkspace(
   const observedLease = leases[0];
   const worktree = worktrees[0];
   if (observedLease.branch !== lease.branch || observedLease.path !== lease.path || observedLease.owner !== plan.owner ||
-      observedLease.thread !== plan.session || observedLease.acceptedCommit !== plan.baseSha ||
+      observedLease.thread !== plan.session || observedLease.acceptedCommit !== expectedHead ||
       observedLease.status !== "active" || worktree.branch !== lease.branch ||
-      worktree.head !== plan.baseSha || worktree.detached || worktree.bare || worktree.locked || worktree.prunable || worktree.dirty) {
+      worktree.head !== expectedHead || worktree.detached || worktree.bare || worktree.locked || worktree.prunable || worktree.dirty) {
     fail("DELIVERY_PREPARE_WORKSPACE_READBACK_FAILED");
   }
   return status.observedHash;
@@ -844,12 +919,14 @@ function reached(current: DeliveryPrepareJournal, phase: PreparePhase): boolean 
 }
 
 /** One confirmed, journaled Prepare event. It never substitutes Local-only for a configured GitHub project. */
-export async function prepareDelivery(options: DeliveryPrepareOptions): Promise<DeliveryPrepareReceipt> {
+async function prepareDeliveryTransaction(options: DeliveryPrepareOptions): Promise<DeliveryPrepareReceipt> {
   const plan = loadOrCreatePlan(options);
+  validateAdmission(plan, options.now);
   let current = currentJournal(plan.management.commonDir, plan.transactionId);
   if (current && (current.journal.outcome === "PreparedNotOpened" || current.journal.outcome === "CoordinationBackendRequired")) {
     return withMutationLock(plan, () => finalReceipt(plan, current!.journal, current!.event, true));
   }
+  validateAdoptedHead(plan);
   try {
     if (!current) {
       current = await withMutationLock(plan, () => appendJournal(plan, null, { phase: "planned" }, options.now ?? new Date()));
@@ -863,7 +940,7 @@ export async function prepareDelivery(options: DeliveryPrepareOptions): Promise<
           ? admitLocalWorkItem(plan)
           : admitGitHubWorkItem(plan, options.githubRequest);
       });
-      current = await withMutationLock(plan, () => appendJournal(plan, current!.journal, {
+      current = await withMutationLock(plan, () => appendJournal(plan, current!, {
         phase: "work-item-admitted",
         state: "Admitted",
         workItem,
@@ -873,7 +950,7 @@ export async function prepareDelivery(options: DeliveryPrepareOptions): Promise<
     }
 
     if (plan.mode === "github") {
-      current = await withMutationLock(plan, () => appendJournal(plan, current!.journal, {
+      current = await withMutationLock(plan, () => appendJournal(plan, current!, {
         state: "Admitted",
         outcome: "CoordinationBackendRequired",
         blocked: true,
@@ -925,13 +1002,13 @@ export async function prepareDelivery(options: DeliveryPrepareOptions): Promise<
         fail("DELIVERY_PREPARE_EXISTING_ASSET_REQUIRES_ADOPTION");
       }
       const lease = preparedLease(planned.plan);
-      if (lease.acceptedCommit !== plan.baseSha) {
+      if (lease.acceptedCommit !== (plan.adoptedHead ?? plan.baseSha)) {
         cleanupWorkspacePlan(plan, planned.plan, planned.path);
         fail("DELIVERY_PREPARE_ADOPTION_HEAD_MISMATCH");
       }
       workspacePlan = planned.plan;
       const workspacePlanReference = archiveWorkspacePlan(plan, workspacePlan, planned.path);
-      current = await withMutationLock(plan, () => appendJournal(plan, current!.journal, {
+      current = await withMutationLock(plan, () => appendJournal(plan, current!, {
         workspacePlan: workspacePlanReference,
         branch: lease.branch,
         path: lease.path,
@@ -948,7 +1025,7 @@ export async function prepareDelivery(options: DeliveryPrepareOptions): Promise<
       now: options.now,
     });
     if (!reached(current.journal, "claim-acquired")) {
-      current = await withMutationLock(plan, () => appendJournal(plan, current!.journal, {
+      current = await withMutationLock(plan, () => appendJournal(plan, current!, {
         phase: "claim-acquired",
         workspaceReceiptId: workspaceReceipt.id,
         error: null,
@@ -963,7 +1040,7 @@ export async function prepareDelivery(options: DeliveryPrepareOptions): Promise<
       workspaceReceipt,
     );
     if (!reached(current.journal, "workspace-established")) {
-      current = await withMutationLock(plan, () => appendJournal(plan, current!.journal, {
+      current = await withMutationLock(plan, () => appendJournal(plan, current!, {
         phase: "workspace-established",
         branch: lease.branch,
         path: lease.path,
@@ -974,7 +1051,7 @@ export async function prepareDelivery(options: DeliveryPrepareOptions): Promise<
     }
 
     if (!reached(current.journal, "binding-seeded")) {
-      current = await withMutationLock(plan, () => appendJournal(plan, current!.journal, {
+      current = await withMutationLock(plan, () => appendJournal(plan, current!, {
         phase: "binding-seeded",
         error: null,
       }, options.now ?? new Date()));
@@ -983,7 +1060,7 @@ export async function prepareDelivery(options: DeliveryPrepareOptions): Promise<
 
     cleanupWorkspacePlan(plan, workspacePlan, current.journal.workspacePlan!.path);
     assertManagementUnchanged(plan);
-    current = await withMutationLock(plan, () => appendJournal(plan, current!.journal, {
+    current = await withMutationLock(plan, () => appendJournal(plan, current!, {
       phase: "prepared",
       state: "Prepared",
       outcome: "PreparedNotOpened",
@@ -998,7 +1075,7 @@ export async function prepareDelivery(options: DeliveryPrepareOptions): Promise<
     try {
       const latest = currentJournal(plan.management.commonDir, plan.transactionId);
       if (latest && latest.journal.outcome !== "PreparedNotOpened" && latest.journal.outcome !== "CoordinationBackendRequired") {
-        await withMutationLock(plan, () => appendJournal(plan, latest.journal, {
+        await withMutationLock(plan, () => appendJournal(plan, latest, {
           outcome: "RecoveryRequired",
           blocked: true,
           error: message.slice(0, 2_000),
@@ -1008,5 +1085,31 @@ export async function prepareDelivery(options: DeliveryPrepareOptions): Promise<
       // Preserve the original failure; receipt/lock corruption must be repaired through the recovery plane.
     }
     throw new Error(`DELIVERY_PREPARE_RECOVERY_REQUIRED: ${plan.transactionId}: ${message}`);
+  }
+}
+
+const activePrepareTransactions = new Map<string, Promise<DeliveryPrepareReceipt>>();
+
+export async function prepareDelivery(options: DeliveryPrepareOptions): Promise<DeliveryPrepareReceipt> {
+  const context = resolveRepositoryContext(options.projectRoot);
+  const key = `${context.commonDir}\0${transactionId(options.session)}`;
+  const active = activePrepareTransactions.get(key);
+  if (active) {
+    const winner = await active;
+    const plan = loadOrCreatePlan(options);
+    validateAdmission(plan, options.now);
+    const current = currentJournal(plan.management.commonDir, plan.transactionId);
+    if (!current || current.event.eventHash !== winner.receiptEventHash || current.journal.planHash !== winner.planHash ||
+        !["PreparedNotOpened", "CoordinationBackendRequired"].includes(current.journal.outcome)) {
+      fail("DELIVERY_PREPARE_SINGLE_FLIGHT_READBACK_FAILED");
+    }
+    return deliveryPrepareReceiptSchema.parse({ ...winner, reused: true });
+  }
+  const flight = prepareDeliveryTransaction(options);
+  activePrepareTransactions.set(key, flight);
+  try {
+    return await flight;
+  } finally {
+    if (activePrepareTransactions.get(key) === flight) activePrepareTransactions.delete(key);
   }
 }
