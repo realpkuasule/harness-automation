@@ -1,5 +1,3 @@
-import { readTransactionReceipts, type TransactionReceipt } from "../transaction/service.js";
-
 export const SAFE_MODE_COMMANDS = ["doctor", "audit", "plan", "receipt", "lkg", "recovery-plan", "recovery-verify"] as const;
 export type SafeModeCommand = typeof SAFE_MODE_COMMANDS[number];
 
@@ -9,14 +7,6 @@ export function safeModeAllows(command: string): command is SafeModeCommand {
 
 export function requireSafeModeCommand(command: string): void {
   if (!safeModeAllows(command)) throw new Error("SAFE_MODE_MUTATION_REJECTED");
-}
-
-export function loadLastKnownGood(commonDir: string): TransactionReceipt | null {
-  let last: TransactionReceipt | null = null;
-  for (const receipt of readTransactionReceipts(commonDir)) {
-    if (receipt.status === "applied") last = receipt;
-  }
-  return last;
 }
 
 export interface RecoveryApproval {
@@ -36,15 +26,22 @@ export function recoveryExecutionAllowed(approval: RecoveryApproval | undefined,
   }
 }
 
-/** Shared mutation boundary for v2, worktree, and transaction Apply paths. */
-export function requireMutationAllowed(args: {
-  safeMode?: boolean;
-  recoveryApproval?: RecoveryApproval;
-  recoveryPlanHash?: string;
-  recoveryPacketHash?: string;
-}): void {
-  if (args.safeMode) requireSafeModeCommand("apply");
-  if (args.recoveryApproval || args.recoveryPlanHash || args.recoveryPacketHash) {
-    recoveryExecutionAllowed(args.recoveryApproval, args.recoveryPlanHash ?? "", args.recoveryPacketHash ?? "");
+/** Shared mutation boundary for existing domain-plan Apply paths. */
+export function inspectRecoveryState(context: { projectDir: string; commonDir: string }): void {
+  const receipts = safePath(context.commonDir, "harness/worktree-delivery/receipts");
+  if (!existsSync(receipts)) return;
+  for (const name of readdirSync(receipts).filter((entry) => entry.endsWith(".json"))) {
+    const receipt = readJson<{ status?: string; id?: string }>(join(receipts, name));
+    if (receipt.status === "started" || receipt.status === "failed") {
+      throw new Error(`RECOVERY_REQUIRED: ${receipt.id ?? name}`);
+    }
   }
 }
+
+/** Every public mutation derives safe mode from durable journals; callers cannot disable it. */
+export function requireMutationAllowed(context: { projectDir: string; commonDir: string }): void {
+  inspectRecoveryState(context);
+}
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { readJson, safePath } from "../v2/fs.js";

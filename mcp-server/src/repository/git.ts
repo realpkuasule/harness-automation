@@ -1,4 +1,20 @@
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
+
+export interface RepositoryContext {
+  projectDir: string;
+  commonDir: string;
+}
+
+/** Canonical repository identity for every mutation entrypoint. */
+export function resolveRepositoryContext(projectRoot: string): RepositoryContext {
+  const requested = realpathSync.native(resolve(projectRoot));
+  const projectDir = runGit(requested, ["rev-parse", "--show-toplevel"]).trim();
+  const commonDir = runGit(projectDir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim();
+  if (!isAbsolute(projectDir) || !isAbsolute(commonDir)) throw new Error("REPOSITORY_CONTEXT_INVALID");
+  return { projectDir: realpathSync.native(projectDir), commonDir: realpathSync.native(commonDir) };
+}
 
 export interface GitCommandResult {
   status: number | null;

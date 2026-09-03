@@ -73,9 +73,9 @@ import {
   validWorktreeHostBinding as validHostBinding,
   worktreeHostBindingFile as hostBindingFile,
 } from "./config.js";
-import { runGit, runGitCommand, runGitToFile } from "../repository/git.js";
+import { resolveRepositoryContext, runGit, runGitCommand, runGitToFile } from "../repository/git.js";
 import { createSemanticApprovalPacket, reviewSemanticApprovalWithHistory, type ApprovalActionKind } from "../approval/service.js";
-import { requireMutationAllowed, type RecoveryApproval } from "../recovery/service.js";
+import { requireMutationAllowed } from "../recovery/service.js";
 export { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
 import { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
 
@@ -128,10 +128,7 @@ function gitDirtyPatch(cwd: string, args: string[], allowFailure = false): {
 }
 
 function repositoryRoot(projectRoot: string): string {
-  const requested = resolve(projectRoot);
-  const root = git(requested, ["rev-parse", "--show-toplevel"]).trim();
-  if (!isAbsolute(root)) throw new Error(`GIT_ROOT_INVALID: ${root}`);
-  return canonicalPath(root);
+  return resolveRepositoryContext(projectRoot).projectDir;
 }
 
 function canonicalPath(path: string): string {
@@ -210,13 +207,7 @@ function containerTopology(
 }
 
 function gitCommonDir(root: string): string {
-  const commonDir = git(root, [
-    "rev-parse",
-    "--path-format=absolute",
-    "--git-common-dir",
-  ]).trim();
-  if (!isAbsolute(commonDir)) throw new Error(`GIT_COMMON_DIR_INVALID: ${commonDir}`);
-  return canonicalPath(commonDir);
+  return resolveRepositoryContext(root).commonDir;
 }
 
 const adoptionInputSchema = z.object({
@@ -3463,21 +3454,13 @@ export function applyWorkspacePlan(args: {
   projectRoot: string;
   planPath: string;
   approval: string;
-  safeMode?: boolean;
-  recoveryApproval?: RecoveryApproval;
-  recoveryPacketHash?: string;
   authorization?: WorkspaceAiDecision;
   now?: Date;
   testFailAfterLeaseWrites?: number;
   testFailCloseAfterWorktreeRemove?: boolean;
   testFailRemoteDeleteAfterPush?: boolean;
 }): WorkspaceReceipt {
-  requireMutationAllowed({
-    safeMode: args.safeMode,
-    recoveryApproval: args.recoveryApproval,
-    recoveryPlanHash: args.recoveryApproval ? args.approval : undefined,
-    recoveryPacketHash: args.recoveryPacketHash,
-  });
+  requireMutationAllowed(resolveRepositoryContext(args.projectRoot));
   const root = repositoryRoot(args.projectRoot);
   const plan = loadWorkspacePlan(root, args.planPath);
   validateWorkspacePlanEnvelope(root, gitCommonDir(root), plan, plan.planHash);

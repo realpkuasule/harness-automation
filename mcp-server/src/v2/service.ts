@@ -15,7 +15,8 @@ import {
   sha256,
   withoutHash,
 } from "./fs.js";
-import { requireMutationAllowed, type RecoveryApproval } from "../recovery/service.js";
+import { requireMutationAllowed } from "../recovery/service.js";
+import { resolveRepositoryContext } from "../repository/git.js";
 import {
   GO_NAMING_CHECKER,
   PYTHON_NAMING_CHECKER,
@@ -1107,7 +1108,7 @@ export function planProjectUpdate(args: {
   now?: Date;
 }): ProjectUpdatePlanResult {
   if (!isAbsolute(args.projectRoot)) throw new Error("UPDATE_PROJECT_ABSOLUTE_REQUIRED: --project must be an absolute path");
-  const root = resolve(args.projectRoot);
+  const root = resolveRepositoryContext(args.projectRoot).projectDir;
   const policyPath = harnessPath(root, "policy.yaml");
   const manifestPath = harnessPath(root, "manifest.json");
   const intakePath = harnessPath(root, "intake.json");
@@ -1381,18 +1382,11 @@ export function applyPlan(args: {
   projectRoot: string;
   planPath: string;
   approval: string;
-  safeMode?: boolean;
-  recoveryApproval?: RecoveryApproval;
-  recoveryPacketHash?: string;
   now?: Date;
 }): AppliedChange | WorkspaceReceipt {
-  requireMutationAllowed({
-    safeMode: args.safeMode,
-    recoveryApproval: args.recoveryApproval,
-    recoveryPlanHash: args.recoveryApproval ? args.approval : undefined,
-    recoveryPacketHash: args.recoveryPacketHash,
-  });
-  const root = resolve(args.projectRoot);
+  const context = resolveRepositoryContext(args.projectRoot);
+  requireMutationAllowed(context);
+  const root = context.projectDir;
   const candidate = readJson<{ kind?: string }>(safePath(root, args.planPath));
   if (candidate.kind === "workspace-plan") return applyWorkspacePlan(args);
   return applyFilePlan(args);
@@ -1404,7 +1398,7 @@ function applyFilePlan(args: {
   approval: string;
   now?: Date;
 }): AppliedChange {
-  const root = resolve(args.projectRoot);
+  const root = resolveRepositoryContext(args.projectRoot).projectDir;
   const plan = readJson<ChangePlan>(safePath(root, args.planPath));
   validatePlan(root, plan, args.approval);
   const changeFile = harnessPath(root, `changes/${plan.id}/change.json`);
