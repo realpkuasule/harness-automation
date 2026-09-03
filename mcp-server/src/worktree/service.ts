@@ -3375,7 +3375,8 @@ export function applyWorkspaceMigration(args: {
   const checkpoint = (): void => writeReceipt(moved ? targetReceiptPath : sourceReceiptPath, receipt);
   try {
     requireMutationAllowed(resolveRepositoryContext(root), existing ? {
-      kind: "workspace", id: plan.id, approvalRef: args.recoveryApprovalRef, now: args.now,
+      kind: "workspace", id: plan.id, action: "resume-apply",
+      approvalRef: args.recoveryApprovalRef, now: args.now,
     } : undefined);
     if (atSource) {
       before = workspaceStatus(root);
@@ -4060,7 +4061,8 @@ function rollbackWorkspaceAdoption(args: {
     const pending = inspectRecoveryState(context).some((finding) =>
       finding.kind === "workspace" && finding.id === args.plan.id);
     requireMutationAllowed(context, pending ? {
-      kind: "workspace", id: args.plan.id, approvalRef: args.recoveryApprovalRef, now: args.now,
+      kind: "workspace", id: args.plan.id, action: "resume-rollback",
+      approvalRef: args.recoveryApprovalRef, now: args.now,
     } : undefined);
     const receipt = readJson<WorkspaceReceipt>(args.receiptPath);
     validateAdoptionReceipt(receipt, args.plan);
@@ -4212,7 +4214,8 @@ export function rollbackWorkspaceChange(args: {
     const pending = inspectRecoveryState(context).some((finding) =>
       finding.kind === "workspace" && finding.id === args.changeId);
     requireMutationAllowed(context, pending ? {
-      kind: "workspace", id: args.changeId, approvalRef: args.recoveryApprovalRef, now: args.now,
+      kind: "workspace", id: args.changeId, action: "resume-rollback",
+      approvalRef: args.recoveryApprovalRef, now: args.now,
     } : undefined);
     receipt = readJson<WorkspaceReceipt>(path);
     if (receipt.status === "rolled-back") return receipt;

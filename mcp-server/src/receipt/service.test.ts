@@ -46,13 +46,17 @@ describe("append-only receipt events", () => {
     const base = root();
     const first = appendReceiptEvent({ root: base, domain: "workspace", transactionId: "change-1", snapshot: { status: "started" } });
     const duplicate = appendReceiptEvent({ root: base, domain: "workspace", transactionId: "change-1", snapshot: { status: "started" } });
-    const second = appendReceiptEvent({ root: base, domain: "workspace", transactionId: "change-1", snapshot: { status: "applied" } });
+    const second = appendReceiptEvent({ root: base, domain: "workspace", transactionId: "change-1", snapshot: { status: "failed" } });
+    const reentered = appendReceiptEvent({ root: base, domain: "workspace", transactionId: "change-1", snapshot: { status: "started" } });
+    const reenteredDuplicate = appendReceiptEvent({ root: base, domain: "workspace", transactionId: "change-1", snapshot: { status: "started" } });
 
     expect(duplicate).toEqual(first);
     expect(second.sequence).toBe(2);
     expect(second.previousEventHash).toBe(first.eventHash);
-    expect(readLatestReceiptEvent({ root: base, domain: "workspace", transactionId: "change-1" })?.eventHash).toBe(second.eventHash);
-    expect(readReceiptChain({ root: base, domain: "workspace", transactionId: "change-1" })).toHaveLength(2);
+    expect(reentered.sequence).toBe(3);
+    expect(reenteredDuplicate).toEqual(reentered);
+    expect(readLatestReceiptEvent({ root: base, domain: "workspace", transactionId: "change-1" })?.eventHash).toBe(reentered.eventHash);
+    expect(readReceiptChain({ root: base, domain: "workspace", transactionId: "change-1" })).toHaveLength(3);
   });
 
   it("anchors a legacy projection, accepts only exact lag, and repairs lag or absence", () => {

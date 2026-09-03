@@ -56,16 +56,21 @@ describe("recovery safe mode", () => {
     writeJournal(ctx.projectDir, "change-one");
     expect(() => requireSafeModeCommand("apply")).toThrow("SAFE_MODE_MUTATION_REJECTED");
     expect(() => requireMutationAllowed(ctx)).toThrow("RECOVERY_REQUIRED");
-    expect(() => requireMutationAllowed(ctx, { kind: "file-apply", id: "change-one" }))
+    expect(() => requireMutationAllowed(ctx, { kind: "file-apply", id: "change-one", action: "resume-apply" }))
       .toThrow("RECOVERY_HUMAN_APPROVAL_REQUIRED");
 
     const approval = approve(ctx, "change-one");
+    expect(approval).toMatchObject({
+      schemaVersion: "recovery-approval/2.0",
+      action: "resume-apply",
+      evidenceHash: inspectRecoveryState(ctx)[0].evidenceHash,
+    });
     expect(() => requireMutationAllowed(ctx, {
-      kind: "file-apply", id: "change-one", approvalRef: approval.id,
+      kind: "file-apply", id: "change-one", action: "resume-apply", approvalRef: approval.id,
       now: new Date("2026-01-01T00:00:30.000Z"),
     })).not.toThrow();
     expect(() => requireMutationAllowed(ctx, {
-      kind: "file-apply", id: "change-one", approvalRef: approval.id,
+      kind: "file-apply", id: "change-one", action: "resume-apply", approvalRef: approval.id,
       now: new Date("2026-01-01T00:02:00.000Z"),
     })).toThrow("RECOVERY_HUMAN_APPROVAL_REQUIRED");
   });
@@ -77,11 +82,29 @@ describe("recovery safe mode", () => {
     const approval = approve(ctx, "change-one");
     expect(inspectRecoveryState(ctx)).toHaveLength(2);
     expect(() => requireMutationAllowed(ctx, {
-      kind: "file-apply", id: "change-one", approvalRef: approval.id,
+      kind: "file-apply", id: "change-one", action: "resume-apply", approvalRef: approval.id,
       now: new Date("2026-01-01T00:00:30.000Z"),
     })).not.toThrow();
     expect(() => requireMutationAllowed(ctx, {
-      kind: "file-apply", id: "change-two", approvalRef: approval.id,
+      kind: "file-apply", id: "change-two", action: "resume-apply", approvalRef: approval.id,
+      now: new Date("2026-01-01T00:00:30.000Z"),
+    })).toThrow("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+  });
+
+  it("invalidates approval when current recovery evidence changes", () => {
+    const ctx = context();
+    const journal = writeJournal(ctx.projectDir, "change-one");
+    const approval = approve(ctx, "change-one");
+    const changed = createFileApplyJournal({
+      recoveryId: journal.recoveryId,
+      planHash: journal.planHash,
+      operations: journal.operations,
+      status: "failed-uncompensated",
+      written: journal.written,
+    });
+    atomicWrite(join(ctx.projectDir, ".harness", "changes", "change-one", "apply.json"), prettyJson(changed));
+    expect(() => requireMutationAllowed(ctx, {
+      kind: "file-apply", id: "change-one", action: "resume-apply", approvalRef: approval.id,
       now: new Date("2026-01-01T00:00:30.000Z"),
     })).toThrow("RECOVERY_HUMAN_APPROVAL_REQUIRED");
   });

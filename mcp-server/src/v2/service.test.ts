@@ -22,6 +22,7 @@ import { planWorkspaceConfiguration } from "../worktree/service.js";
 import { createRecoveryApproval, inspectRecoveryState, recordRecoveryApproval } from "../recovery/service.js";
 import { resolveProjectContext } from "../repository/git.js";
 import { fileHash, hashObject, sha256 } from "./fs.js";
+import { readLatestLkgRecord, readReceiptChain } from "../receipt/service.js";
 import { PYTHON_NAMING_CHECKER } from "./policy.js";
 
 const roots: string[] = [];
@@ -736,6 +737,62 @@ describe("v2 plan/apply/check/rollback", () => {
     expect(inspectRecoveryState(resolveProjectContext(root))).toEqual([]);
     expect(applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash }))
       .toMatchObject({ id: planned.plan.id, planHash: planned.plan.planHash });
+  });
+
+  it("resumes an interrupted rollback only with evidence-bound approval and keeps immutable receipts", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    write(root, "AGENTS.md", "original instructions\n");
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    const planned = planProject({ projectRoot: root });
+    const change = applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+
+    expect(() => rollbackChange({ projectRoot: root, changeId: change.id, testInterruptAfterRestores: 1 }))
+      .toThrow("TEST_FILE_ROLLBACK_INTERRUPT");
+    expect(() => rollbackChange({ projectRoot: root, changeId: change.id }))
+      .toThrow("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+    const recoveryContext = resolveProjectContext(root);
+    const finding = inspectRecoveryState(recoveryContext).find((item) => item.kind === "file-rollback")!;
+    expect(finding).toMatchObject({ id: change.id, action: "resume-rollback" });
+    const approval = createRecoveryApproval({
+      context: recoveryContext,
+      finding,
+      approvedBy: "owner",
+      approvedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:01:00.000Z",
+    });
+    recordRecoveryApproval(recoveryContext, approval);
+    expect(rollbackChange({
+      projectRoot: root,
+      changeId: change.id,
+      recoveryApprovalRef: approval.id,
+      now: new Date("2099-01-01T00:00:30.000Z"),
+    })).toMatchObject({ id: change.id, status: "rolled-back" });
+    expect(inspectRecoveryState(recoveryContext)).toEqual([]);
+    expect(readReceiptChain({ root, stateDirectory: ".harness", domain: "file-apply", transactionId: change.id })).toHaveLength(1);
+    expect(readReceiptChain({ root, stateDirectory: ".harness", domain: "file-rollback", transactionId: change.id })).toHaveLength(1);
+    expect(readLatestLkgRecord({ root, stateDirectory: ".harness", domain: "file-rollback" }))
+      .toMatchObject({ transactionId: change.id, planHash: planned.plan.planHash });
+  });
+
+  it("does not overwrite post-apply drift during rollback and detects receipt projection tampering", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    const planned = planProject({ projectRoot: root });
+    const change = applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+    write(root, "AGENTS.md", "user edit after apply\n");
+    expect(() => rollbackChange({ projectRoot: root, changeId: change.id })).toThrow("ROLLBACK_DRIFT: AGENTS.md");
+    expect(readFileSync(join(root, "AGENTS.md"), "utf8")).toBe("user edit after apply\n");
+
+    const changePath = join(root, ".harness", "changes", change.id, "change.json");
+    const tampered = JSON.parse(readFileSync(changePath, "utf8"));
+    tampered.appliedAt = "2099-01-01T00:00:00.000Z";
+    write(root, ".harness/changes/" + change.id + "/change.json", `${JSON.stringify(tampered, null, 2)}\n`);
+    expect(() => applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash }))
+      .toThrow("RECEIPT_PROJECTION_DIVERGED");
   });
 
   it("rejects stale source and target preconditions", () => {

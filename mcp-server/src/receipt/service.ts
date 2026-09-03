@@ -30,6 +30,7 @@ export interface LkgRecord {
 
 export interface ReceiptKey {
   root: string;
+  stateDirectory?: "harness" | ".harness";
   domain: string;
   transactionId: string;
 }
@@ -85,12 +86,12 @@ function sequenceName(sequence: number): string {
 function receiptDirectory(key: ReceiptKey): string {
   assertIdentifier(key.domain, "RECEIPT_DOMAIN");
   assertIdentifier(key.transactionId, "RECEIPT_TRANSACTION_ID");
-  return safePath(key.root, `harness/receipts/${key.domain}/${key.transactionId}/events`);
+  return safePath(key.root, `${key.stateDirectory ?? "harness"}/receipts/${key.domain}/${key.transactionId}/events`);
 }
 
-function lkgDirectory(root: string, domain: string): string {
-  assertIdentifier(domain, "RECEIPT_DOMAIN");
-  return safePath(root, `harness/lkg/${domain}/records`);
+function lkgDirectory(args: Pick<ReceiptKey, "root" | "stateDirectory" | "domain">): string {
+  assertIdentifier(args.domain, "RECEIPT_DOMAIN");
+  return safePath(args.root, `${args.stateDirectory ?? "harness"}/lkg/${args.domain}/records`);
 }
 
 function readSequence<T>(directory: string, code: string, parse: (value: unknown, sequence: number) => T): T[] {
@@ -169,7 +170,7 @@ function createReceiptEvent<T>(key: ReceiptKey, chain: ReceiptEvent<T>[], snapsh
 }
 
 function appendSnapshot<T>(key: ReceiptKey, chain: ReceiptEvent<T>[], snapshot: T): ReceiptEvent<T>[] {
-  if (chain.some((event) => sameSnapshot(event.snapshot, snapshot))) return chain;
+  if (chain.length > 0 && sameSnapshot(chain.at(-1)?.snapshot, snapshot)) return chain;
   const event = createReceiptEvent(key, chain, snapshot);
   try {
     durableWriteOnce(safePath(receiptDirectory(key), sequenceName(event.sequence)), prettyJson(event));
@@ -177,7 +178,7 @@ function appendSnapshot<T>(key: ReceiptKey, chain: ReceiptEvent<T>[], snapshot: 
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     const refreshed = readReceiptChain<T>(key);
-    if (refreshed.some((candidate) => sameSnapshot(candidate.snapshot, snapshot))) return refreshed;
+    if (refreshed.length > 0 && sameSnapshot(refreshed.at(-1)?.snapshot, snapshot)) return refreshed;
     fail("RECEIPT_CHAIN_CONFLICT");
   }
 }
@@ -240,20 +241,25 @@ function parseLkgRecord(value: unknown, domain: string, sequence: number): LkgRe
   return item;
 }
 
-export function readLkgChain(args: { root: string; domain: string }): LkgRecord[] {
-  const chain = readSequence(lkgDirectory(args.root, args.domain), "LKG_CHAIN_TAMPERED", (value, sequence) =>
+export function readLkgChain(args: Pick<ReceiptKey, "root" | "stateDirectory" | "domain">): LkgRecord[] {
+  const chain = readSequence(lkgDirectory(args), "LKG_CHAIN_TAMPERED", (value, sequence) =>
     parseLkgRecord(value, args.domain, sequence));
   for (let index = 1; index < chain.length; index += 1) {
     if (chain[index].previousRecordHash !== chain[index - 1].recordHash) fail("LKG_CHAIN_TAMPERED");
   }
   for (const item of chain) {
-    if (!readReceiptChain({ root: args.root, domain: args.domain, transactionId: item.transactionId })
+    if (!readReceiptChain({
+      root: args.root,
+      stateDirectory: args.stateDirectory,
+      domain: args.domain,
+      transactionId: item.transactionId,
+    })
       .some((event) => event.eventHash === item.receiptEventHash)) fail("LKG_CHAIN_TAMPERED");
   }
   return chain;
 }
 
-export function readLatestLkgRecord(args: { root: string; domain: string }): LkgRecord | null {
+export function readLatestLkgRecord(args: Pick<ReceiptKey, "root" | "stateDirectory" | "domain">): LkgRecord | null {
   return readLkgChain(args).at(-1) ?? null;
 }
 
@@ -291,7 +297,7 @@ export function appendLkgRecord(args: ReceiptKey & {
   };
   item.recordHash = hashObject(lkgWithoutHash(item));
   try {
-    durableWriteOnce(safePath(lkgDirectory(args.root, args.domain), sequenceName(item.sequence)), prettyJson(item));
+    durableWriteOnce(safePath(lkgDirectory(args), sequenceName(item.sequence)), prettyJson(item));
     return item;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;

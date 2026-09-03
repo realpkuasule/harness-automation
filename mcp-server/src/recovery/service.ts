@@ -8,6 +8,7 @@ import {
   readJson,
   safePath,
 } from "../v2/fs.js";
+import { readLatestReceiptEvent } from "../receipt/service.js";
 
 export const SAFE_MODE_COMMANDS = ["doctor", "audit", "plan", "receipt", "lkg", "recovery-plan", "recovery-verify"] as const;
 export type SafeModeCommand = typeof SAFE_MODE_COMMANDS[number];
@@ -19,13 +20,15 @@ export interface RecoveryContext {
 }
 
 export interface RecoveryApproval {
-  schemaVersion: "recovery-approval/1.0";
+  schemaVersion: "recovery-approval/2.0";
   kind: "semantic-human-approval";
   id: string;
-  targetKind: "file-apply" | "workspace";
+  targetKind: "file-apply" | "file-rollback" | "workspace";
   targetId: string;
   planHash: string;
+  action: RecoveryAction;
   packetHash: string;
+  evidenceHash: string;
   contextDigest: string;
   approvedBy: string;
   approvedAt: string;
@@ -50,13 +53,28 @@ export interface FileApplyJournal {
   journalHash: string;
 }
 
+export interface FileRollbackJournal {
+  schemaVersion: "file-rollback-journal/1.0";
+  kind: "file-rollback-journal";
+  recoveryId: string;
+  planHash: string;
+  appliedReceiptEventHash: string;
+  operations: FileApplyOperation[];
+  status: "started";
+  restored: string[];
+  journalHash: string;
+}
+
 export interface RecoveryFinding {
-  kind: "file-apply" | "workspace" | "invalid";
+  kind: "file-apply" | "file-rollback" | "workspace" | "invalid";
   id: string;
   planHash?: string;
+  action: RecoveryAction;
   packetHash: string;
   evidenceHash: string;
 }
+
+export type RecoveryAction = "resume-apply" | "resume-rollback" | "quarantine-invalid-evidence";
 
 export function safeModeAllows(command: string): command is SafeModeCommand {
   return (SAFE_MODE_COMMANDS as readonly string[]).includes(command);
@@ -104,11 +122,30 @@ function withoutJournalHash(journal: FileApplyJournal): Omit<FileApplyJournal, "
   return copy as Omit<FileApplyJournal, "journalHash">;
 }
 
+function withoutRollbackJournalHash(journal: FileRollbackJournal): Omit<FileRollbackJournal, "journalHash"> {
+  const copy: Partial<FileRollbackJournal> = { ...journal };
+  delete copy.journalHash;
+  return copy as Omit<FileRollbackJournal, "journalHash">;
+}
+
 export function createFileApplyJournal(input: Omit<FileApplyJournal, "schemaVersion" | "kind" | "journalHash">): FileApplyJournal {
   const journal: FileApplyJournal = {
     schemaVersion: "file-apply-journal/1.0", kind: "file-apply-journal", ...input, journalHash: "",
   };
   journal.journalHash = hashObject(withoutJournalHash(journal));
+  return journal;
+}
+
+export function createFileRollbackJournal(
+  input: Omit<FileRollbackJournal, "schemaVersion" | "kind" | "journalHash">,
+): FileRollbackJournal {
+  const journal: FileRollbackJournal = {
+    schemaVersion: "file-rollback-journal/1.0",
+    kind: "file-rollback-journal",
+    ...input,
+    journalHash: "",
+  };
+  journal.journalHash = hashObject(withoutRollbackJournalHash(journal));
   return journal;
 }
 
@@ -140,6 +177,23 @@ export function validateFileApplyJournal(journal: FileApplyJournal): void {
   }
 }
 
+export function validateFileRollbackJournal(journal: FileRollbackJournal): void {
+  if (!journal || typeof journal !== "object" ||
+      journal.schemaVersion !== "file-rollback-journal/1.0" || journal.kind !== "file-rollback-journal" ||
+      !/^[a-f0-9-]{36}$/u.test(journal.recoveryId) || !validDigest(journal.planHash) ||
+      !validDigest(journal.appliedReceiptEventHash) || !Array.isArray(journal.operations) ||
+      journal.operations.length === 0 || journal.status !== "started" || !Array.isArray(journal.restored) ||
+      new Set(journal.operations.map((operation) => operation.path)).size !== journal.operations.length ||
+      journal.operations.some((operation) => !operation || !validRelativePath(operation.path) ||
+        !validDigest(operation.beforeHash, true) || !validDigest(operation.afterHash)) ||
+      new Set(journal.restored).size !== journal.restored.length ||
+      journal.restored.some((path) => !validRelativePath(path) ||
+        !journal.operations.some((operation) => operation.path === path)) ||
+      journal.journalHash !== hashObject(withoutRollbackJournalHash(journal))) {
+    throw new Error("RECOVERY_ROLLBACK_JOURNAL_INVALID");
+  }
+}
+
 export function fileApplyRecoveryPacketHash(journal: FileApplyJournal, context: RecoveryContext): string {
   validateFileApplyJournal(journal);
   return hashObject({
@@ -147,6 +201,22 @@ export function fileApplyRecoveryPacketHash(journal: FileApplyJournal, context: 
     recoveryId: journal.recoveryId,
     planHash: journal.planHash,
     operationsDigest: hashObject(journal.operations),
+    action: "resume-apply",
+    evidenceHash: journal.journalHash,
+    contextDigest: contextDigest(context),
+  });
+}
+
+function fileRollbackRecoveryPacketHash(journal: FileRollbackJournal, context: RecoveryContext): string {
+  validateFileRollbackJournal(journal);
+  return hashObject({
+    kind: "file-rollback-recovery/1.0",
+    recoveryId: journal.recoveryId,
+    planHash: journal.planHash,
+    appliedReceiptEventHash: journal.appliedReceiptEventHash,
+    operationsDigest: hashObject(journal.operations),
+    action: "resume-rollback",
+    evidenceHash: journal.journalHash,
     contextDigest: contextDigest(context),
   });
 }
@@ -168,7 +238,7 @@ export function createRecoveryApproval(args: {
     throw new Error("RECOVERY_APPROVAL_TARGET_INVALID");
   }
   const approval: RecoveryApproval = {
-    schemaVersion: "recovery-approval/1.0",
+    schemaVersion: "recovery-approval/2.0",
     kind: "semantic-human-approval",
     id: `recovery-${args.finding.packetHash.slice(0, 16)}-${hashObject({
       approvedBy: args.approvedBy,
@@ -178,7 +248,9 @@ export function createRecoveryApproval(args: {
     targetKind: args.finding.kind,
     targetId: args.finding.id,
     planHash: args.finding.planHash,
+    action: args.finding.action,
     packetHash: args.finding.packetHash,
+    evidenceHash: args.finding.evidenceHash,
     contextDigest: contextDigest(args.context),
     approvedBy: args.approvedBy,
     approvedAt: args.approvedAt,
@@ -197,11 +269,12 @@ export function recordRecoveryApproval(context: RecoveryContext, approval: Recov
 }
 
 function validateRecoveryApproval(context: RecoveryContext, approval: RecoveryApproval): void {
-  if (!approval || typeof approval !== "object" || approval.schemaVersion !== "recovery-approval/1.0" ||
+  if (!approval || typeof approval !== "object" || approval.schemaVersion !== "recovery-approval/2.0" ||
       approval.kind !== "semantic-human-approval" ||
       !/^recovery-[a-f0-9]{16}-[a-f0-9]{12}$/u.test(approval.id) ||
-      !["file-apply", "workspace"].includes(approval.targetKind) ||
-      !approval.targetId || !validDigest(approval.planHash) || !validDigest(approval.packetHash) ||
+      !["file-apply", "file-rollback", "workspace"].includes(approval.targetKind) ||
+      !approval.targetId || !["resume-apply", "resume-rollback"].includes(approval.action) ||
+      !validDigest(approval.planHash) || !validDigest(approval.packetHash) || !validDigest(approval.evidenceHash) ||
       approval.contextDigest !== contextDigest(context) || !approval.approvedBy ||
       !Number.isFinite(Date.parse(approval.approvedAt)) || !Number.isFinite(Date.parse(approval.expiresAt)) ||
       approval.approvalHash !== hashObject(withoutApprovalHash(approval))) {
@@ -227,7 +300,8 @@ export function recoveryExecutionAllowed(
   }
   if (finding.kind === "invalid" || !finding.planHash || approval.id !== approvalRef ||
       approval.targetKind !== finding.kind || approval.targetId !== finding.id ||
-      approval.planHash !== finding.planHash || approval.packetHash !== finding.packetHash ||
+      approval.planHash !== finding.planHash || approval.action !== finding.action ||
+      approval.packetHash !== finding.packetHash || approval.evidenceHash !== finding.evidenceHash ||
       Date.parse(approval.approvedAt) > now.getTime() || Date.parse(approval.expiresAt) <= now.getTime()) {
     throw new Error("RECOVERY_HUMAN_APPROVAL_REQUIRED");
   }
@@ -242,6 +316,51 @@ function completedFileChange(projectDir: string, changeDir: string, journal: Fil
     return change.planHash === journal.planHash && Array.isArray(change.operations) &&
       hashObject(change.operations.map(({ path: itemPath, beforeHash, afterHash }) => ({ path: itemPath, beforeHash, afterHash }))) === hashObject(journal.operations) &&
       journal.operations.every((item) => fileHash(safePath(projectDir, item.path)) === item.afterHash);
+  } catch {
+    return false;
+  }
+}
+
+interface FileRollbackReceiptSnapshot {
+  schemaVersion: "file-rollback/1.0";
+  kind: "file-rollback-receipt";
+  id: string;
+  planHash: string;
+  appliedReceiptEventHash: string;
+  status: "rolled-back";
+  restored: string[];
+  rolledBackAt: string;
+  observedHash: string;
+}
+
+function completedFileRollback(
+  context: RecoveryContext,
+  id: string,
+  journal: FileRollbackJournal,
+): boolean {
+  try {
+    const marker = safePath(context.projectDir, `.harness/changes/${id}/rolled-back.json`);
+    const compatibilitySnapshot = existsSync(marker) ? readJson<unknown>(marker) : undefined;
+    const latest = readLatestReceiptEvent<FileRollbackReceiptSnapshot>({
+      root: context.repository ? context.commonDir : context.projectDir,
+      stateDirectory: context.repository ? "harness" : ".harness",
+      domain: "file-rollback",
+      transactionId: id,
+      ...(compatibilitySnapshot === undefined ? {} : { compatibilitySnapshot }),
+    });
+    const receipt = latest?.snapshot;
+    if (!receipt || receipt.schemaVersion !== "file-rollback/1.0" ||
+        receipt.kind !== "file-rollback-receipt" || receipt.id !== id ||
+        receipt.planHash !== journal.planHash || receipt.appliedReceiptEventHash !== journal.appliedReceiptEventHash ||
+        receipt.status !== "rolled-back" || !Array.isArray(receipt.restored) ||
+        !Number.isFinite(Date.parse(receipt.rolledBackAt)) || !validDigest(receipt.observedHash) ||
+        hashObject(receipt.restored) !== hashObject(journal.operations.map((item) => item.path))) return false;
+    const observedHash = hashObject(journal.operations.map((item) => ({
+      path: item.path,
+      sha256: fileHash(safePath(context.projectDir, item.path)),
+    })));
+    return observedHash === receipt.observedHash &&
+      journal.operations.every((item) => fileHash(safePath(context.projectDir, item.path)) === item.beforeHash);
   } catch {
     return false;
   }
@@ -298,13 +417,22 @@ function workspaceNeedsRecovery(receipt: WorkspaceRecoveryReceipt): boolean {
     receipt.compensationObservedHash !== receipt.beforeObservedHash;
 }
 
+function workspaceRecoveryAction(receipt: WorkspaceRecoveryReceipt): RecoveryAction {
+  return receipt.rollbackStatus === "started" || receipt.rollbackStatus === "failed"
+    ? "resume-rollback"
+    : "resume-apply";
+}
+
 function workspacePacketHash(context: RecoveryContext, receipt: WorkspaceRecoveryReceipt): string {
+  const evidenceHash = hashObject(receipt);
   return hashObject({
     kind: "workspace-recovery/1.0",
     id: receipt.id,
     planHash: receipt.planHash,
     operation: receipt.operation,
     beforeObservedHash: receipt.beforeObservedHash ?? receipt.before?.observedHash ?? null,
+    action: workspaceRecoveryAction(receipt),
+    evidenceHash,
     contextDigest: contextDigest(context),
   });
 }
@@ -318,7 +446,7 @@ export function inspectRecoveryState(context: RecoveryContext): RecoveryFinding[
       const receiptPath = safePath(receipts, name);
       const id = name.slice(0, -5);
       if (!/^worktree-[A-Za-z0-9._-]{1,200}$/u.test(id)) {
-        findings.push({ kind: "invalid", id: name, packetHash: hashObject({ kind: "invalid-workspace-receipt/1.0", name }), evidenceHash: hashObject(name) });
+        findings.push({ kind: "invalid", id: name, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-workspace-receipt/1.0", name }), evidenceHash: hashObject(name) });
         continue;
       }
       try {
@@ -329,12 +457,13 @@ export function inspectRecoveryState(context: RecoveryContext): RecoveryFinding[
             kind: "workspace",
             id,
             planHash: receipt.planHash,
+            action: workspaceRecoveryAction(receipt),
             packetHash: workspacePacketHash(context, receipt),
             evidenceHash: hashObject(receipt),
           });
         }
       } catch {
-        findings.push({ kind: "invalid", id, packetHash: hashObject({ kind: "invalid-workspace-receipt/1.0", id }), evidenceHash: fileHash(receiptPath) ?? hashObject(name) });
+        findings.push({ kind: "invalid", id, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-workspace-receipt/1.0", id }), evidenceHash: fileHash(receiptPath) ?? hashObject(name) });
       }
     }
   }
@@ -343,25 +472,47 @@ export function inspectRecoveryState(context: RecoveryContext): RecoveryFinding[
   if (!existsSync(changes)) return findings;
   for (const id of readdirSync(changes)) {
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(id)) {
-      findings.push({ kind: "invalid", id, packetHash: hashObject({ kind: "invalid-change-id/1.0", id }), evidenceHash: hashObject(id) });
+      findings.push({ kind: "invalid", id, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-change-id/1.0", id }), evidenceHash: hashObject(id) });
       continue;
     }
     const changeDir = safePath(changes, id);
     const journalPath = safePath(changeDir, "apply.json");
-    if (!existsSync(journalPath)) continue;
-    try {
-      const journal = readJson<FileApplyJournal>(journalPath);
-      validateFileApplyJournal(journal);
-      if (completedFileChange(context.projectDir, changeDir, journal) || journal.status === "failed-compensated") continue;
-      findings.push({
-        kind: "file-apply",
-        id,
-        planHash: journal.planHash,
-        packetHash: fileApplyRecoveryPacketHash(journal, context),
-        evidenceHash: journal.journalHash,
-      });
-    } catch {
-      findings.push({ kind: "invalid", id, packetHash: hashObject({ kind: "invalid-file-journal/1.0", id }), evidenceHash: fileHash(journalPath) ?? hashObject(id) });
+    if (existsSync(journalPath)) {
+      try {
+        const journal = readJson<FileApplyJournal>(journalPath);
+        validateFileApplyJournal(journal);
+        if (!completedFileChange(context.projectDir, changeDir, journal) && journal.status !== "failed-compensated") {
+          findings.push({
+            kind: "file-apply",
+            id,
+            planHash: journal.planHash,
+            action: "resume-apply",
+            packetHash: fileApplyRecoveryPacketHash(journal, context),
+            evidenceHash: journal.journalHash,
+          });
+        }
+      } catch {
+        findings.push({ kind: "invalid", id, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-file-journal/1.0", id }), evidenceHash: fileHash(journalPath) ?? hashObject(id) });
+      }
+    }
+    const rollbackPath = safePath(changeDir, "rollback.json");
+    if (existsSync(rollbackPath)) {
+      try {
+        const journal = readJson<FileRollbackJournal>(rollbackPath);
+        validateFileRollbackJournal(journal);
+        if (!completedFileRollback(context, id, journal)) {
+          findings.push({
+            kind: "file-rollback",
+            id,
+            planHash: journal.planHash,
+            action: "resume-rollback",
+            packetHash: fileRollbackRecoveryPacketHash(journal, context),
+            evidenceHash: journal.journalHash,
+          });
+        }
+      } catch {
+        findings.push({ kind: "invalid", id, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-rollback-journal/1.0", id }), evidenceHash: fileHash(rollbackPath) ?? hashObject(id) });
+      }
     }
   }
   return findings;
@@ -370,12 +521,13 @@ export function inspectRecoveryState(context: RecoveryContext): RecoveryFinding[
 /** Every transaction Apply derives safe mode from durable state under the repository mutation lock. */
 export function requireMutationAllowed(
   context: RecoveryContext,
-  recovery?: { kind: "file-apply" | "workspace"; id: string; approvalRef?: string; now?: Date },
+  recovery?: { kind: "file-apply" | "file-rollback" | "workspace"; id: string; action: Exclude<RecoveryAction, "quarantine-invalid-evidence">; approvalRef?: string; now?: Date },
 ): void {
   const findings = inspectRecoveryState(context);
   if (findings.length === 0) return;
   if (recovery) {
-    const targets = findings.filter((finding) => finding.kind === recovery.kind && finding.id === recovery.id);
+    const targets = findings.filter((finding) =>
+      finding.kind === recovery.kind && finding.id === recovery.id && finding.action === recovery.action);
     if (targets.length === 1) {
       recoveryExecutionAllowed(context, recovery.approvalRef, targets[0], recovery.now);
       return;
