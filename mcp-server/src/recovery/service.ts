@@ -1,5 +1,62 @@
+import { existsSync, mkdirSync, readdirSync, rmdirSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
+import {
+  durableWriteOnce,
+  fileHash,
+  hashObject,
+  prettyJson,
+  readJson,
+  safePath,
+} from "../v2/fs.js";
+
 export const SAFE_MODE_COMMANDS = ["doctor", "audit", "plan", "receipt", "lkg", "recovery-plan", "recovery-verify"] as const;
 export type SafeModeCommand = typeof SAFE_MODE_COMMANDS[number];
+
+export interface RecoveryContext {
+  projectDir: string;
+  commonDir: string;
+  repository?: boolean;
+}
+
+export interface RecoveryApproval {
+  schemaVersion: "recovery-approval/1.0";
+  kind: "semantic-human-approval";
+  id: string;
+  targetKind: "file-apply" | "workspace";
+  targetId: string;
+  planHash: string;
+  packetHash: string;
+  contextDigest: string;
+  approvedBy: string;
+  approvedAt: string;
+  expiresAt: string;
+  approvalHash: string;
+}
+
+export interface FileApplyOperation {
+  path: string;
+  beforeHash: string | null;
+  afterHash: string;
+}
+
+export interface FileApplyJournal {
+  schemaVersion: "file-apply-journal/1.0";
+  kind: "file-apply-journal";
+  recoveryId: string;
+  planHash: string;
+  operations: FileApplyOperation[];
+  status: "started" | "failed-compensated" | "failed-uncompensated";
+  written: string[];
+  journalHash: string;
+}
+
+export interface RecoveryFinding {
+  kind: "file-apply" | "workspace" | "invalid";
+  id: string;
+  planHash?: string;
+  packetHash: string;
+  evidenceHash: string;
+}
 
 export function safeModeAllows(command: string): command is SafeModeCommand {
   return (SAFE_MODE_COMMANDS as readonly string[]).includes(command);
@@ -9,49 +66,320 @@ export function requireSafeModeCommand(command: string): void {
   if (!safeModeAllows(command)) throw new Error("SAFE_MODE_MUTATION_REJECTED");
 }
 
-export interface RecoveryApproval {
-  kind: "semantic-human-approval/3.0";
-  planHash: string;
-  packetHash: string;
+function contextDigest(context: RecoveryContext): string {
+  return hashObject({ projectDir: context.projectDir, commonDir: context.commonDir });
+}
+
+function recoveryRoot(context: RecoveryContext): string {
+  return context.repository === false
+    ? safePath(context.projectDir, ".harness/recovery")
+    : safePath(context.commonDir, "harness/recovery");
+}
+
+/** This is the same lock path used by the worktree lifecycle. */
+export function acquireMutationLock(context: RecoveryContext): string {
+  const directory = context.repository === false
+    ? safePath(context.projectDir, ".harness/locks")
+    : safePath(context.commonDir, "harness/worktree-delivery");
+  mkdirSync(directory, { recursive: true });
+  const lock = join(directory, "apply.lock");
+  try {
+    mkdirSync(lock);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`WORKSPACE_LOCKED: ${lock}`);
+    }
+    throw error;
+  }
+  return lock;
+}
+
+export function releaseMutationLock(lock: string): void {
+  if (existsSync(lock)) rmdirSync(lock);
+}
+
+function withoutJournalHash(journal: FileApplyJournal): Omit<FileApplyJournal, "journalHash"> {
+  const copy: Partial<FileApplyJournal> = { ...journal };
+  delete copy.journalHash;
+  return copy as Omit<FileApplyJournal, "journalHash">;
+}
+
+export function createFileApplyJournal(input: Omit<FileApplyJournal, "schemaVersion" | "kind" | "journalHash">): FileApplyJournal {
+  const journal: FileApplyJournal = {
+    schemaVersion: "file-apply-journal/1.0", kind: "file-apply-journal", ...input, journalHash: "",
+  };
+  journal.journalHash = hashObject(withoutJournalHash(journal));
+  return journal;
+}
+
+function validDigest(value: unknown, nullable = false): boolean {
+  return (nullable && value === null) ||
+    (typeof value === "string" && /^[a-f0-9]{64}$/u.test(value));
+}
+
+function validRelativePath(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && !isAbsolute(value) &&
+    !value.split(/[\\/]/u).includes("..");
+}
+
+export function validateFileApplyJournal(journal: FileApplyJournal): void {
+  if (!journal || typeof journal !== "object" ||
+      journal.schemaVersion !== "file-apply-journal/1.0" || journal.kind !== "file-apply-journal" ||
+      !/^[a-f0-9-]{36}$/u.test(journal.recoveryId) || !validDigest(journal.planHash) ||
+      !Array.isArray(journal.operations) || journal.operations.length === 0 ||
+      !Array.isArray(journal.written) ||
+      !["started", "failed-compensated", "failed-uncompensated"].includes(journal.status) ||
+      new Set(journal.operations.map((operation) => operation.path)).size !== journal.operations.length ||
+      journal.operations.some((operation) => !operation || !validRelativePath(operation.path) ||
+        !validDigest(operation.beforeHash, true) || !validDigest(operation.afterHash)) ||
+      new Set(journal.written).size !== journal.written.length ||
+      journal.written.some((path) => !validRelativePath(path) ||
+        !journal.operations.some((operation) => operation.path === path)) ||
+      journal.journalHash !== hashObject(withoutJournalHash(journal))) {
+    throw new Error("RECOVERY_JOURNAL_INVALID");
+  }
+}
+
+export function fileApplyRecoveryPacketHash(journal: FileApplyJournal, context: RecoveryContext): string {
+  validateFileApplyJournal(journal);
+  return hashObject({
+    kind: "file-apply-recovery/1.0",
+    recoveryId: journal.recoveryId,
+    planHash: journal.planHash,
+    operationsDigest: hashObject(journal.operations),
+    contextDigest: contextDigest(context),
+  });
+}
+
+function withoutApprovalHash(approval: RecoveryApproval): Omit<RecoveryApproval, "approvalHash"> {
+  const copy: Partial<RecoveryApproval> = { ...approval };
+  delete copy.approvalHash;
+  return copy as Omit<RecoveryApproval, "approvalHash">;
+}
+
+export function createRecoveryApproval(args: {
+  context: RecoveryContext;
+  finding: RecoveryFinding;
   approvedBy: string;
   approvedAt: string;
   expiresAt: string;
+}): RecoveryApproval {
+  if (args.finding.kind === "invalid" || !args.finding.planHash) {
+    throw new Error("RECOVERY_APPROVAL_TARGET_INVALID");
+  }
+  const approval: RecoveryApproval = {
+    schemaVersion: "recovery-approval/1.0",
+    kind: "semantic-human-approval",
+    id: `recovery-${args.finding.packetHash.slice(0, 16)}-${hashObject({
+      approvedBy: args.approvedBy,
+      approvedAt: args.approvedAt,
+      expiresAt: args.expiresAt,
+    }).slice(0, 12)}`,
+    targetKind: args.finding.kind,
+    targetId: args.finding.id,
+    planHash: args.finding.planHash,
+    packetHash: args.finding.packetHash,
+    contextDigest: contextDigest(args.context),
+    approvedBy: args.approvedBy,
+    approvedAt: args.approvedAt,
+    expiresAt: args.expiresAt,
+    approvalHash: "",
+  };
+  approval.approvalHash = hashObject(withoutApprovalHash(approval));
+  return approval;
 }
 
-export function recoveryExecutionAllowed(approval: RecoveryApproval | undefined, planHash: string, packetHash: string): void {
-  if (!approval || approval.kind !== "semantic-human-approval/3.0" || !approval.approvedBy || approval.planHash !== planHash ||
-      approval.packetHash !== packetHash || !Number.isFinite(Date.parse(approval.approvedAt)) || !Number.isFinite(Date.parse(approval.expiresAt)) ||
-      Date.parse(approval.approvedAt) > Date.now() || Date.parse(approval.expiresAt) <= Date.now()) {
-    throw new Error("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+export function recordRecoveryApproval(context: RecoveryContext, approval: RecoveryApproval): string {
+  validateRecoveryApproval(context, approval);
+  const path = safePath(recoveryRoot(context), `approvals/${approval.id}.json`);
+  durableWriteOnce(path, prettyJson(approval));
+  return path;
+}
+
+function validateRecoveryApproval(context: RecoveryContext, approval: RecoveryApproval): void {
+  if (!approval || typeof approval !== "object" || approval.schemaVersion !== "recovery-approval/1.0" ||
+      approval.kind !== "semantic-human-approval" ||
+      !/^recovery-[a-f0-9]{16}-[a-f0-9]{12}$/u.test(approval.id) ||
+      !["file-apply", "workspace"].includes(approval.targetKind) ||
+      !approval.targetId || !validDigest(approval.planHash) || !validDigest(approval.packetHash) ||
+      approval.contextDigest !== contextDigest(context) || !approval.approvedBy ||
+      !Number.isFinite(Date.parse(approval.approvedAt)) || !Number.isFinite(Date.parse(approval.expiresAt)) ||
+      approval.approvalHash !== hashObject(withoutApprovalHash(approval))) {
+    throw new Error("RECOVERY_APPROVAL_INVALID");
   }
 }
 
-/** Shared mutation boundary for existing domain-plan Apply paths. */
-export function inspectRecoveryState(context: { projectDir: string; commonDir: string }): void {
+export function recoveryExecutionAllowed(
+  context: RecoveryContext,
+  approvalRef: string | undefined,
+  finding: RecoveryFinding,
+  now = new Date(),
+): RecoveryApproval {
+  if (!approvalRef || !/^recovery-[a-f0-9]{16}-[a-f0-9]{12}$/u.test(approvalRef)) {
+    throw new Error("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+  }
+  let approval: RecoveryApproval;
+  try {
+    approval = readJson<RecoveryApproval>(safePath(recoveryRoot(context), `approvals/${approvalRef}.json`));
+    validateRecoveryApproval(context, approval);
+  } catch {
+    throw new Error("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+  }
+  if (finding.kind === "invalid" || !finding.planHash || approval.id !== approvalRef ||
+      approval.targetKind !== finding.kind || approval.targetId !== finding.id ||
+      approval.planHash !== finding.planHash || approval.packetHash !== finding.packetHash ||
+      Date.parse(approval.approvedAt) > now.getTime() || Date.parse(approval.expiresAt) <= now.getTime()) {
+    throw new Error("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+  }
+  return approval;
+}
+
+function completedFileChange(projectDir: string, changeDir: string, journal: FileApplyJournal): boolean {
+  const path = safePath(changeDir, "change.json");
+  if (!existsSync(path)) return false;
+  try {
+    const change = readJson<{ planHash?: string; operations?: Array<{ path?: string; beforeHash?: string | null; afterHash?: string }> }>(path);
+    return change.planHash === journal.planHash && Array.isArray(change.operations) &&
+      hashObject(change.operations.map(({ path: itemPath, beforeHash, afterHash }) => ({ path: itemPath, beforeHash, afterHash }))) === hashObject(journal.operations) &&
+      journal.operations.every((item) => fileHash(safePath(projectDir, item.path)) === item.afterHash);
+  } catch {
+    return false;
+  }
+}
+
+const WORKSPACE_OPERATIONS = ["configure", "allocate", "adopt", "migrate", "close", "rebind", "renew", "recover"] as const;
+const WORKSPACE_STATUSES = ["started", "applied", "failed", "rolled-back"] as const;
+
+interface WorkspaceRecoveryReceipt {
+  schemaVersion: string;
+  kind: string;
+  id: string;
+  planHash: string;
+  operation: string;
+  status: string;
+  startedAt: string;
+  completedAt?: string;
+  steps: Array<{ id: string; status: string; detail: string }>;
+  before?: { observedHash?: string };
+  after?: { observedHash?: string };
+  beforeObservedHash?: string;
+  mutationStarted?: boolean;
+  compensationStatus?: string;
+  compensationObservedHash?: string;
+  rollbackStatus?: string;
+}
+
+function validateWorkspaceReceipt(receipt: WorkspaceRecoveryReceipt, expectedId: string): void {
+  if (!receipt || typeof receipt !== "object" || receipt.schemaVersion !== "worktree-delivery/1.0" ||
+      receipt.kind !== "workspace-receipt" || receipt.id !== expectedId || !validDigest(receipt.planHash) ||
+      !(WORKSPACE_OPERATIONS as readonly string[]).includes(receipt.operation) ||
+      !(WORKSPACE_STATUSES as readonly string[]).includes(receipt.status) ||
+      !Number.isFinite(Date.parse(receipt.startedAt)) || !Array.isArray(receipt.steps) ||
+      receipt.steps.some((step) => !step || typeof step.id !== "string" || typeof step.detail !== "string" ||
+        !["applied", "failed", "compensated"].includes(step.status)) ||
+      receipt.mutationStarted !== undefined && typeof receipt.mutationStarted !== "boolean" ||
+      receipt.compensationStatus !== undefined && !["not-required", "completed", "failed"].includes(receipt.compensationStatus) ||
+      receipt.rollbackStatus !== undefined && !["started", "completed", "failed"].includes(receipt.rollbackStatus)) {
+    throw new Error("WORKSPACE_RECEIPT_INVALID");
+  }
+}
+
+function workspaceNeedsRecovery(receipt: WorkspaceRecoveryReceipt): boolean {
+  if (receipt.rollbackStatus === "started" || receipt.compensationStatus === "failed" || receipt.status === "started") return true;
+  if (receipt.rollbackStatus === "failed") {
+    return receipt.compensationStatus !== "completed" || !receipt.after?.observedHash ||
+      receipt.compensationObservedHash !== receipt.after.observedHash;
+  }
+  if (receipt.status !== "failed") return false;
+  const mutationStarted = receipt.mutationStarted ?? receipt.steps.some((step) =>
+    step.status === "applied" || step.status === "compensated");
+  if (!mutationStarted && (receipt.compensationStatus === undefined || receipt.compensationStatus === "not-required")) return false;
+  return receipt.compensationStatus !== "completed" || !receipt.beforeObservedHash ||
+    receipt.compensationObservedHash !== receipt.beforeObservedHash;
+}
+
+function workspacePacketHash(context: RecoveryContext, receipt: WorkspaceRecoveryReceipt): string {
+  return hashObject({
+    kind: "workspace-recovery/1.0",
+    id: receipt.id,
+    planHash: receipt.planHash,
+    operation: receipt.operation,
+    beforeObservedHash: receipt.beforeObservedHash ?? receipt.before?.observedHash ?? null,
+    contextDigest: contextDigest(context),
+  });
+}
+
+/** Inspect durable journals without trusting caller-supplied safe-mode booleans. */
+export function inspectRecoveryState(context: RecoveryContext): RecoveryFinding[] {
+  const findings: RecoveryFinding[] = [];
   const receipts = safePath(context.commonDir, "harness/worktree-delivery/receipts");
   if (existsSync(receipts)) {
     for (const name of readdirSync(receipts).filter((entry) => entry.endsWith(".json"))) {
-      const receipt = readJson<{ status?: string; id?: string }>(join(receipts, name));
-      if (receipt.status === "started" || receipt.status === "failed") {
-        throw new Error(`RECOVERY_REQUIRED: ${receipt.id ?? name}`);
+      const receiptPath = safePath(receipts, name);
+      const id = name.slice(0, -5);
+      if (!/^worktree-[A-Za-z0-9._-]{1,200}$/u.test(id)) {
+        findings.push({ kind: "invalid", id: name, packetHash: hashObject({ kind: "invalid-workspace-receipt/1.0", name }), evidenceHash: hashObject(name) });
+        continue;
+      }
+      try {
+        const receipt = readJson<WorkspaceRecoveryReceipt>(receiptPath);
+        validateWorkspaceReceipt(receipt, id);
+        if (workspaceNeedsRecovery(receipt)) {
+          findings.push({
+            kind: "workspace",
+            id,
+            planHash: receipt.planHash,
+            packetHash: workspacePacketHash(context, receipt),
+            evidenceHash: hashObject(receipt),
+          });
+        }
+      } catch {
+        findings.push({ kind: "invalid", id, packetHash: hashObject({ kind: "invalid-workspace-receipt/1.0", id }), evidenceHash: fileHash(receiptPath) ?? hashObject(name) });
       }
     }
   }
+
   const changes = safePath(context.projectDir, ".harness/changes");
-  if (!existsSync(changes)) return;
+  if (!existsSync(changes)) return findings;
   for (const id of readdirSync(changes)) {
-    const journal = join(changes, id, "apply.json");
-    if (!existsSync(journal)) continue;
-    if (existsSync(join(changes, id, "change.json"))) continue;
-    const state = readJson<{ status?: string }>(journal);
-    if (state.status === "started" || state.status === "failed-uncompensated") throw new Error(`RECOVERY_REQUIRED: ${id}`);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(id)) {
+      findings.push({ kind: "invalid", id, packetHash: hashObject({ kind: "invalid-change-id/1.0", id }), evidenceHash: hashObject(id) });
+      continue;
+    }
+    const changeDir = safePath(changes, id);
+    const journalPath = safePath(changeDir, "apply.json");
+    if (!existsSync(journalPath)) continue;
+    try {
+      const journal = readJson<FileApplyJournal>(journalPath);
+      validateFileApplyJournal(journal);
+      if (completedFileChange(context.projectDir, changeDir, journal) || journal.status === "failed-compensated") continue;
+      findings.push({
+        kind: "file-apply",
+        id,
+        planHash: journal.planHash,
+        packetHash: fileApplyRecoveryPacketHash(journal, context),
+        evidenceHash: journal.journalHash,
+      });
+    } catch {
+      findings.push({ kind: "invalid", id, packetHash: hashObject({ kind: "invalid-file-journal/1.0", id }), evidenceHash: fileHash(journalPath) ?? hashObject(id) });
+    }
   }
+  return findings;
 }
 
-/** Every public mutation derives safe mode from durable journals; callers cannot disable it. */
-export function requireMutationAllowed(context: { projectDir: string; commonDir: string }): void {
-  inspectRecoveryState(context);
+/** Every transaction Apply derives safe mode from durable state under the repository mutation lock. */
+export function requireMutationAllowed(
+  context: RecoveryContext,
+  recovery?: { kind: "file-apply" | "workspace"; id: string; approvalRef?: string; now?: Date },
+): void {
+  const findings = inspectRecoveryState(context);
+  if (findings.length === 0) return;
+  if (recovery) {
+    const targets = findings.filter((finding) => finding.kind === recovery.kind && finding.id === recovery.id);
+    if (targets.length === 1) {
+      recoveryExecutionAllowed(context, recovery.approvalRef, targets[0], recovery.now);
+      return;
+    }
+  }
+  throw new Error(`RECOVERY_REQUIRED: ${findings.map((finding) => `${finding.kind}:${finding.id}`).join(",")}`);
 }
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-import { readJson, safePath } from "../v2/fs.js";

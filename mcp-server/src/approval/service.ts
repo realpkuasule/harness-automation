@@ -6,11 +6,21 @@ export type ApprovalState = "Approved" | "ReviewPending" | "NeedsHuman";
 export const APPROVAL_ACTION_KINDS = ["read", "write", "adopt", "rebind", "recover", "rollback", "migration", "weakening", "permission-change", "protected"] as const;
 export type ApprovalActionKind = typeof APPROVAL_ACTION_KINDS[number];
 
+export interface SemanticApprovalBinding {
+  planHash: string;
+  contextDigest: string;
+  inputDigest: string;
+  policyDigest: string;
+  observedHash: string;
+  actionDigest: string;
+}
+
 export interface SemanticApprovalPacket {
   schemaVersion: "semantic-approval/1.0";
   kind: "semantic-approval";
   planHash: string;
   inputHash: string;
+  binding: SemanticApprovalBinding;
   producerIdentity: string;
   actions: Array<{
     id: string;
@@ -28,6 +38,7 @@ export interface SemanticApprovalPacket {
 
 export interface ReviewerVerdict {
   schemaVersion: "reviewer-verdict/1.0";
+  packetHash: string;
   planHash: string;
   inputHash: string;
   reviewerIdentity: string;
@@ -52,6 +63,7 @@ interface ApprovalAttemptReceipt {
   kind: "approval-attempt";
   id: string;
   packetHash: string;
+  packet: SemanticApprovalPacket;
   attempt: 1 | 2;
   state: ApprovalState;
   code?: ApprovalResult["code"];
@@ -66,9 +78,18 @@ function packetWithoutHash(packet: SemanticApprovalPacket): Omit<SemanticApprova
 }
 
 export function validSemanticApprovalPacket(packet: SemanticApprovalPacket): boolean {
-  return packet.schemaVersion === "semantic-approval/1.0" && packet.kind === "semantic-approval" &&
+  return Boolean(packet && typeof packet === "object" && packet.binding &&
+    typeof packet.binding === "object" && Array.isArray(packet.actions)) &&
+    packet.schemaVersion === "semantic-approval/1.0" && packet.kind === "semantic-approval" &&
     packet.packetHash === hashObject(packetWithoutHash(packet)) &&
-    packet.actions.every((action) => (APPROVAL_ACTION_KINDS as readonly string[]).includes(action.kind)) &&
+    packet.planHash === packet.binding.planHash && packet.inputHash === packet.binding.inputDigest &&
+    packet.binding.actionDigest === hashObject(packet.actions) &&
+    [packet.binding.planHash, packet.binding.contextDigest, packet.binding.inputDigest,
+      packet.binding.policyDigest, packet.binding.observedHash, packet.binding.actionDigest]
+      .every((digest) => /^[a-f0-9]{64}$/u.test(digest)) &&
+    new Set(packet.actions.map((action) => action.id)).size === packet.actions.length &&
+    packet.actions.every((action) => Boolean(action.id && action.summary && action.recovery) &&
+      (APPROVAL_ACTION_KINDS as readonly string[]).includes(action.kind)) &&
     packet.risk === classifyRisk(packet.actions);
 }
 
@@ -78,9 +99,12 @@ export function classifyRisk(actions: SemanticApprovalPacket["actions"]): RiskCl
   return actions.length === 0 ? "read-only" : "ordinary-reversible";
 }
 
-export function createSemanticApprovalPacket(input: Omit<SemanticApprovalPacket, "schemaVersion" | "kind" | "risk" | "packetHash">): SemanticApprovalPacket {
+export function createSemanticApprovalPacket(input: Omit<SemanticApprovalPacket, "schemaVersion" | "kind" | "risk" | "packetHash" | "binding"> & {
+  binding: Omit<SemanticApprovalBinding, "actionDigest">;
+}): SemanticApprovalPacket {
   const packet: SemanticApprovalPacket = {
     schemaVersion: "semantic-approval/1.0", kind: "semantic-approval", ...input,
+    binding: { ...input.binding, actionDigest: hashObject(input.actions) },
     risk: classifyRisk(input.actions), packetHash: "",
   };
   packet.packetHash = hashObject(packetWithoutHash(packet));
@@ -88,7 +112,9 @@ export function createSemanticApprovalPacket(input: Omit<SemanticApprovalPacket,
 }
 
 function validVerdict(packet: SemanticApprovalPacket, adapter: ReviewerAdapter, verdict: ReviewerVerdict): boolean {
-  return verdict.schemaVersion === "reviewer-verdict/1.0" && verdict.planHash === packet.planHash &&
+  return Boolean(verdict && typeof verdict === "object" && Array.isArray(verdict.reasonCodes)) &&
+    verdict.schemaVersion === "reviewer-verdict/1.0" && verdict.packetHash === packet.packetHash &&
+    verdict.planHash === packet.planHash &&
     verdict.inputHash === packet.inputHash && verdict.reviewerIdentity === adapter.identity &&
     verdict.reviewerIdentity !== packet.producerIdentity && verdict.reasonCodes.length > 0;
 }
@@ -136,12 +162,25 @@ function approvalReceiptWithoutHash(receipt: ApprovalAttemptReceipt): Omit<Appro
 function approvalReceipts(commonDir: string): ApprovalAttemptReceipt[] {
   const directory = safePath(commonDir, "harness/approvals");
   if (!existsSync(directory)) return [];
-  return readdirSync(directory).filter((name) => name.endsWith(".json")).map((name) => {
+  const receipts = readdirSync(directory).filter((name) => name.endsWith(".json")).map((name) => {
+    if (!/^approval-[a-f0-9]{16}-[12]\.json$/u.test(name)) throw new Error("APPROVAL_HISTORY_TAMPERED");
     const receipt = readJson<ApprovalAttemptReceipt>(safePath(directory, name));
     if (receipt.schemaVersion !== "approval-attempt/3.0" || receipt.kind !== "approval-attempt" ||
+        receipt.id !== name.slice(0, -5) || receipt.packetHash !== receipt.packet.packetHash ||
+        !validSemanticApprovalPacket(receipt.packet) || ![1, 2].includes(receipt.attempt) ||
+        !["Approved", "ReviewPending", "NeedsHuman"].includes(receipt.state) ||
+        (receipt.verdict ? !validVerdict(receipt.packet, { identity: receipt.verdict.reviewerIdentity, review: () => receipt.verdict! }, receipt.verdict) : receipt.state === "Approved") ||
         receipt.receiptHash !== hashObject(approvalReceiptWithoutHash(receipt))) throw new Error("APPROVAL_HISTORY_TAMPERED");
     return receipt;
   });
+  receipts.sort((left, right) => left.packetHash.localeCompare(right.packetHash) || left.attempt - right.attempt);
+  for (let index = 0; index < receipts.length; index += 1) {
+    const prior = receipts[index - 1];
+    if (prior?.packetHash === receipts[index].packetHash && receipts[index].attempt !== prior.attempt + 1) {
+      throw new Error("APPROVAL_HISTORY_TAMPERED");
+    }
+  }
+  return receipts;
 }
 
 /** The mutation caller derives attempts from append-only history; callers cannot reset it. */
@@ -156,7 +195,7 @@ export function reviewSemanticApprovalWithHistory(args: {
   const result = reviewSemanticApproval({ packet: args.packet, adapter: args.adapter, attempt });
   const receipt: ApprovalAttemptReceipt = {
     schemaVersion: "approval-attempt/3.0", kind: "approval-attempt", id: `approval-${args.packet.packetHash.slice(0, 16)}-${attempt}`,
-    packetHash: args.packet.packetHash, attempt, state: result.state, ...(result.code ? { code: result.code } : {}),
+    packetHash: args.packet.packetHash, packet: args.packet, attempt, state: result.state, ...(result.code ? { code: result.code } : {}),
     ...(result.verdict ? { verdict: result.verdict } : {}), receiptHash: "",
   };
   receipt.receiptHash = hashObject(approvalReceiptWithoutHash(receipt));

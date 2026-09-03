@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,8 +16,15 @@ import {
   sha256,
   withoutHash,
 } from "./fs.js";
-import { requireMutationAllowed } from "../recovery/service.js";
-import { resolveRepositoryContext } from "../repository/git.js";
+import {
+  acquireMutationLock,
+  createFileApplyJournal,
+  releaseMutationLock,
+  requireMutationAllowed,
+  validateFileApplyJournal,
+  type FileApplyJournal,
+} from "../recovery/service.js";
+import { resolveProjectContext } from "../repository/git.js";
 import {
   GO_NAMING_CHECKER,
   PYTHON_NAMING_CHECKER,
@@ -1108,7 +1116,7 @@ export function planProjectUpdate(args: {
   now?: Date;
 }): ProjectUpdatePlanResult {
   if (!isAbsolute(args.projectRoot)) throw new Error("UPDATE_PROJECT_ABSOLUTE_REQUIRED: --project must be an absolute path");
-  const root = resolveRepositoryContext(args.projectRoot).projectDir;
+  const root = resolve(args.projectRoot);
   const policyPath = harnessPath(root, "policy.yaml");
   const manifestPath = harnessPath(root, "manifest.json");
   const intakePath = harnessPath(root, "intake.json");
@@ -1256,7 +1264,9 @@ function validatePlan(root: string, plan: ChangePlan, approval: string): void {
   const computed = hashObject(withoutHash(plan));
   if (computed !== plan.planHash) throw new Error("PLAN_TAMPERED: plan content does not match its embedded hash");
   if (approval !== plan.planHash) throw new Error(`APPROVAL_MISMATCH: expected exact plan hash ${plan.planHash}`);
-  if (resolve(plan.projectDir) !== root) throw new Error("PROJECT_MISMATCH: plan belongs to another project directory");
+  if (realpathSync.native(resolve(plan.projectDir)) !== realpathSync.native(root)) {
+    throw new Error("PROJECT_MISMATCH: plan belongs to another project directory");
+  }
   assertCurrentHash(harnessPath(root, "intake.json"), plan.intakeHash);
   assertCurrentHash(harnessPath(root, "discovery.json"), plan.discoveryHash);
   for (const source of plan.sourceHashes) assertCurrentHash(safePath(root, source.path), source.sha256);
@@ -1382,23 +1392,48 @@ export function applyPlan(args: {
   projectRoot: string;
   planPath: string;
   approval: string;
+  recoveryApprovalRef?: string;
   now?: Date;
+  testInterruptAfterWrites?: number;
+  testFailPostApply?: boolean;
+  testInterruptAfterChangeReceipt?: boolean;
 }): AppliedChange | WorkspaceReceipt {
-  const context = resolveRepositoryContext(args.projectRoot);
-  requireMutationAllowed(context);
+  const context = resolveProjectContext(args.projectRoot);
   const root = context.projectDir;
   const candidate = readJson<{ kind?: string }>(safePath(root, args.planPath));
   if (candidate.kind === "workspace-plan") return applyWorkspacePlan(args);
-  return applyFilePlan(args);
+  return applyFilePlan(args, context);
 }
 
 function applyFilePlan(args: {
   projectRoot: string;
   planPath: string;
   approval: string;
+  recoveryApprovalRef?: string;
   now?: Date;
-}): AppliedChange {
-  const root = resolveRepositoryContext(args.projectRoot).projectDir;
+  testInterruptAfterWrites?: number;
+  testFailPostApply?: boolean;
+  testInterruptAfterChangeReceipt?: boolean;
+}, context = resolveProjectContext(args.projectRoot)): AppliedChange {
+  const lock = acquireMutationLock(context);
+  try {
+    return applyFilePlanLocked(args, context);
+  } finally {
+    releaseMutationLock(lock);
+  }
+}
+
+function applyFilePlanLocked(args: {
+  projectRoot: string;
+  planPath: string;
+  approval: string;
+  recoveryApprovalRef?: string;
+  now?: Date;
+  testInterruptAfterWrites?: number;
+  testFailPostApply?: boolean;
+  testInterruptAfterChangeReceipt?: boolean;
+}, context: ReturnType<typeof resolveProjectContext>): AppliedChange {
+  const root = context.projectDir;
   const plan = readJson<ChangePlan>(safePath(root, args.planPath));
   validatePlan(root, plan, args.approval);
   const changeFile = harnessPath(root, `changes/${plan.id}/change.json`);
@@ -1410,33 +1445,62 @@ function applyFilePlan(args: {
     }
     throw new Error(`CHANGE_ID_CONFLICT: ${plan.id} was already applied but repository outputs have drifted`);
   }
-  const existingJournal = existsSync(journalFile) ? readJson<{ planHash: string; status: "started" | "failed-compensated" | "failed-uncompensated"; written: string[] }>(journalFile) : null;
-  if (existingJournal && (existingJournal.planHash !== plan.planHash || existingJournal.status !== "started")) throw new Error(`RECOVERY_REQUIRED: ${plan.id}`);
+  let existingJournal = existsSync(journalFile) ? readJson<FileApplyJournal>(journalFile) : null;
+  const operations = plan.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash }));
+  if (existingJournal) {
+    validateFileApplyJournal(existingJournal);
+    if (existingJournal.planHash !== plan.planHash ||
+        hashObject(existingJournal.operations) !== hashObject(operations) ||
+        existingJournal.written.some((path) => !plan.operations.some((item) => item.path === path))) {
+      throw new Error(`RECOVERY_REQUIRED: ${plan.id}`);
+    }
+    if (existingJournal.status === "failed-compensated") {
+      if (plan.operations.some((item) => fileHash(safePath(root, item.path)) !== item.beforeHash)) {
+        throw new Error(`RECOVERY_REQUIRED: ${plan.id}`);
+      }
+      existingJournal = null;
+    } else {
+      requireMutationAllowed(context, {
+        kind: "file-apply", id: plan.id, approvalRef: args.recoveryApprovalRef, now: args.now,
+      });
+    }
+  } else {
+    requireMutationAllowed(context);
+  }
   validateUpdateTransition(root, plan);
   validateTypeScriptNamingTransition(root, plan);
   for (const item of plan.operations) {
     const current = fileHash(safePath(root, item.path));
-    if (current !== item.beforeHash && (!existingJournal || current !== item.afterHash)) throw new Error(`RECOVERY_REQUIRED: ${item.path}`);
+    if (current !== item.beforeHash && (!existingJournal || current !== item.afterHash)) {
+      if (existingJournal) throw new Error(`RECOVERY_REQUIRED: ${item.path}`);
+      assertCurrentHash(safePath(root, item.path), item.beforeHash);
+    }
   }
 
-  const originals = plan.operations.map((item) => ({
-    item,
-    content: item.beforeHash === null ? null : readFileSync(safePath(root, item.path), "utf8"),
-  }));
-  const written: typeof originals = [];
-  const checkpoint = (status: "started" | "failed-compensated" | "failed-uncompensated", entries: string[]) => atomicWrite(journalFile, prettyJson({ planHash: plan.planHash, status, written: entries }));
-  checkpoint("started", existingJournal?.written ?? []);
+  const attempted = new Set(existingJournal?.written ?? []);
+  const recoveryId = existingJournal?.recoveryId ?? randomUUID();
+  const checkpoint = (status: FileApplyJournal["status"]) => {
+    atomicWrite(journalFile, prettyJson(createFileApplyJournal({
+      recoveryId, planHash: plan.planHash, operations, status, written: [...attempted],
+    })));
+  };
+  checkpoint("started");
   try {
-    for (const original of originals) {
-      const { item, content } = original;
-      if (fileHash(safePath(root, item.path)) === item.afterHash) continue;
-      if (content !== null) {
-        atomicWrite(harnessPath(root, `changes/${plan.id}/before/${item.path}`), content);
+    let completedWrites = 0;
+    for (const item of plan.operations) {
+      const target = safePath(root, item.path);
+      if (fileHash(target) === item.afterHash) continue;
+      if (item.beforeHash !== null) {
+        const backup = harnessPath(root, `changes/${plan.id}/before/${item.path}`);
+        if (!existsSync(backup)) atomicWrite(backup, readFileSync(target, "utf8"));
+        assertCurrentHash(backup, item.beforeHash);
       }
-      atomicWrite(safePath(root, item.path), item.content);
-      assertCurrentHash(safePath(root, item.path), item.afterHash);
-      written.push(original);
-      checkpoint("started", [...(existingJournal?.written ?? []), ...written.map((entry) => entry.item.path)]);
+      attempted.add(item.path);
+      checkpoint("started");
+      atomicWrite(target, item.content);
+      assertCurrentHash(target, item.afterHash);
+      completedWrites += 1;
+      if (args.testInterruptAfterWrites === completedWrites) throw new Error("TEST_FILE_APPLY_INTERRUPT");
     }
     const verification = checkProject(root);
     if (!verification.ok) {
@@ -1445,13 +1509,16 @@ function applyFilePlan(args: {
         .map((item) => `${item.id}: ${item.detail}`);
       throw new Error(`POST_APPLY_VERIFICATION_FAILED: ${failures.join("; ")}`);
     }
+    if (args.testFailPostApply) throw new Error("TEST_FILE_POST_APPLY_FAILURE");
   } catch (error) {
+    if (error instanceof Error && error.message === "TEST_FILE_APPLY_INTERRUPT") throw error;
     let uncompensated = false;
-    const allWritten = new Set([...(existingJournal?.written ?? []), ...written.map((entry) => entry.item.path)]);
     for (const item of [...plan.operations].reverse()) {
-      if (!allWritten.has(item.path)) continue;
+      if (!attempted.has(item.path)) continue;
       const target = safePath(root, item.path);
-      if (fileHash(target) !== item.afterHash) { uncompensated = true; continue; }
+      const current = fileHash(target);
+      if (current === item.beforeHash) continue;
+      if (current !== item.afterHash) { uncompensated = true; continue; }
       if (item.beforeHash === null) rmSync(target, { force: true });
       else {
         const backup = harnessPath(root, `changes/${plan.id}/before/${item.path}`);
@@ -1459,7 +1526,7 @@ function applyFilePlan(args: {
         atomicWrite(target, readFileSync(backup, "utf8"));
       }
     }
-    checkpoint(uncompensated ? "failed-uncompensated" : "failed-compensated", [...allWritten]);
+    checkpoint(uncompensated ? "failed-uncompensated" : "failed-compensated");
     throw error;
   }
 
@@ -1473,10 +1540,13 @@ function applyFilePlan(args: {
       path: item.path,
       beforeHash: item.beforeHash,
       afterHash: item.afterHash,
-      backupPath: item.beforeHash === null ? null : `.harness/changes/${plan.id}/before/${item.path}`,
+      backupPath: item.beforeHash === null || item.beforeHash === item.afterHash
+        ? null
+        : `.harness/changes/${plan.id}/before/${item.path}`,
     })),
   };
   atomicWrite(changeFile, prettyJson(change));
+  if (args.testInterruptAfterChangeReceipt) throw new Error("TEST_FILE_CHANGE_RECEIPT_INTERRUPT");
   rmSync(journalFile, { force: true });
   return change;
 }
@@ -1494,7 +1564,8 @@ export function rollbackChange(args: {
   changeId?: string;
   now?: Date;
 }): { id: string; restored: string[] } | WorkspaceReceipt {
-  const root = resolve(args.projectRoot);
+  const context = resolveProjectContext(args.projectRoot);
+  const root = context.projectDir;
   const id = args.changeId ?? latestChangeId(root);
   const directory = harnessPath(root, `changes/${id}`);
   if (!existsSync(join(directory, "change.json")) && args.changeId) {
@@ -1504,24 +1575,31 @@ export function rollbackChange(args: {
       now: args.now,
     });
   }
-  const marker = join(directory, "rolled-back.json");
-  const change = readJson<AppliedChange>(join(directory, "change.json"));
-  if (existsSync(marker)) return readJson<{ id: string; restored: string[] }>(marker);
-  for (const item of change.operations) assertCurrentHash(safePath(root, item.path), item.afterHash);
-  for (const item of [...change.operations].reverse()) {
-    const target = safePath(root, item.path);
-    if (item.beforeHash === null) {
-      rmSync(target, { force: true });
-    } else {
-      if (!item.backupPath) throw new Error(`BACKUP_MISSING: ${item.path}`);
-      const backup = safePath(root, item.backupPath);
-      assertCurrentHash(backup, item.beforeHash);
-      atomicWrite(target, readFileSync(backup, "utf8"));
+  const lock = acquireMutationLock(context);
+  try {
+    requireMutationAllowed(context);
+    const marker = join(directory, "rolled-back.json");
+    const change = readJson<AppliedChange>(join(directory, "change.json"));
+    if (existsSync(marker)) return readJson<{ id: string; restored: string[] }>(marker);
+    for (const item of change.operations) assertCurrentHash(safePath(root, item.path), item.afterHash);
+    for (const item of [...change.operations].reverse()) {
+      const target = safePath(root, item.path);
+      if (item.beforeHash === item.afterHash) continue;
+      if (item.beforeHash === null) {
+        rmSync(target, { force: true });
+      } else {
+        if (!item.backupPath) throw new Error(`BACKUP_MISSING: ${item.path}`);
+        const backup = safePath(root, item.backupPath);
+        assertCurrentHash(backup, item.beforeHash);
+        atomicWrite(target, readFileSync(backup, "utf8"));
+      }
     }
+    const result = { id, restored: change.operations.map((item) => item.path), rolledBackAt: (args.now ?? new Date()).toISOString() };
+    atomicWrite(marker, prettyJson(result));
+    return result;
+  } finally {
+    releaseMutationLock(lock);
   }
-  const result = { id, restored: change.operations.map((item) => item.path), rolledBackAt: (args.now ?? new Date()).toISOString() };
-  atomicWrite(marker, prettyJson(result));
-  return result;
 }
 
 interface Manifest {

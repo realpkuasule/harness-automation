@@ -19,7 +19,9 @@ import {
   runTrustedChecks,
 } from "./service.js";
 import { planWorkspaceConfiguration } from "../worktree/service.js";
-import { hashObject, sha256 } from "./fs.js";
+import { createRecoveryApproval, inspectRecoveryState, recordRecoveryApproval } from "../recovery/service.js";
+import { resolveProjectContext } from "../repository/git.js";
+import { fileHash, hashObject, sha256 } from "./fs.js";
 import { PYTHON_NAMING_CHECKER } from "./policy.js";
 
 const roots: string[] = [];
@@ -677,6 +679,63 @@ describe("v2 plan/apply/check/rollback", () => {
     rollbackChange({ projectRoot: root, changeId: change.id, now: new Date("2026-01-01T00:00:04Z") });
     expect(readFileSync(join(root, "AGENTS.md"), "utf8")).toBe("# Existing project instructions\n\nKeep this paragraph.\n");
     expect(readFileSync(join(root, ".harness/generated/effective-policy.md"), "utf8")).toBe("original nested content\n");
+  });
+
+  it("resumes one interrupted file apply only with persisted human recovery approval and compensates the whole plan", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    write(root, "AGENTS.md", "original instructions\n");
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    const planned = planProject({ projectRoot: root });
+
+    expect(() => applyPlan({
+      projectRoot: root, planPath: planned.path, approval: planned.plan.planHash,
+      testInterruptAfterWrites: 1,
+    })).toThrow("TEST_FILE_APPLY_INTERRUPT");
+    expect(() => applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash }))
+      .toThrow("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+
+    const recoveryContext = resolveProjectContext(root);
+    const finding = inspectRecoveryState(recoveryContext).find((item) =>
+      item.kind === "file-apply" && item.id === planned.plan.id)!;
+    const approval = createRecoveryApproval({
+      context: recoveryContext,
+      finding,
+      approvedBy: "owner",
+      approvedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:01:00.000Z",
+    });
+    recordRecoveryApproval(recoveryContext, approval);
+    expect(() => applyPlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+      recoveryApprovalRef: approval.id,
+      now: new Date("2099-01-01T00:00:30.000Z"),
+      testFailPostApply: true,
+    })).toThrow("TEST_FILE_POST_APPLY_FAILURE");
+    for (const operation of planned.plan.operations) {
+      expect(fileHash(join(root, operation.path))).toBe(operation.beforeHash);
+    }
+    expect(inspectRecoveryState(recoveryContext)).toEqual([]);
+    expect(applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash }))
+      .toMatchObject({ id: planned.plan.id });
+  });
+
+  it("treats an exact completed change receipt as authoritative after cleanup interruption", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    const planned = planProject({ projectRoot: root });
+    expect(() => applyPlan({
+      projectRoot: root, planPath: planned.path, approval: planned.plan.planHash,
+      testInterruptAfterChangeReceipt: true,
+    })).toThrow("TEST_FILE_CHANGE_RECEIPT_INTERRUPT");
+    expect(inspectRecoveryState(resolveProjectContext(root))).toEqual([]);
+    expect(applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash }))
+      .toMatchObject({ id: planned.plan.id, planHash: planned.plan.planHash });
   });
 
   it("rejects stale source and target preconditions", () => {
@@ -1445,6 +1504,9 @@ describe("v2 project governance upgrade", () => {
       .toThrow(/STALE_PRECONDITION/u);
     write(root, "AGENTS.md", originalAgents);
     const change = applyPlan({ projectRoot: root, planPath: first.planPath!, approval: first.planHash! });
+    expect(change.operations
+      .filter((operation) => operation.beforeHash === operation.afterHash)
+      .every((operation) => operation.backupPath === null)).toBe(true);
     expect(applyPlan({ projectRoot: root, planPath: first.planPath!, approval: first.planHash! })).toEqual(change);
     expect(checkProject(root).ok).toBe(true);
     expect(JSON.parse(readFileSync(join(root, ".harness/policy.yaml"), "utf8")).project).toMatchObject({

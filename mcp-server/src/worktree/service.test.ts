@@ -19,6 +19,8 @@ import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { hashObject, prettyJson, sha256, withoutHash } from "../v2/fs.js";
+import { createRecoveryApproval, inspectRecoveryState, recordRecoveryApproval } from "../recovery/service.js";
+import { resolveRepositoryContext } from "../repository/git.js";
 import type { WorktreeApprovalPolicy, WorktreeDelegatableOperation } from "./types.js";
 import { loadWorktreeConfig } from "./config.js";
 import {
@@ -1121,10 +1123,23 @@ describe("hash-approved worktree lifecycle", () => {
     });
     expect(auditWorkspace(targetRoot).policies.find((policy) => policy.id === "workspace.cleanup-receipt"))
       .toMatchObject({ passing: false, evidence: [expect.stringContaining(planned.plan.id)] });
+    const recoveryContext = resolveRepositoryContext(targetRoot);
+    const recoveryFinding = inspectRecoveryState(recoveryContext).find((finding) =>
+      finding.kind === "workspace" && finding.id === planned.plan.id)!;
+    const recoveryApproval = createRecoveryApproval({
+      context: recoveryContext,
+      finding: recoveryFinding,
+      approvedBy: "owner",
+      approvedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:01:00.000Z",
+    });
+    recordRecoveryApproval(recoveryContext, recoveryApproval);
     expect(applyWorkspaceMigration({
       projectRoot: targetRoot,
       planPath: planned.path,
       approval: planned.plan.planHash,
+      recoveryApprovalRef: recoveryApproval.id,
+      now: new Date("2099-01-01T00:00:30.000Z"),
     })).toMatchObject({ status: "applied", operation: "migrate" });
     expect(() => rollbackWorkspaceChange({ projectRoot: targetRoot, changeId: planned.plan.id }))
       .toThrow(/WORKTREE_MIGRATION_ROLLBACK_UNSUPPORTED/);

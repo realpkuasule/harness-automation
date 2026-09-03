@@ -75,7 +75,7 @@ import {
 } from "./config.js";
 import { resolveRepositoryContext, runGit, runGitCommand, runGitToFile } from "../repository/git.js";
 import { createSemanticApprovalPacket, reviewSemanticApprovalWithHistory, type ApprovalActionKind } from "../approval/service.js";
-import { requireMutationAllowed } from "../recovery/service.js";
+import { inspectRecoveryState, requireMutationAllowed } from "../recovery/service.js";
 export { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
 import { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
 
@@ -2797,6 +2797,7 @@ export function reviewAndApplyWorkspacePlan(args: {
   now?: Date;
 }): WorkspaceAiReviewResult {
   const root = repositoryRoot(args.projectRoot);
+  requireMutationAllowed(resolveRepositoryContext(root));
   const plan = loadWorkspacePlan(root, args.planPath);
   validateWorkspacePlanEnvelope(root, gitCommonDir(root), plan, plan.planHash);
   const intent = args.intent.trim();
@@ -2822,6 +2823,13 @@ export function reviewAndApplyWorkspacePlan(args: {
   };
   const packet = createSemanticApprovalPacket({
     planHash: plan.planHash, inputHash: hashObject({ intent, observedHash: plan.observedHash }),
+    binding: {
+      planHash: plan.planHash,
+      contextDigest: hashObject({ projectDir: plan.projectDir, commonDir: plan.commonDir }),
+      inputDigest: hashObject({ intent, observedHash: plan.observedHash }),
+      policyDigest: hashObject(policy),
+      observedHash: plan.observedHash,
+    },
     producerIdentity: "worktree-apply-ai", actions: [{
       id: plan.operation.kind, kind: actionKinds[plan.operation.kind] ?? "protected",
       summary: `Apply worktree ${plan.operation.kind}`, before: plan.observedHash, after: plan.planHash,
@@ -2836,27 +2844,27 @@ export function reviewAndApplyWorkspacePlan(args: {
       review: () => {
         const createdAt = Date.parse(plan.createdAt);
         if (!isDelegatableOperation(plan.operation.kind) || !policy.allowedOperations.includes(plan.operation.kind)) {
-          return { schemaVersion: "reviewer-verdict/1.0", planHash: packet.planHash, inputHash: packet.inputHash,
+          return { schemaVersion: "reviewer-verdict/1.0", packetHash: packet.packetHash, planHash: packet.planHash, inputHash: packet.inputHash,
             reviewerIdentity: `legacy-claude:${policy.reviewer.model}`, verdict: "reject", reasonCodes: ["OPERATION_NOT_DELEGATED"] };
         }
         if (!Number.isFinite(createdAt) || createdAt > now.getTime() || now.getTime() - createdAt > policy.planTtlSeconds * 1_000) {
-          return { schemaVersion: "reviewer-verdict/1.0", planHash: packet.planHash, inputHash: packet.inputHash,
+          return { schemaVersion: "reviewer-verdict/1.0", packetHash: packet.packetHash, planHash: packet.planHash, inputHash: packet.inputHash,
             reviewerIdentity: `legacy-claude:${policy.reviewer.model}`, verdict: "needs-human", reasonCodes: ["PLAN_EXPIRED"] };
         }
         if (destructiveAiEvidence(root, plan)?.safe === false) {
-          return { schemaVersion: "reviewer-verdict/1.0", planHash: packet.planHash, inputHash: packet.inputHash,
+          return { schemaVersion: "reviewer-verdict/1.0", packetHash: packet.packetHash, planHash: packet.planHash, inputHash: packet.inputHash,
             reviewerIdentity: `legacy-claude:${policy.reviewer.model}`, verdict: "reject", reasonCodes: ["DESTRUCTIVE_EVIDENCE_UNSAFE"] };
         }
         let output: z.infer<typeof aiReviewerOutputSchema>;
         try {
           output = runClaudeReviewer({ plan, intent, policy, destructiveEvidence: destructiveAiEvidence(root, plan) });
         } catch (error) {
-          return { schemaVersion: "reviewer-verdict/1.0", planHash: packet.planHash, inputHash: packet.inputHash,
+          return { schemaVersion: "reviewer-verdict/1.0", packetHash: packet.packetHash, planHash: packet.planHash, inputHash: packet.inputHash,
             reviewerIdentity: `legacy-claude:${policy.reviewer.model}`, verdict: "needs-human",
             reasonCodes: [error instanceof Error && error.message.startsWith("WORKSPACE_AI_REVIEWER_INVALID") ? "REVIEWER_INVALID" : "REVIEWER_UNAVAILABLE"] };
         }
         return {
-          schemaVersion: "reviewer-verdict/1.0", planHash: packet.planHash, inputHash: packet.inputHash,
+          schemaVersion: "reviewer-verdict/1.0", packetHash: packet.packetHash, planHash: packet.planHash, inputHash: packet.inputHash,
           reviewerIdentity: `legacy-claude:${policy.reviewer.model}`,
           verdict: output.verdict === "approve" ? "approve" : output.verdict === "deny" ? "reject" : "needs-human",
           reasonCodes: output.reasonCodes,
@@ -2926,7 +2934,7 @@ function releaseLock(lock: string): void {
 function appliedReceipt(plan: WorkspacePlan): WorkspaceReceipt | null {
   const path = receiptFile(plan.commonDir, plan.id);
   if (!existsSync(path)) return null;
-  const receipt = readJson<WorkspaceReceipt>(path);
+  let receipt = readJson<WorkspaceReceipt>(path);
   if (receipt.planHash !== plan.planHash) {
     throw new Error(`CHANGE_ID_CONFLICT: ${plan.id}`);
   }
@@ -3106,6 +3114,7 @@ function applyWorkspaceAdoptionPlan(
   validateWorkspacePlanEnvelope(root, gitCommonDir(root), plan, args.approval);
   const lock = acquireLock(plan.commonDir);
   try {
+    requireMutationAllowed(resolveRepositoryContext(root));
     const previous = appliedReceipt(plan);
     if (previous) return previous;
     const providerWorkItems = plan.operation.providerObservationBound
@@ -3148,6 +3157,7 @@ function applyWorkspaceAdoptionPlan(
       before,
       beforeObservedHash: before.observedHash,
       leaseChanges: [],
+      mutationStarted: false,
       compensationStatus: "not-required",
       ...receiptAuthorization(args.authorization),
     };
@@ -3158,6 +3168,8 @@ function applyWorkspaceAdoptionPlan(
         const target = safePath(plan.commonDir, item.leasePath);
         assertCurrentHash(target, item.beforeLeaseHash);
       }
+      receipt.mutationStarted = true;
+      writeReceipt(path, receipt);
       for (const item of plan.operation.items) {
         const target = safePath(plan.commonDir, item.leasePath);
         atomicWrite(target, prettyJson(item.lease));
@@ -3213,9 +3225,23 @@ function applyWorkspaceAdoptionPlan(
           });
         }
       }
+      if (!receipt.mutationStarted) {
+        receipt.compensationStatus = "not-required";
+      } else if (!compensationFailed) {
+        try {
+          const compensated = workspaceStatus(root, {
+            adoptionSafe: true,
+            providerObservation: before.provider,
+          });
+          if (compensated.observedHash !== before.observedHash) compensationFailed = true;
+          else receipt.compensationObservedHash = compensated.observedHash;
+        } catch {
+          compensationFailed = true;
+        }
+      }
       const original = error instanceof Error ? error.message : String(error);
       receipt.status = "failed";
-      receipt.compensationStatus = compensationFailed ? "failed" : "completed";
+      if (receipt.mutationStarted) receipt.compensationStatus = compensationFailed ? "failed" : "completed";
       receipt.error = compensationFailed
         ? `WORKTREE_ADOPT_COMPENSATION_FAILED: ${original}`
         : original;
@@ -3281,6 +3307,7 @@ export function applyWorkspaceMigration(args: {
   projectRoot: string;
   planPath: string;
   approval: string;
+  recoveryApprovalRef?: string;
   now?: Date;
   testFailAfterMove?: boolean;
 }): WorkspaceReceipt {
@@ -3335,6 +3362,7 @@ export function applyWorkspaceMigration(args: {
     steps: [],
     before,
     beforeObservedHash: before.observedHash,
+    mutationStarted: false,
     compensationStatus: "not-required",
     migration: {
       sourceProjectDir: plan.projectDir,
@@ -3346,6 +3374,15 @@ export function applyWorkspaceMigration(args: {
   };
   const checkpoint = (): void => writeReceipt(moved ? targetReceiptPath : sourceReceiptPath, receipt);
   try {
+    requireMutationAllowed(resolveRepositoryContext(root), existing ? {
+      kind: "workspace", id: plan.id, approvalRef: args.recoveryApprovalRef, now: args.now,
+    } : undefined);
+    if (atSource) {
+      before = workspaceStatus(root);
+      validateWorkspacePlan(before, plan, args.approval);
+      receipt.before = before;
+      receipt.beforeObservedHash = before.observedHash;
+    }
     const topology = operation.topology;
     if (!moved) {
       const reobserved = migrationOperation(before, topology.workspaceContainer!);
@@ -3360,6 +3397,8 @@ export function applyWorkspaceMigration(args: {
       ) {
         throw new Error("WORKSPACE_DRIFT: migration target paths changed");
       }
+      receipt.mutationStarted = true;
+      checkpoint();
       if (directoryState(topology.workspaceContainer!) === "absent") {
         mkdirSync(topology.workspaceContainer!);
         if (directoryState(topology.workspaceContainer!) !== "empty") {
@@ -3407,6 +3446,8 @@ export function applyWorkspaceMigration(args: {
       }
       receipt.status = "started";
       receipt.error = undefined;
+      receipt.compensationStatus = "not-required";
+      receipt.compensationObservedHash = undefined;
       receipt.migration!.recoveryState = "after-move";
       receipt.steps.push({ id: "resume-migration", status: "applied", detail: topology.managementCheckout });
       checkpoint();
@@ -3432,6 +3473,7 @@ export function applyWorkspaceMigration(args: {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     receipt.status = "failed";
+    receipt.compensationStatus = receipt.mutationStarted ? "failed" : "not-required";
     receipt.error = message;
     receipt.migration ??= {
       sourceProjectDir: plan.projectDir,
@@ -3460,7 +3502,6 @@ export function applyWorkspacePlan(args: {
   testFailCloseAfterWorktreeRemove?: boolean;
   testFailRemoteDeleteAfterPush?: boolean;
 }): WorkspaceReceipt {
-  requireMutationAllowed(resolveRepositoryContext(args.projectRoot));
   const root = repositoryRoot(args.projectRoot);
   const plan = loadWorkspacePlan(root, args.planPath);
   validateWorkspacePlanEnvelope(root, gitCommonDir(root), plan, plan.planHash);
@@ -3478,6 +3519,27 @@ export function applyWorkspacePlan(args: {
       operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>;
     }, args);
   }
+  const lock = acquireLock(plan.commonDir);
+  try {
+    requireMutationAllowed(resolveRepositoryContext(root));
+    return applyWorkspacePlanLocked(root, plan, authorization, args);
+  } finally {
+    releaseLock(lock);
+  }
+}
+
+function applyWorkspacePlanLocked(
+  root: string,
+  plan: WorkspacePlan,
+  authorization: WorkspaceAiDecision | undefined,
+  args: {
+    planPath: string;
+    approval: string;
+    now?: Date;
+    testFailCloseAfterWorktreeRemove?: boolean;
+    testFailRemoteDeleteAfterPush?: boolean;
+  },
+): WorkspaceReceipt {
   const previous = appliedReceipt(plan);
   if (previous) return previous;
   const config = loadConfig(root).config;
@@ -3504,19 +3566,6 @@ export function applyWorkspacePlan(args: {
   const postCloseRoot = plan.operation.kind === "close" && samePath(root, plan.operation.lease.path)
     ? survivingManagementCheckout(before, plan.operation.lease.path)
     : root;
-  const lock = acquireLock(plan.commonDir);
-  if (authorization || plan.operation.kind === "renew" || plan.operation.kind === "recover") {
-    before = workspaceStatus(root, {
-      providerWorkItems: plan.operation.kind === "allocate" &&
-          plan.operation.providerObservationBound
-        ? [plan.operation.lease.workItem]
-        : undefined,
-      providerObservation: plan.operation.kind === "configure" && plan.operation.providerObservationBound
-        ? plan.operation.providerObservation
-        : undefined,
-    });
-    validateWorkspacePlan(before, plan, args.approval);
-  }
   const receiptPath = receiptFile(plan.commonDir, plan.id);
   const receipt: WorkspaceReceipt = {
     schemaVersion: "worktree-delivery/1.0",
@@ -3528,6 +3577,9 @@ export function applyWorkspacePlan(args: {
     startedAt: (args.now ?? new Date()).toISOString(),
     steps: [],
     before,
+    beforeObservedHash: before.observedHash,
+    mutationStarted: false,
+    compensationStatus: "not-required",
     ...receiptAuthorization(authorization),
   };
   let worktreeCreated = false;
@@ -3541,6 +3593,11 @@ export function applyWorkspacePlan(args: {
   let remoteDeleteEndpoint: string | null = null;
   let remoteBranchDeleted = false;
   let recoveryRemoved = false;
+  const checkpointMutation = (): void => {
+    if (receipt.mutationStarted) return;
+    receipt.mutationStarted = true;
+    writeReceipt(receiptPath, receipt);
+  };
   try {
     writeReceipt(receiptPath, receipt);
     if (plan.operation.kind === "configure") {
@@ -3564,6 +3621,7 @@ export function applyWorkspacePlan(args: {
           throw new Error(`WORKSPACE_DRIFT: allowed root changed: ${plan.operation.allowedRoot.path}`);
         }
         if (state === "absent") {
+          checkpointMutation();
           mkdirSync(plan.operation.allowedRoot.path);
           if (directoryState(plan.operation.allowedRoot.path) !== "empty") {
             throw new Error(`WORKTREE_ALLOWED_ROOT_CREATE_FAILED: ${plan.operation.allowedRoot.path}`);
@@ -3585,6 +3643,7 @@ export function applyWorkspacePlan(args: {
       receipt.backupHostBindingContent = plan.operation.beforeHostBindingHash === null
         ? null
         : readFileSync(hostBindingTarget, "utf8");
+      checkpointMutation();
       atomicWrite(target, plan.operation.content);
       configWritten = true;
       assertCurrentHash(target, plan.operation.afterHash);
@@ -3603,6 +3662,7 @@ export function applyWorkspacePlan(args: {
       const argv = operation.createBranch
         ? ["worktree", "add", "-b", operation.lease.branch, operation.lease.path, operation.startPoint]
         : ["worktree", "add", operation.lease.path, operation.lease.branch];
+      checkpointMutation();
       git(root, argv);
       worktreeCreated = true;
       receipt.steps.push({ id: "add-worktree", status: "applied", detail: operation.lease.path });
@@ -3660,6 +3720,7 @@ export function applyWorkspacePlan(args: {
         beforeHash: operation.expectedLeaseHash,
         afterHash: null,
       }];
+      checkpointMutation();
       git(postCloseRoot, ["worktree", "remove", operation.lease.path]);
       worktreeRemoved = true;
       receipt.steps.push({ id: "remove-worktree", status: "applied", detail: operation.lease.path });
@@ -3736,6 +3797,7 @@ export function applyWorkspacePlan(args: {
           observed.locked || observed.prunable) {
         throw new Error("WORKSPACE_DRIFT: rebind preconditions changed");
       }
+      checkpointMutation();
       atomicWrite(leaseFile(plan.commonDir, operation.lease.workItem), prettyJson(operation.replacementLease));
       assertCurrentHash(leaseFile(plan.commonDir, operation.lease.workItem), operation.afterLeaseHash);
       receipt.leaseChanges = [{
@@ -3761,6 +3823,7 @@ export function applyWorkspacePlan(args: {
           observed.locked || observed.prunable) {
         throw new Error("WORKSPACE_DRIFT: renew preconditions changed");
       }
+      checkpointMutation();
       atomicWrite(leaseFile(plan.commonDir, operation.lease.workItem), prettyJson(operation.replacementLease));
       assertCurrentHash(leaseFile(plan.commonDir, operation.lease.workItem), operation.afterLeaseHash);
       receipt.leaseChanges = [{
@@ -3792,6 +3855,7 @@ export function applyWorkspacePlan(args: {
           operation.dirtyPatch.sha256 !== sha256("")) {
         throw new Error("WORKSPACE_DRIFT: recover preconditions changed");
       }
+      checkpointMutation();
       git(root, ["worktree", "remove", operation.removePath]);
       recoveryRemoved = true;
       receipt.steps.push({ id: "remove-recovered-worktree", status: "applied", detail: operation.removePath });
@@ -3810,6 +3874,7 @@ export function applyWorkspacePlan(args: {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     let finalError: unknown = error;
+    let compensationFailed = plan.operation.kind === "close" && remoteBranchDeleted;
     receipt.status = "failed";
     receipt.error = message;
     receipt.steps.push({ id: "apply", status: "failed", detail: message });
@@ -3884,6 +3949,7 @@ export function applyWorkspacePlan(args: {
             );
           }
           if (!compensationSafe) {
+            compensationFailed = true;
             receipt.steps.push({
               id: "remote-delete-recovery",
               status: "failed",
@@ -3936,17 +4002,28 @@ export function applyWorkspacePlan(args: {
         receipt.steps.push({ id: "restore-recovered-worktree", status: "compensated", detail: plan.operation.path });
       }
     } catch (compensationError) {
+      compensationFailed = true;
       receipt.steps.push({
         id: "compensation",
         status: "failed",
         detail: compensationError instanceof Error ? compensationError.message : String(compensationError),
       });
     }
+    if (!receipt.mutationStarted) {
+      receipt.compensationStatus = "not-required";
+    } else if (!compensationFailed) {
+      try {
+        const compensated = workspaceStatus(root, { providerObservation: before.provider });
+        if (compensated.observedHash !== before.observedHash) compensationFailed = true;
+        else receipt.compensationObservedHash = compensated.observedHash;
+      } catch {
+        compensationFailed = true;
+      }
+    }
+    if (receipt.mutationStarted) receipt.compensationStatus = compensationFailed ? "failed" : "completed";
     receipt.completedAt = (args.now ?? new Date()).toISOString();
     writeReceipt(receiptPath, receipt);
     throw finalError;
-  } finally {
-    releaseLock(lock);
   }
 }
 
@@ -3974,10 +4051,17 @@ function rollbackWorkspaceAdoption(args: {
   plan: WorkspacePlan & {
     operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>;
   };
+  recoveryApprovalRef?: string;
   now?: Date;
 }): WorkspaceReceipt {
   const lock = acquireLock(args.commonDir);
   try {
+    const context = resolveRepositoryContext(args.root);
+    const pending = inspectRecoveryState(context).some((finding) =>
+      finding.kind === "workspace" && finding.id === args.plan.id);
+    requireMutationAllowed(context, pending ? {
+      kind: "workspace", id: args.plan.id, approvalRef: args.recoveryApprovalRef, now: args.now,
+    } : undefined);
     const receipt = readJson<WorkspaceReceipt>(args.receiptPath);
     validateAdoptionReceipt(receipt, args.plan);
     if (receipt.status === "rolled-back") return receipt;
@@ -4011,6 +4095,10 @@ function rollbackWorkspaceAdoption(args: {
     }
     const removed: WorkspaceAdoptionPlanItem[] = [];
     const rollbackSteps: WorkspaceReceipt["steps"] = [];
+    receipt.rollbackStatus = "started";
+    receipt.compensationStatus = "not-required";
+    receipt.compensationObservedHash = undefined;
+    writeReceipt(args.receiptPath, receipt);
     try {
       for (const item of [...args.plan.operation.items].reverse()) {
         unlinkSync(safePath(args.commonDir, item.leasePath));
@@ -4020,6 +4108,8 @@ function rollbackWorkspaceAdoption(args: {
           status: "compensated",
           detail: item.lease.workItem,
         });
+        receipt.steps = [...receipt.steps, rollbackSteps.at(-1)!];
+        writeReceipt(args.receiptPath, receipt);
       }
       const rollbackAfter = workspaceStatus(args.root, {
         adoptionSafe: true,
@@ -4032,8 +4122,9 @@ function rollbackWorkspaceAdoption(args: {
         ...receipt,
         status: "rolled-back",
         completedAt: (args.now ?? new Date()).toISOString(),
-        steps: [...receipt.steps, ...rollbackSteps],
+        steps: receipt.steps,
         error: undefined,
+        rollbackStatus: "completed",
         rollbackAfter,
         rollbackObservedHash: rollbackAfter.observedHash,
         leaseChanges: adoptionLeaseChanges(args.plan.operation, true),
@@ -4055,20 +4146,27 @@ function rollbackWorkspaceAdoption(args: {
         }
       }
       const original = error instanceof Error ? error.message : String(error);
+      if (!compensationFailed) {
+        try {
+          const compensated = workspaceStatus(args.root, {
+            adoptionSafe: true,
+            providerObservation: receipt.after?.provider,
+          });
+          if (!receipt.after || compensated.observedHash !== receipt.after.observedHash) compensationFailed = true;
+          else receipt.compensationObservedHash = compensated.observedHash;
+        } catch {
+          compensationFailed = true;
+        }
+      }
       const failure = compensationFailed
         ? `WORKSPACE_ROLLBACK_UNSAFE: rollback compensation failed: ${original}`
         : original;
-      writeReceipt(args.receiptPath, {
-        ...receipt,
-        status: "applied",
-        error: failure,
-        compensationStatus: compensationFailed ? "failed" : "completed",
-        steps: [
-          ...receipt.steps,
-          ...rollbackSteps,
-          { id: "rollback-adopt", status: "failed", detail: failure },
-        ],
-      });
+      receipt.status = "applied";
+      receipt.error = failure;
+      receipt.rollbackStatus = "failed";
+      receipt.compensationStatus = compensationFailed ? "failed" : "completed";
+      receipt.steps.push({ id: "rollback-adopt", status: "failed", detail: failure });
+      writeReceipt(args.receiptPath, receipt);
       throw new Error(failure);
     }
   } finally {
@@ -4079,13 +4177,14 @@ function rollbackWorkspaceAdoption(args: {
 export function rollbackWorkspaceChange(args: {
   projectRoot: string;
   changeId: string;
+  recoveryApprovalRef?: string;
   now?: Date;
 }): WorkspaceReceipt {
   const root = repositoryRoot(args.projectRoot);
   const commonDir = gitCommonDir(root);
   const path = receiptFile(commonDir, args.changeId);
   if (!existsSync(path)) throw new Error(`WORKSPACE_RECEIPT_NOT_FOUND: ${args.changeId}`);
-  const receipt = readJson<WorkspaceReceipt>(path);
+  let receipt = readJson<WorkspaceReceipt>(path);
   if (receipt.id !== args.changeId) {
     throw new Error("WORKSPACE_RECEIPT_INVALID: receipt id does not match requested change");
   }
@@ -4102,23 +4201,36 @@ export function rollbackWorkspaceChange(args: {
       plan: plan as WorkspacePlan & {
         operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>;
       },
+      recoveryApprovalRef: args.recoveryApprovalRef,
       now: args.now,
     });
   }
   if (receipt.status === "rolled-back") return receipt;
-  const status = workspaceStatus(root, {
-    providerObservation: plan.operation.kind === "configure" && plan.operation.providerObservationBound
-      ? plan.operation.providerObservation
-      : undefined,
-  });
-  if (receipt.status !== "applied" || !receipt.after) {
-    throw new Error(`WORKSPACE_ROLLBACK_UNAVAILABLE: ${receipt.status}`);
-  }
-  if (status.observedHash !== receipt.after.observedHash) {
-    throw new Error("WORKSPACE_DRIFT: workspace changed after apply");
-  }
-  const lock = acquireLock(status.commonDir);
+  const lock = acquireLock(commonDir);
   try {
+    const context = resolveRepositoryContext(root);
+    const pending = inspectRecoveryState(context).some((finding) =>
+      finding.kind === "workspace" && finding.id === args.changeId);
+    requireMutationAllowed(context, pending ? {
+      kind: "workspace", id: args.changeId, approvalRef: args.recoveryApprovalRef, now: args.now,
+    } : undefined);
+    receipt = readJson<WorkspaceReceipt>(path);
+    if (receipt.status === "rolled-back") return receipt;
+    const status = workspaceStatus(root, {
+      providerObservation: plan.operation.kind === "configure" && plan.operation.providerObservationBound
+        ? plan.operation.providerObservation
+        : undefined,
+    });
+    if (receipt.status !== "applied" || !receipt.after) {
+      throw new Error(`WORKSPACE_ROLLBACK_UNAVAILABLE: ${receipt.status}`);
+    }
+    if (status.observedHash !== receipt.after.observedHash) {
+      throw new Error("WORKSPACE_DRIFT: workspace changed after apply");
+    }
+    receipt.rollbackStatus = "started";
+    receipt.compensationStatus = "not-required";
+    receipt.compensationObservedHash = undefined;
+    writeReceipt(path, receipt);
     if (plan.operation.kind === "configure") {
       const target = safePath(status.projectDir, plan.operation.configPath);
       const hostBindingTarget = safePath(status.commonDir, plan.operation.hostBindingPath);
@@ -4234,6 +4346,7 @@ export function rollbackWorkspaceChange(args: {
       receipt.steps.push({ id: "rollback-recover", status: "compensated", detail: operation.path });
     }
     receipt.status = "rolled-back";
+    receipt.rollbackStatus = "completed";
     receipt.completedAt = (args.now ?? new Date()).toISOString();
     receipt.after = workspaceStatus(status.projectDir, {
       providerObservation: plan.operation.kind === "configure" && plan.operation.providerObservationBound
@@ -4242,6 +4355,28 @@ export function rollbackWorkspaceChange(args: {
     });
     writeReceipt(path, receipt);
     return receipt;
+  } catch (error) {
+    if (receipt.rollbackStatus === "started") {
+      receipt.rollbackStatus = "failed";
+      try {
+        const compensated = workspaceStatus(root, {
+          providerObservation: plan.operation.kind === "configure" && plan.operation.providerObservationBound
+            ? plan.operation.providerObservation
+            : receipt.after?.provider,
+        });
+        if (receipt.after && compensated.observedHash === receipt.after.observedHash) {
+          receipt.compensationStatus = "completed";
+          receipt.compensationObservedHash = compensated.observedHash;
+        } else {
+          receipt.compensationStatus = "failed";
+        }
+      } catch {
+        receipt.compensationStatus = "failed";
+      }
+      receipt.error = error instanceof Error ? error.message : String(error);
+      writeReceipt(path, receipt);
+    }
+    throw error;
   } finally {
     releaseLock(lock);
   }
@@ -4285,6 +4420,22 @@ export function reviewWorkspace(args: {
   const status = workspaceStatus(args.projectRoot, {
     providerObservation: { kind: "none", configured: false, available: true, items: [] },
   });
+  const mutationLock = acquireLock(status.commonDir);
+  try {
+    requireMutationAllowed(resolveRepositoryContext(status.projectDir));
+    return reviewWorkspaceLocked(args, status);
+  } finally {
+    releaseLock(mutationLock);
+  }
+}
+
+function reviewWorkspaceLocked(args: {
+  projectRoot: string;
+  commit: string;
+  command: string[];
+  hostStateRoot?: string;
+  now?: Date;
+}, status: WorkspaceStatus): ReviewReceipt {
   const commit = git(status.projectDir, [
     "rev-parse",
     "--verify",

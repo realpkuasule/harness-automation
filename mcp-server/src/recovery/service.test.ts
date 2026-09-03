@@ -1,10 +1,148 @@
-import { describe, expect, it } from "vitest";
-import { recoveryExecutionAllowed, requireSafeModeCommand } from "./service.js";
+import { randomUUID } from "node:crypto";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { atomicWrite, hashObject, prettyJson, sha256 } from "../v2/fs.js";
+import {
+  acquireMutationLock,
+  createFileApplyJournal,
+  createRecoveryApproval,
+  inspectRecoveryState,
+  recordRecoveryApproval,
+  releaseMutationLock,
+  requireMutationAllowed,
+  requireSafeModeCommand,
+} from "./service.js";
+
+const roots: string[] = [];
+
+function context() {
+  const projectDir = mkdtempSync(join(tmpdir(), "harness-recovery-"));
+  roots.push(projectDir);
+  return { projectDir, commonDir: projectDir, repository: false };
+}
+
+function writeJournal(root: string, id: string, paths = ["generated.txt"]) {
+  const operations = paths.map((path) => ({ path, beforeHash: null, afterHash: sha256(`after:${path}`) }));
+  const journal = createFileApplyJournal({
+    recoveryId: randomUUID(), planHash: sha256(`plan:${id}`), operations,
+    status: "started", written: [paths[0]],
+  });
+  atomicWrite(join(root, ".harness", "changes", id, "apply.json"), prettyJson(journal));
+  return journal;
+}
+
+function approve(ctx: ReturnType<typeof context>, id: string, now = new Date("2026-01-01T00:00:00.000Z")) {
+  const finding = inspectRecoveryState(ctx).find((item) => item.id === id)!;
+  const approval = createRecoveryApproval({
+    context: ctx,
+    finding,
+    approvedBy: "owner",
+    approvedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 60_000).toISOString(),
+  });
+  recordRecoveryApproval(ctx, approval);
+  return approval;
+}
 
 describe("recovery safe mode", () => {
-  it("rejects mutation and requires semantic human approval for recovery execution", () => {
+  it("uses one shared mutation lock and rejects unapproved recovery", () => {
+    const ctx = context();
+    const lock = acquireMutationLock(ctx);
+    expect(() => acquireMutationLock(ctx)).toThrow("WORKSPACE_LOCKED");
+    releaseMutationLock(lock);
+
+    writeJournal(ctx.projectDir, "change-one");
     expect(() => requireSafeModeCommand("apply")).toThrow("SAFE_MODE_MUTATION_REJECTED");
-    expect(() => recoveryExecutionAllowed(undefined, "plan", "packet")).toThrow("RECOVERY_HUMAN_APPROVAL_REQUIRED");
-    expect(() => recoveryExecutionAllowed({ kind: "semantic-human-approval/3.0", planHash: "plan", packetHash: "packet", approvedBy: "owner", approvedAt: "2020-01-01T00:00:00.000Z", expiresAt: "2020-01-02T00:00:00.000Z" }, "plan", "packet")).toThrow("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+    expect(() => requireMutationAllowed(ctx)).toThrow("RECOVERY_REQUIRED");
+    expect(() => requireMutationAllowed(ctx, { kind: "file-apply", id: "change-one" }))
+      .toThrow("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+
+    const approval = approve(ctx, "change-one");
+    expect(() => requireMutationAllowed(ctx, {
+      kind: "file-apply", id: "change-one", approvalRef: approval.id,
+      now: new Date("2026-01-01T00:00:30.000Z"),
+    })).not.toThrow();
+    expect(() => requireMutationAllowed(ctx, {
+      kind: "file-apply", id: "change-one", approvalRef: approval.id,
+      now: new Date("2026-01-01T00:02:00.000Z"),
+    })).toThrow("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+  });
+
+  it("recovers one exact target even when another transaction is also pending", () => {
+    const ctx = context();
+    writeJournal(ctx.projectDir, "change-one");
+    writeJournal(ctx.projectDir, "change-two");
+    const approval = approve(ctx, "change-one");
+    expect(inspectRecoveryState(ctx)).toHaveLength(2);
+    expect(() => requireMutationAllowed(ctx, {
+      kind: "file-apply", id: "change-one", approvalRef: approval.id,
+      now: new Date("2026-01-01T00:00:30.000Z"),
+    })).not.toThrow();
+    expect(() => requireMutationAllowed(ctx, {
+      kind: "file-apply", id: "change-two", approvalRef: approval.id,
+      now: new Date("2026-01-01T00:00:30.000Z"),
+    })).toThrow("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+  });
+
+  it("requires a complete matching change receipt before ignoring a leftover apply journal", () => {
+    const ctx = context();
+    const journal = writeJournal(ctx.projectDir, "change-one", ["one.txt", "two.txt"]);
+    for (const operation of journal.operations) {
+      writeFileSync(join(ctx.projectDir, operation.path), `after:${operation.path}`);
+    }
+    atomicWrite(join(ctx.projectDir, ".harness", "changes", "change-one", "change.json"), prettyJson({
+      planHash: journal.planHash,
+      operations: journal.operations.slice(0, 1),
+    }));
+    expect(inspectRecoveryState(ctx)).toMatchObject([{ kind: "file-apply", id: "change-one" }]);
+    atomicWrite(join(ctx.projectDir, ".harness", "changes", "change-one", "change.json"), prettyJson({
+      planHash: journal.planHash,
+      operations: journal.operations,
+    }));
+    expect(inspectRecoveryState(ctx)).toEqual([]);
+  });
+
+  it("trusts only strict workspace receipts and never hides failed compensation", () => {
+    const ctx = context();
+    const receipts = join(ctx.commonDir, "harness", "worktree-delivery", "receipts");
+    mkdirSync(receipts, { recursive: true });
+    const base = {
+      schemaVersion: "worktree-delivery/1.0",
+      kind: "workspace-receipt",
+      id: "worktree-configure-2026-01-01T00-00-00-000Z-aaaaaaaaaaaa",
+      planHash: "a".repeat(64),
+      operation: "configure",
+      status: "failed",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      steps: [{ id: "write", status: "applied", detail: "config" }],
+      before: { observedHash: "b".repeat(64) },
+      beforeObservedHash: "b".repeat(64),
+      mutationStarted: true,
+      compensationStatus: "completed",
+      compensationObservedHash: "b".repeat(64),
+    };
+    writeFileSync(join(receipts, `${base.id}.json`), JSON.stringify(base));
+    expect(inspectRecoveryState(ctx)).toEqual([]);
+
+    writeFileSync(join(receipts, `${base.id}.json`), JSON.stringify({
+      ...base, status: "applied", compensationStatus: "failed",
+    }));
+    expect(inspectRecoveryState(ctx)).toMatchObject([{ kind: "workspace", id: base.id }]);
+
+    const malformedId = "worktree-configure-2026-01-01T00-00-01-000Z-bbbbbbbbbbbb";
+    writeFileSync(join(receipts, `${malformedId}.json`), JSON.stringify({ status: "applied" }));
+    expect(inspectRecoveryState(ctx).some((finding) => finding.kind === "invalid" && finding.id === malformedId)).toBe(true);
+  });
+
+  it("detects journal tampering", () => {
+    const ctx = context();
+    const journal = writeJournal(ctx.projectDir, "change-one");
+    const path = join(ctx.projectDir, ".harness", "changes", "change-one", "apply.json");
+    writeFileSync(path, prettyJson({ ...journal, written: ["other.txt"], journalHash: hashObject(journal) }));
+    expect(inspectRecoveryState(ctx)).toMatchObject([{ kind: "invalid", id: "change-one" }]);
   });
 });
+
+afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));

@@ -5,15 +5,30 @@ import { isAbsolute, resolve } from "node:path";
 export interface RepositoryContext {
   projectDir: string;
   commonDir: string;
+  repository: boolean;
 }
 
-/** Canonical repository identity for every mutation entrypoint. */
-export function resolveRepositoryContext(projectRoot: string): RepositoryContext {
+/** Canonical project identity; legacy non-Git v2 projects remain supported. */
+export function resolveProjectContext(projectRoot: string): RepositoryContext {
   const requested = realpathSync.native(resolve(projectRoot));
-  const projectDir = runGit(requested, ["rev-parse", "--show-toplevel"]).trim();
-  const commonDir = runGit(projectDir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim();
+  const root = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: requested, encoding: "utf8", timeout: 30_000 });
+  if (root.error) throw new Error(`ENVIRONMENT_BLOCKED: ${root.error.message}`);
+  if (root.status !== 0) return { projectDir: requested, commonDir: requested, repository: false };
+  const projectDir = root.stdout.trim();
+  const common = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+    cwd: projectDir, encoding: "utf8", timeout: 30_000,
+  });
+  if (common.error || common.status !== 0) throw new Error("REPOSITORY_CONTEXT_INVALID");
+  const commonDir = common.stdout.trim();
   if (!isAbsolute(projectDir) || !isAbsolute(commonDir)) throw new Error("REPOSITORY_CONTEXT_INVALID");
-  return { projectDir: realpathSync.native(projectDir), commonDir: realpathSync.native(commonDir) };
+  return { projectDir: realpathSync.native(projectDir), commonDir: realpathSync.native(commonDir), repository: true };
+}
+
+/** Git-dependent domains reject a non-repository instead of fabricating a common-dir. */
+export function resolveRepositoryContext(projectRoot: string): RepositoryContext {
+  const context = resolveProjectContext(projectRoot);
+  if (!context.repository) throw new Error("REPOSITORY_CONTEXT_INVALID");
+  return context;
 }
 
 export interface GitCommandResult {
