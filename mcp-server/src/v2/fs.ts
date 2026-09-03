@@ -3,15 +3,17 @@ import {
   existsSync,
   closeSync,
   fsyncSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
@@ -95,19 +97,35 @@ export function atomicWrite(path: string, content: string): void {
 
 /** Write a receipt exactly once and make both file and parent directory durable. */
 export function durableWriteOnce(path: string, content: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const descriptor = openSync(path, "wx");
+  const directoryPath = dirname(path);
+  mkdirSync(directoryPath, { recursive: true });
+  const stagingDirectory = dirname(directoryPath);
+  const temporary = join(stagingDirectory, `.${basename(path)}.harness-${process.pid}-${randomUUID()}.tmp`);
+  const descriptor = openSync(temporary, "wx");
   try {
-    writeFileSync(descriptor, content, "utf8");
-    fsyncSync(descriptor);
+    try {
+      writeFileSync(descriptor, content, "utf8");
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+    linkSync(temporary, path);
+    const directory = openSync(directoryPath, "r");
+    try {
+      fsyncSync(directory);
+    } finally {
+      closeSync(directory);
+    }
   } finally {
-    closeSync(descriptor);
-  }
-  const directory = openSync(dirname(path), "r");
-  try {
-    fsyncSync(directory);
-  } finally {
-    closeSync(directory);
+    if (existsSync(temporary)) {
+      unlinkSync(temporary);
+      const staging = openSync(stagingDirectory, "r");
+      try {
+        fsyncSync(staging);
+      } finally {
+        closeSync(staging);
+      }
+    }
   }
 }
 
