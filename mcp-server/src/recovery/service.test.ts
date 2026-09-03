@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { atomicWrite, hashObject, prettyJson, sha256 } from "../v2/fs.js";
+import { appendReceiptEvent } from "../receipt/service.js";
 import {
   acquireMutationLock,
   createFileApplyJournal,
@@ -159,12 +160,50 @@ describe("recovery safe mode", () => {
     expect(inspectRecoveryState(ctx).some((finding) => finding.kind === "invalid" && finding.id === malformedId)).toBe(true);
   });
 
+  it("does not treat unrelated legacy delivery receipts as workspace transactions", () => {
+    const ctx = context();
+    const receipts = join(ctx.commonDir, "harness", "worktree-delivery", "receipts");
+    mkdirSync(receipts, { recursive: true });
+    writeFileSync(join(receipts, "delivery-push-legacy.json"), "{}", "utf8");
+    expect(inspectRecoveryState(ctx)).toEqual([]);
+  });
+
   it("detects journal tampering", () => {
     const ctx = context();
     const journal = writeJournal(ctx.projectDir, "change-one");
     const path = join(ctx.projectDir, ".harness", "changes", "change-one", "apply.json");
     writeFileSync(path, prettyJson({ ...journal, written: ["other.txt"], journalHash: hashObject(journal) }));
     expect(inspectRecoveryState(ctx)).toMatchObject([{ kind: "invalid", id: "change-one" }]);
+  });
+
+  it("fails closed when an immutable workspace receipt chain is tampered", () => {
+    const ctx = context();
+    const id = "worktree-configure-2026-01-01T00-00-00-000Z-aaaaaaaaaaaa";
+    appendReceiptEvent({
+      root: ctx.commonDir,
+      domain: "workspace",
+      transactionId: id,
+      snapshot: {
+        schemaVersion: "worktree-delivery/1.0",
+        kind: "workspace-receipt",
+        id,
+        planHash: "a".repeat(64),
+        operation: "configure",
+        status: "failed",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        steps: [],
+        before: { observedHash: "b".repeat(64) },
+        beforeObservedHash: "b".repeat(64),
+        mutationStarted: false,
+        compensationStatus: "not-required",
+      },
+    });
+    writeFileSync(join(
+      ctx.commonDir, "harness", "receipts", "workspace", id, "events", "000000000001.json",
+    ), "{}", "utf8");
+    expect(inspectRecoveryState(ctx)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "invalid", id }),
+    ]));
   });
 });
 

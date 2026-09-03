@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmdirSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, rmdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import {
   durableWriteOnce,
@@ -8,7 +8,7 @@ import {
   readJson,
   safePath,
 } from "../v2/fs.js";
-import { readLatestReceiptEvent } from "../receipt/service.js";
+import { readLatestReceiptEvent, readLkgChain, readReceiptChain } from "../receipt/service.js";
 
 export const SAFE_MODE_COMMANDS = ["doctor", "audit", "plan", "receipt", "lkg", "recovery-plan", "recovery-verify"] as const;
 export type SafeModeCommand = typeof SAFE_MODE_COMMANDS[number];
@@ -381,6 +381,7 @@ interface WorkspaceRecoveryReceipt {
   steps: Array<{ id: string; status: string; detail: string }>;
   before?: { observedHash?: string };
   after?: { observedHash?: string };
+  rollbackAfter?: { observedHash?: string };
   beforeObservedHash?: string;
   mutationStarted?: boolean;
   compensationStatus?: string;
@@ -441,30 +442,86 @@ function workspacePacketHash(context: RecoveryContext, receipt: WorkspaceRecover
 export function inspectRecoveryState(context: RecoveryContext): RecoveryFinding[] {
   const findings: RecoveryFinding[] = [];
   const receipts = safePath(context.commonDir, "harness/worktree-delivery/receipts");
+  const workspaceReceiptIds = new Set<string>();
   if (existsSync(receipts)) {
-    for (const name of readdirSync(receipts).filter((entry) => entry.endsWith(".json"))) {
-      const receiptPath = safePath(receipts, name);
-      const id = name.slice(0, -5);
-      if (!/^worktree-[A-Za-z0-9._-]{1,200}$/u.test(id)) {
-        findings.push({ kind: "invalid", id: name, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-workspace-receipt/1.0", name }), evidenceHash: hashObject(name) });
-        continue;
+      if (!lstatSync(receipts).isDirectory()) throw new Error("WORKSPACE_RECEIPT_STORE_INVALID");
+      for (const name of readdirSync(receipts).filter((entry) => entry.endsWith(".json"))) {
+        const id = name.slice(0, -5);
+        if (/^worktree-[A-Za-z0-9._-]{1,120}$/u.test(id)) workspaceReceiptIds.add(id);
       }
-      try {
-        const receipt = readJson<WorkspaceRecoveryReceipt>(receiptPath);
-        validateWorkspaceReceipt(receipt, id);
-        if (workspaceNeedsRecovery(receipt)) {
-          findings.push({
-            kind: "workspace",
-            id,
-            planHash: receipt.planHash,
-            action: workspaceRecoveryAction(receipt),
-            packetHash: workspacePacketHash(context, receipt),
-            evidenceHash: hashObject(receipt),
-          });
+  }
+  const immutableWorkspaceReceipts = safePath(context.commonDir, "harness/receipts/workspace");
+  if (existsSync(immutableWorkspaceReceipts)) {
+    if (!lstatSync(immutableWorkspaceReceipts).isDirectory()) throw new Error("WORKSPACE_RECEIPT_STORE_INVALID");
+    for (const id of readdirSync(immutableWorkspaceReceipts)) workspaceReceiptIds.add(id);
+  }
+  let workspaceLkg: ReturnType<typeof readLkgChain> | null = null;
+  try {
+    workspaceLkg = readLkgChain({ root: context.commonDir, domain: "workspace" });
+  } catch {
+    findings.push({ kind: "invalid", id: "lkg:workspace", action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-lkg-chain/1.0", domain: "workspace" }), evidenceHash: hashObject("workspace") });
+  }
+  for (const id of workspaceReceiptIds) {
+    if (!/^worktree-[A-Za-z0-9._-]{1,120}$/u.test(id)) {
+      findings.push({ kind: "invalid", id, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-workspace-receipt/1.0", id }), evidenceHash: hashObject(id) });
+      continue;
+    }
+    const receiptPath = safePath(receipts, `${id}.json`);
+    try {
+      const projection = existsSync(receiptPath) ? readJson<unknown>(receiptPath) : undefined;
+      const immutablePath = safePath(context.commonDir, `harness/receipts/workspace/${id}`);
+      const latest = existsSync(immutablePath)
+        ? readLatestReceiptEvent<WorkspaceRecoveryReceipt>({
+            root: context.commonDir,
+            domain: "workspace",
+            transactionId: id,
+            ...(projection === undefined ? {} : { compatibilitySnapshot: projection }),
+          })
+        : null;
+      const receipt = (latest?.snapshot ?? projection) as WorkspaceRecoveryReceipt | undefined;
+      if (!receipt) throw new Error("WORKSPACE_RECEIPT_MISSING");
+      validateWorkspaceReceipt(receipt, id);
+      const stableObservedHash = receipt.status === "applied"
+        ? receipt.after?.observedHash
+        : receipt.status === "rolled-back"
+          ? receipt.rollbackAfter?.observedHash ?? receipt.after?.observedHash
+          : undefined;
+      const missingLkg = Boolean(latest && stableObservedHash && workspaceLkg &&
+        !workspaceLkg.some((record) => record.receiptEventHash === latest.eventHash &&
+          record.transactionId === id && record.planHash === receipt.planHash &&
+          record.observedHash === stableObservedHash));
+      if (workspaceNeedsRecovery(receipt) || missingLkg) {
+        findings.push({
+          kind: "workspace",
+          id,
+          planHash: receipt.planHash,
+          action: workspaceRecoveryAction(receipt),
+          packetHash: workspacePacketHash(context, receipt),
+          evidenceHash: hashObject(receipt),
+        });
+      }
+    } catch {
+      findings.push({ kind: "invalid", id, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-workspace-receipt/1.0", id }), evidenceHash: existsSync(receiptPath) ? fileHash(receiptPath) ?? hashObject(id) : hashObject(id) });
+    }
+  }
+
+  const receiptRoot = context.repository === false ? context.projectDir : context.commonDir;
+  const stateDirectory = context.repository === false ? ".harness" : "harness";
+  for (const domain of ["file-apply", "file-rollback"] as const) {
+    const directory = safePath(receiptRoot, `${stateDirectory}/receipts/${domain}`);
+    if (existsSync(directory)) {
+      for (const id of readdirSync(directory)) {
+        try {
+          readReceiptChain({ root: receiptRoot, stateDirectory, domain, transactionId: id });
+        } catch {
+          findings.push({ kind: "invalid", id: `${domain}:${id}`, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-receipt-chain/1.0", domain, id }), evidenceHash: hashObject({ domain, id }) });
         }
-      } catch {
-        findings.push({ kind: "invalid", id, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-workspace-receipt/1.0", id }), evidenceHash: fileHash(receiptPath) ?? hashObject(name) });
       }
+    }
+    try {
+      readLkgChain({ root: receiptRoot, stateDirectory, domain });
+    } catch {
+      findings.push({ kind: "invalid", id: `lkg:${domain}`, action: "quarantine-invalid-evidence", packetHash: hashObject({ kind: "invalid-lkg-chain/1.0", domain }), evidenceHash: hashObject(domain) });
     }
   }
 
@@ -525,7 +582,7 @@ export function requireMutationAllowed(
 ): void {
   const findings = inspectRecoveryState(context);
   if (findings.length === 0) return;
-  if (recovery) {
+  if (recovery && !findings.some((finding) => finding.kind === "invalid")) {
     const targets = findings.filter((finding) =>
       finding.kind === recovery.kind && finding.id === recovery.id && finding.action === recovery.action);
     if (targets.length === 1) {
