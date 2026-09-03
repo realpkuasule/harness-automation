@@ -46,6 +46,22 @@ describe("semantic approval", () => {
     expect(reviewSemanticApprovalWithHistory({ commonDir: root, packet: base(), adapter })).toMatchObject({ state: "NeedsHuman", code: "REVIEWER_ATTEMPT_LIMIT" });
   });
 
+  it("does not consume review attempts while DG-02 is unconfigured", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-approval-"));
+    roots.push(root);
+    expect(reviewSemanticApprovalWithHistory({ commonDir: root, packet: base() })).toMatchObject({ state: "ReviewPending" });
+    expect(reviewSemanticApprovalWithHistory({ commonDir: root, packet: base() })).toMatchObject({ state: "ReviewPending" });
+    const adapter = { identity: "reviewer", review: (packet: ReturnType<typeof base>) => ({
+      schemaVersion: "reviewer-verdict/1.0" as const, packetHash: packet.packetHash,
+      planHash: packet.planHash, inputHash: packet.inputHash, reviewerIdentity: "reviewer",
+      verdict: "reject" as const, reasonCodes: ["NO"],
+    }) };
+    expect(reviewSemanticApprovalWithHistory({ commonDir: root, packet: base(), adapter })).toMatchObject({ state: "ReviewPending" });
+    expect(reviewSemanticApprovalWithHistory({ commonDir: root, packet: base(), adapter })).toMatchObject({ state: "ReviewPending" });
+    expect(reviewSemanticApprovalWithHistory({ commonDir: root, packet: base(), adapter }))
+      .toMatchObject({ state: "NeedsHuman", code: "REVIEWER_ATTEMPT_LIMIT" });
+  });
+
   it("binds the reviewer verdict to the exact packet and rejects action or binding drift", () => {
     const packet = base();
     const adapter = { identity: "reviewer", review: () => ({

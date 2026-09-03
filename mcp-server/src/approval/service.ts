@@ -189,10 +189,14 @@ export function reviewSemanticApprovalWithHistory(args: {
   packet: SemanticApprovalPacket;
   adapter?: ReviewerAdapter;
 }): ApprovalResult {
-  const prior = approvalReceipts(args.commonDir).filter((receipt) => receipt.packetHash === args.packet.packetHash);
+  const prior = approvalReceipts(args.commonDir).filter((receipt) =>
+    receipt.packetHash === args.packet.packetHash && receipt.verdict !== undefined);
   if (prior.length >= 2) return { state: "NeedsHuman", code: "REVIEWER_ATTEMPT_LIMIT", packet: args.packet };
   const attempt = (prior.length + 1) as 1 | 2;
   const result = reviewSemanticApproval({ packet: args.packet, adapter: args.adapter, attempt });
+  // Only a verifier response consumes one of the two bounded re-review attempts.
+  // Missing configuration, self-review, and malformed packets must remain repairable.
+  if (!result.verdict) return result;
   const receipt: ApprovalAttemptReceipt = {
     schemaVersion: "approval-attempt/3.0", kind: "approval-attempt", id: `approval-${args.packet.packetHash.slice(0, 16)}-${attempt}`,
     packetHash: args.packet.packetHash, packet: args.packet, attempt, state: result.state, ...(result.code ? { code: result.code } : {}),
