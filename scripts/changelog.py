@@ -25,7 +25,7 @@ import sys
 from contextlib import nullcontext
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from local_tracking import atomic_write, locked, open_text_read, reject_symlink, storage_root
+from local_tracking import atomic_write, locked, open_text_read, reject_symlink, storage_root, unique_object
 
 LOCAL_ONLY = "--local-only" in sys.argv[1:]
 ARGV = [argument for argument in sys.argv[1:] if argument != "--local-only"]
@@ -77,7 +77,7 @@ def load() -> list[dict]:
             if not line:
                 continue
             try:
-                entry = json.loads(line)
+                entry = json.loads(line, object_pairs_hook=unique_object if LOCAL_ONLY else None)
                 entries.append(validate_entry(entry, number) if LOCAL_ONLY else entry)
             except json.JSONDecodeError as error:
                 if LOCAL_ONLY:
