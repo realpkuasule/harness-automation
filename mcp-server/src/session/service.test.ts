@@ -646,6 +646,112 @@ describe("session status", () => {
     expect(readdirOrEmpty(join(commonDir, "harness/session-handoff/receipts"))).toHaveLength(0);
   });
 
+  it("rejects a completed Local-only task before changing TASK, document, or receipts", async () => {
+    const local = await localFixture();
+    sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-completed" });
+    write(local.target, "docs/HANDOFF-local-P0-1.md", filledLocalDoc(local.receiptEventHash));
+    const commonDir = git(local.root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const boardPath = join(commonDir, "harness/local-tracking/TASK.json");
+    const docPath = join(local.target, "docs/HANDOFF-local-P0-1.md");
+    const board = JSON.parse(readFileSync(boardPath, "utf8")) as {
+      tasks: Array<{ id: string; status: string }>;
+    };
+    board.tasks.find((task) => task.id === "P0-1")!.status = "completed";
+    writeFileSync(boardPath, `${JSON.stringify(board, null, 2)}\n`, "utf8");
+    const before = {
+      board: readFileSync(boardPath, "utf8"),
+      doc: readFileSync(docPath, "utf8"),
+      receipts: readdirOrEmpty(join(commonDir, "harness/session-handoff/receipts")),
+    };
+
+    expect(() => sessionHandoff({
+      projectRoot: local.target,
+      workItem: local.workItem,
+      session: "local-completed",
+    })).toThrow("SESSION_LOCAL_TASK_STATUS_INVALID");
+    expect(readFileSync(boardPath, "utf8")).toBe(before.board);
+    expect(readFileSync(docPath, "utf8")).toBe(before.doc);
+    expect(readdirOrEmpty(join(commonDir, "harness/session-handoff/receipts"))).toEqual(before.receipts);
+  });
+
+  it("returns the authoritative receipt for an identical Local-only handoff retry", async () => {
+    const local = await localFixture();
+    sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-retry" });
+    write(local.target, "docs/HANDOFF-local-P0-1.md", filledLocalDoc(local.receiptEventHash));
+    const first = sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-retry" });
+    const commonDir = git(local.root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const receiptPath = join(commonDir, "harness/session-handoff/receipts", `${first.receipt!.id}.json`);
+    const stored = JSON.parse(readFileSync(receiptPath, "utf8")) as {
+      id: string;
+      handoffDocHash: string;
+      commit: string;
+      fromStatus: string;
+      toStatus: string;
+    };
+
+    const retried = sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-retry" });
+    expect(retried.receipt).toEqual({
+      id: stored.id,
+      handoffDocHash: stored.handoffDocHash,
+      commit: stored.commit,
+      fromStatus: stored.fromStatus,
+      toStatus: stored.toStatus,
+    });
+  });
+
+  it("rejects a same-document Local-only receipt owned by another session without writes", async () => {
+    const local = await localFixture();
+    sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-owner" });
+    write(local.target, "docs/HANDOFF-local-P0-1.md", filledLocalDoc(local.receiptEventHash));
+    const first = sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-owner" });
+    const commonDir = git(local.root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const boardPath = join(commonDir, "harness/local-tracking/TASK.json");
+    const docPath = join(local.target, "docs/HANDOFF-local-P0-1.md");
+    const receiptPath = join(commonDir, "harness/session-handoff/receipts", `${first.receipt!.id}.json`);
+    const before = {
+      board: readFileSync(boardPath, "utf8"),
+      doc: readFileSync(docPath, "utf8"),
+      receipt: readFileSync(receiptPath, "utf8"),
+    };
+
+    expect(() => sessionHandoff({
+      projectRoot: local.target,
+      workItem: local.workItem,
+      session: "local-other",
+    })).toThrow("SESSION_LOCAL_HANDOFF_RECEIPT_CONFLICT");
+    expect(readFileSync(boardPath, "utf8")).toBe(before.board);
+    expect(readFileSync(docPath, "utf8")).toBe(before.doc);
+    expect(readFileSync(receiptPath, "utf8")).toBe(before.receipt);
+  });
+
+  it("rejects a same-document Local-only receipt with a different commit without writes", async () => {
+    const local = await localFixture();
+    sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-commit" });
+    write(local.target, "docs/HANDOFF-local-P0-1.md", filledLocalDoc(local.receiptEventHash));
+    const first = sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-commit" });
+    const commonDir = git(local.root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const boardPath = join(commonDir, "harness/local-tracking/TASK.json");
+    const docPath = join(local.target, "docs/HANDOFF-local-P0-1.md");
+    const receiptPath = join(commonDir, "harness/session-handoff/receipts", `${first.receipt!.id}.json`);
+    const receipt = JSON.parse(readFileSync(receiptPath, "utf8")) as { commit: string };
+    receipt.commit = "0".repeat(40);
+    writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
+    const before = {
+      board: readFileSync(boardPath, "utf8"),
+      doc: readFileSync(docPath, "utf8"),
+      receipt: readFileSync(receiptPath, "utf8"),
+    };
+
+    expect(() => sessionHandoff({
+      projectRoot: local.target,
+      workItem: local.workItem,
+      session: "local-commit",
+    })).toThrow("SESSION_LOCAL_HANDOFF_RECEIPT_CONFLICT");
+    expect(readFileSync(boardPath, "utf8")).toBe(before.board);
+    expect(readFileSync(docPath, "utf8")).toBe(before.doc);
+    expect(readFileSync(receiptPath, "utf8")).toBe(before.receipt);
+  });
+
   it("rejects Local-only ready-for-review when the TASK status model has no mapping", async () => {
     const local = await localFixture();
     sessionHandoff({ projectRoot: local.target, workItem: local.workItem, session: "local-review" });

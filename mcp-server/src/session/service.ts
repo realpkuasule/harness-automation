@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { atomicWrite, readJson, safePath, sha256 } from "../v2/fs.js";
+import { atomicWrite, durableWriteOnce, readJson, safePath, sha256 } from "../v2/fs.js";
 import { readLkgChain, readReceiptChain } from "../receipt/service.js";
 import {
   localBoardSchema,
@@ -805,6 +805,9 @@ function localSessionHandoff(
     throw new Error(`SESSION_LOCAL_STATUS_UNSUPPORTED: ${toStatus} has no TASK.json status mapping`);
   }
   const { seed, evidence } = localSeed(root, loaded, workItem);
+  if (evidence.task.status !== "pending" && evidence.task.status !== "in_progress") {
+    throw new Error(`SESSION_LOCAL_TASK_STATUS_INVALID: ${evidence.task.status}`);
+  }
   const repositoryPath = resolve(git(root, ["rev-parse", "--show-toplevel"]).trim());
   if (repositoryPath !== resolve(evidence.lease.path) || currentBranchForSession(root) !== evidence.lease.branch) {
     throw new Error(`SESSION_LOCAL_BINDING_DRIFT: ${workItem.workItem}`);
@@ -853,6 +856,50 @@ function localSessionHandoff(
   const receiptId = `handoff-local-${workItem.id}-${handoffDocHash.slice(0, 12)}`;
   const fromStatus = evidence.task.status === "in_progress" ? "in-progress" : evidence.task.status;
   const receiptPreview = { id: receiptId, handoffDocHash, commit, fromStatus, toStatus };
+  const receiptPath = safePath(commonDir, `harness/session-handoff/receipts/${receiptId}.json`);
+  if (existsSync(receiptPath)) {
+    let stored: SessionReceipt;
+    try {
+      const metadata = lstatSync(receiptPath);
+      if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error("invalid receipt file");
+      const value = readJson<unknown>(receiptPath);
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid receipt body");
+      stored = value as SessionReceipt;
+    } catch {
+      throw new Error(`SESSION_LOCAL_HANDOFF_RECEIPT_CONFLICT: ${receiptId}`);
+    }
+    const stable = stored.schemaVersion === SESSION_HANDOFF_RECEIPT_SCHEMA_VERSION &&
+      stored.kind === "session-handoff-receipt" &&
+      stored.id === receiptId &&
+      stored.workItem === workItem.workItem &&
+      stored.session === sessionId &&
+      stored.handoffDocPath === relativeDocPath &&
+      stored.handoffDocHash === handoffDocHash &&
+      stored.commit === commit &&
+      Array.isArray(stored.receiptIds) && stored.receiptIds.every((value) => typeof value === "string") &&
+      JSON.stringify(stored.receiptIds) === JSON.stringify(finalValidation.receiptIds) &&
+      (stored.fromStatus === "pending" || stored.fromStatus === "in-progress") &&
+      stored.toStatus === toStatus &&
+      typeof stored.at === "string" && Number.isFinite(Date.parse(stored.at)) &&
+      evidence.task.status === "in_progress" &&
+      sha256(existing) === stored.handoffDocHash;
+    if (!stable) throw new Error(`SESSION_LOCAL_HANDOFF_RECEIPT_CONFLICT: ${receiptId}`);
+    return {
+      ok: true,
+      phase: "ready",
+      dryRun,
+      handoffDocPath: docPath,
+      seed,
+      receipt: {
+        id: stored.id,
+        handoffDocHash: stored.handoffDocHash,
+        commit: stored.commit,
+        fromStatus: stored.fromStatus,
+        toStatus: stored.toStatus,
+      },
+      nextSteps: ["新会话从本地 TASK、lease、Prepare 回执与 LKG 恢复，不以聊天摘要覆盖持久证据"],
+    };
+  }
   if (dryRun) {
     return {
       ok: true,
@@ -882,8 +929,7 @@ function localSessionHandoff(
     toStatus,
     at: new Date().toISOString(),
   };
-  const receiptPath = safePath(commonDir, `harness/session-handoff/receipts/${receiptId}.json`);
-  if (!existsSync(receiptPath)) atomicWrite(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+  durableWriteOnce(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
   return {
     ok: true,
     phase: "ready",
