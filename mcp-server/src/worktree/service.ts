@@ -74,6 +74,7 @@ import {
   worktreeHostBindingFile as hostBindingFile,
 } from "./config.js";
 import { runGit, runGitCommand, runGitToFile } from "../repository/git.js";
+import { createSemanticApprovalPacket, reviewSemanticApproval, type ApprovalActionKind } from "../approval/service.js";
 export { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
 import { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
 
@@ -2810,10 +2811,76 @@ export function reviewAndApplyWorkspacePlan(args: {
   if (!intent) throw new Error("WORKSPACE_AI_INTENT_REQUIRED");
   const binding = loadHostBinding(root, plan.commonDir);
   if (!binding.configured || binding.approval.mode !== "delegated-ai") {
-    throw new Error("WORKSPACE_AI_DELEGATION_NOT_ENABLED");
+    return { status: "ReviewPending", code: "DG02_REVIEWER_CONFIGURATION_REQUIRED" };
   }
   const policy = binding.approval;
   const now = args.now ?? new Date();
+  const unsafeDestructiveEvidence = destructiveAiEvidence(root, plan);
+  if (unsafeDestructiveEvidence && !unsafeDestructiveEvidence.safe) {
+    const decision = buildAiDecision({
+      plan, intent, policy, now, verdict: "deny", reasonCodes: ["DESTRUCTIVE_EVIDENCE_UNSAFE"],
+      summary: "Destructive delegation requires zero dirty, unique, unpushed, and ignored evidence.",
+    });
+    const decisionPath = aiDecisionFile(plan.commonDir, decision.id);
+    atomicWrite(decisionPath, prettyJson(decision));
+    return { status: "NeedsHuman", code: "HUMAN_APPROVAL_REQUIRED", decisionPath, decision };
+  }
+  const actionKinds: Partial<Record<WorkspacePlan["operation"]["kind"], ApprovalActionKind>> = {
+    allocate: "write", adopt: "adopt", rebind: "rebind", renew: "write", recover: "recover", close: "recover",
+  };
+  const packet = createSemanticApprovalPacket({
+    planHash: plan.planHash, inputHash: hashObject({ intent, observedHash: plan.observedHash }),
+    producerIdentity: "worktree-apply-ai", actions: [{
+      id: plan.operation.kind, kind: actionKinds[plan.operation.kind] ?? "protected",
+      summary: `Apply worktree ${plan.operation.kind}`, before: plan.observedHash, after: plan.planHash,
+      reversible: !["adopt", "recover", "close", "migrate"].includes(plan.operation.kind), recovery: "Use the exact transaction receipt.",
+    }],
+  });
+  const approval = reviewSemanticApproval({
+    packet,
+    adapter: {
+      identity: `legacy-claude:${policy.reviewer.model}`,
+      review: () => {
+        const createdAt = Date.parse(plan.createdAt);
+        if (!isDelegatableOperation(plan.operation.kind) || !policy.allowedOperations.includes(plan.operation.kind)) {
+          return { schemaVersion: "reviewer-verdict/1.0", planHash: packet.planHash, inputHash: packet.inputHash,
+            reviewerIdentity: `legacy-claude:${policy.reviewer.model}`, verdict: "reject", reasonCodes: ["OPERATION_NOT_DELEGATED"] };
+        }
+        if (!Number.isFinite(createdAt) || createdAt > now.getTime() || now.getTime() - createdAt > policy.planTtlSeconds * 1_000) {
+          return { schemaVersion: "reviewer-verdict/1.0", planHash: packet.planHash, inputHash: packet.inputHash,
+            reviewerIdentity: `legacy-claude:${policy.reviewer.model}`, verdict: "needs-human", reasonCodes: ["PLAN_EXPIRED"] };
+        }
+        if (destructiveAiEvidence(root, plan)?.safe === false) {
+          return { schemaVersion: "reviewer-verdict/1.0", planHash: packet.planHash, inputHash: packet.inputHash,
+            reviewerIdentity: `legacy-claude:${policy.reviewer.model}`, verdict: "reject", reasonCodes: ["DESTRUCTIVE_EVIDENCE_UNSAFE"] };
+        }
+        let output: z.infer<typeof aiReviewerOutputSchema>;
+        try {
+          output = runClaudeReviewer({ plan, intent, policy, destructiveEvidence: destructiveAiEvidence(root, plan) });
+        } catch (error) {
+          return { schemaVersion: "reviewer-verdict/1.0", planHash: packet.planHash, inputHash: packet.inputHash,
+            reviewerIdentity: `legacy-claude:${policy.reviewer.model}`, verdict: "needs-human",
+            reasonCodes: [error instanceof Error && error.message.startsWith("WORKSPACE_AI_REVIEWER_INVALID") ? "REVIEWER_INVALID" : "REVIEWER_UNAVAILABLE"] };
+        }
+        return {
+          schemaVersion: "reviewer-verdict/1.0", planHash: packet.planHash, inputHash: packet.inputHash,
+          reviewerIdentity: `legacy-claude:${policy.reviewer.model}`,
+          verdict: output.verdict === "approve" ? "approve" : output.verdict === "deny" ? "reject" : "needs-human",
+          reasonCodes: output.reasonCodes,
+        };
+      },
+    },
+  });
+  if (approval.state !== "Approved") {
+    const reasonCodes = approval.verdict?.reasonCodes ?? [approval.code ?? "REVIEW_PENDING"];
+    const decision = buildAiDecision({
+      plan, intent, policy, now, reasonCodes, summary: approval.code ?? "Independent review is pending.",
+      verdict: approval.verdict?.verdict === "reject" ? "deny" : "abstain",
+    });
+    const decisionPath = aiDecisionFile(plan.commonDir, decision.id);
+    atomicWrite(decisionPath, prettyJson(decision));
+    return { status: approval.state, code: approval.code, decisionPath, decision };
+  }
   let verdict: WorkspaceAiDecision["verdict"] = "abstain";
   let reasonCodes = ["REVIEWER_UNAVAILABLE"];
   let summary = "The delegated reviewer was not available.";
@@ -2832,21 +2899,7 @@ export function reviewAndApplyWorkspacePlan(args: {
     verdict = "deny";
     reasonCodes = ["DESTRUCTIVE_EVIDENCE_UNSAFE"];
     summary = "Destructive delegation requires zero dirty, unique, unpushed, and ignored evidence.";
-  } else {
-    try {
-      ({ verdict, reasonCodes, summary } = runClaudeReviewer({
-        plan,
-        intent,
-        policy,
-        destructiveEvidence,
-      }));
-    } catch (error) {
-      summary = error instanceof Error ? error.message : String(error);
-      reasonCodes = [summary.startsWith("WORKSPACE_AI_REVIEWER_INVALID")
-        ? "REVIEWER_INVALID"
-        : "REVIEWER_UNAVAILABLE"];
-    }
-  }
+  } else { verdict = "approve"; reasonCodes = approval.verdict?.reasonCodes ?? ["SEMANTIC_APPROVAL"]; summary = "The independent semantic reviewer approved the exact plan."; }
   const decision = buildAiDecision({
     plan,
     intent,
