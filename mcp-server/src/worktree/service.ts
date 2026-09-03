@@ -2821,6 +2821,10 @@ export function reviewAndApplyWorkspacePlan(args: {
   if (!binding.configured || binding.approval.mode !== "delegated-ai") {
     return { status: "ReviewPending", code: "DG02_REVIEWER_CONFIGURATION_REQUIRED" };
   }
+  // DG-02 requires an explicitly approved provider, model, credential reference, and
+  // private-content scope. Legacy host bindings carry none of that evidence.
+  const dg02Approved = false;
+  if (!dg02Approved) return { status: "ReviewPending", code: "DG02_REVIEWER_CONFIGURATION_REQUIRED" };
   const policy = binding.approval;
   const now = args.now ?? new Date();
   const unsafeDestructiveEvidence = destructiveAiEvidence(root, plan);
@@ -2950,6 +2954,7 @@ const workspaceReceiptOperations = new Set<WorkspaceReceipt["operation"]>([
   "configure", "migrate", "allocate", "adopt", "close", "rebind", "renew", "recover",
 ]);
 const workspaceReceiptId = /^worktree-[A-Za-z0-9._-]{1,120}$/u;
+const workspaceStateId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const workspaceDigest = /^[a-f0-9]{64}$/u;
 
 function assertWorkspaceReceipt(value: unknown, id: string): asserts value is WorkspaceReceipt {
@@ -3006,12 +3011,16 @@ function inspectWorkspaceReceipt(commonDir: string, id: string): {
   receipt: WorkspaceReceipt;
   event: ReceiptEvent<WorkspaceReceipt> | null;
 } | null {
-  if (!workspaceReceiptId.test(id)) throw new Error("WORKSPACE_RECEIPT_INVALID");
+  if (!workspaceStateId.test(id)) throw new Error("WORKSPACE_RECEIPT_INVALID");
   const key = { root: commonDir, domain: "workspace", transactionId: id };
   const path = receiptFile(commonDir, id);
+  const immutablePath = safePath(commonDir, `harness/receipts/workspace/${id}`);
+  if (!workspaceReceiptId.test(id)) {
+    if (!existsSync(path) && !existsSync(immutablePath)) return null;
+    throw new Error("WORKSPACE_RECEIPT_INVALID");
+  }
   const projected = existsSync(path) ? readJson<unknown>(path) : undefined;
   if (projected !== undefined) assertWorkspaceReceipt(projected, id);
-  const immutablePath = safePath(commonDir, `harness/receipts/workspace/${id}`);
   let latest: ReceiptEvent<WorkspaceReceipt> | null = null;
   if (existsSync(immutablePath)) {
     try {
@@ -3094,9 +3103,6 @@ function appliedReceipt(root: string, plan: WorkspacePlan): WorkspaceReceipt | n
     validateAdoptionReceipt(receipt, plan as WorkspacePlan & {
       operation: Extract<WorkspacePlan["operation"], { kind: "adopt" }>;
     });
-    if (receipt.status === "started") {
-      throw new Error(`WORKTREE_ADOPT_RECOVERY_REQUIRED: ${plan.id}`);
-    }
   }
   if (receipt.status === "applied" && receipt.after) {
     const current = workspaceStatus(root, {
@@ -3104,8 +3110,7 @@ function appliedReceipt(root: string, plan: WorkspacePlan): WorkspaceReceipt | n
       providerObservation:
         plan.operation.kind === "configure" && plan.operation.providerObservationBound
           ? plan.operation.providerObservation
-          : (plan.operation.kind === "allocate" || plan.operation.kind === "adopt") &&
-        plan.operation.providerObservationBound
+          : plan.operation.kind === "allocate" || plan.operation.kind === "adopt"
           ? receipt.after.provider
           : undefined,
     });
