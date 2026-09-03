@@ -20,15 +20,18 @@ export function loadLastKnownGood(commonDir: string): TransactionReceipt | null 
 }
 
 export interface RecoveryApproval {
-  kind: "semantic-human-approval/1.0";
+  kind: "semantic-human-approval/3.0";
   planHash: string;
   packetHash: string;
   approvedBy: string;
+  approvedAt: string;
+  expiresAt: string;
 }
 
 export function recoveryExecutionAllowed(approval: RecoveryApproval | undefined, planHash: string, packetHash: string): void {
-  if (!approval || approval.kind !== "semantic-human-approval/1.0" || !approval.approvedBy ||
-      approval.planHash !== planHash || approval.packetHash !== packetHash) {
+  if (!approval || approval.kind !== "semantic-human-approval/3.0" || !approval.approvedBy || approval.planHash !== planHash ||
+      approval.packetHash !== packetHash || !Number.isFinite(Date.parse(approval.approvedAt)) || !Number.isFinite(Date.parse(approval.expiresAt)) ||
+      Date.parse(approval.approvedAt) > Date.now() || Date.parse(approval.expiresAt) <= Date.now()) {
     throw new Error("RECOVERY_HUMAN_APPROVAL_REQUIRED");
   }
 }

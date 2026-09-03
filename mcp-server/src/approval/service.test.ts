@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { createSemanticApprovalPacket, reviewSemanticApproval } from "./service.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { createSemanticApprovalPacket, reviewSemanticApproval, reviewSemanticApprovalWithHistory } from "./service.js";
+
+const roots: string[] = [];
 
 const base = () => createSemanticApprovalPacket({
   planHash: "a".repeat(64), inputHash: "b".repeat(64), producerIdentity: "producer",
@@ -23,4 +28,15 @@ describe("semantic approval", () => {
     });
     expect(reviewSemanticApproval({ packet: protectedPacket })).toMatchObject({ state: "NeedsHuman", code: "HUMAN_APPROVAL_REQUIRED" });
   });
+
+  it("derives the bounded review attempt from durable history", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-approval-"));
+    roots.push(root);
+    const adapter = { identity: "reviewer", review: () => ({ schemaVersion: "reviewer-verdict/1.0" as const, planHash: base().planHash, inputHash: base().inputHash, reviewerIdentity: "reviewer", verdict: "reject" as const, reasonCodes: ["NO"] }) };
+    expect(reviewSemanticApprovalWithHistory({ commonDir: root, packet: base(), adapter })).toMatchObject({ state: "ReviewPending" });
+    expect(reviewSemanticApprovalWithHistory({ commonDir: root, packet: base(), adapter })).toMatchObject({ state: "ReviewPending" });
+    expect(reviewSemanticApprovalWithHistory({ commonDir: root, packet: base(), adapter })).toMatchObject({ state: "NeedsHuman", code: "REVIEWER_ATTEMPT_LIMIT" });
+  });
 });
+
+afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));

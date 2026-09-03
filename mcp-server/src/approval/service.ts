@@ -1,4 +1,5 @@
-import { hashObject } from "../v2/fs.js";
+import { existsSync, readdirSync } from "node:fs";
+import { durableWriteOnce, hashObject, prettyJson, readJson, safePath } from "../v2/fs.js";
 
 export type RiskClass = "read-only" | "ordinary-reversible" | "human-required" | "protected";
 export type ApprovalState = "Approved" | "ReviewPending" | "NeedsHuman";
@@ -46,6 +47,18 @@ export interface ApprovalResult {
   verdict?: ReviewerVerdict;
 }
 
+interface ApprovalAttemptReceipt {
+  schemaVersion: "approval-attempt/3.0";
+  kind: "approval-attempt";
+  id: string;
+  packetHash: string;
+  attempt: 1 | 2;
+  state: ApprovalState;
+  code?: ApprovalResult["code"];
+  verdict?: ReviewerVerdict;
+  receiptHash: string;
+}
+
 function packetWithoutHash(packet: SemanticApprovalPacket): Omit<SemanticApprovalPacket, "packetHash"> {
   const copy: Partial<SemanticApprovalPacket> = { ...packet };
   delete copy.packetHash;
@@ -88,14 +101,15 @@ export function reviewSemanticApproval(args: {
   if (packet.risk === "human-required" || packet.risk === "protected") {
     return { state: "NeedsHuman", code: "HUMAN_APPROVAL_REQUIRED", packet };
   }
-  if (args.attempt === 3) return { state: "NeedsHuman", code: "REVIEWER_ATTEMPT_LIMIT", packet };
+  if ((args.attempt ?? 1) > 2) return { state: "NeedsHuman", code: "REVIEWER_ATTEMPT_LIMIT", packet };
+  const attempt: 1 | 2 = args.attempt === 2 ? 2 : 1;
   if (!args.adapter) return { state: "ReviewPending", code: "DG02_REVIEWER_CONFIGURATION_REQUIRED", packet };
   if (args.adapter.identity === packet.producerIdentity) {
     return { state: "NeedsHuman", code: "REVIEWER_SELF_REVIEW", packet };
   }
   let verdict: ReviewerVerdict;
   try {
-    verdict = args.adapter.review(packet, args.attempt ?? 1);
+    verdict = args.adapter.review(packet, attempt);
   } catch {
     return { state: "ReviewPending", code: "DG02_REVIEWER_CONFIGURATION_REQUIRED", packet };
   }
@@ -106,4 +120,46 @@ export function reviewSemanticApproval(args: {
   return verdict.verdict === "needs-human"
     ? { state: "NeedsHuman", code: "HUMAN_APPROVAL_REQUIRED", packet, verdict }
     : { state: "ReviewPending", code: "REVIEWER_REJECTED", packet, verdict };
+}
+
+function approvalReceiptWithoutHash(receipt: ApprovalAttemptReceipt): Omit<ApprovalAttemptReceipt, "receiptHash"> {
+  const copy: Partial<ApprovalAttemptReceipt> = { ...receipt };
+  delete copy.receiptHash;
+  return copy as Omit<ApprovalAttemptReceipt, "receiptHash">;
+}
+
+function approvalReceipts(commonDir: string): ApprovalAttemptReceipt[] {
+  const directory = safePath(commonDir, "harness/approvals");
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory).filter((name) => name.endsWith(".json")).map((name) => {
+    const receipt = readJson<ApprovalAttemptReceipt>(safePath(directory, name));
+    if (receipt.schemaVersion !== "approval-attempt/3.0" || receipt.kind !== "approval-attempt" ||
+        receipt.receiptHash !== hashObject(approvalReceiptWithoutHash(receipt))) throw new Error("APPROVAL_HISTORY_TAMPERED");
+    return receipt;
+  });
+}
+
+/** The mutation caller derives attempts from append-only history; callers cannot reset it. */
+export function reviewSemanticApprovalWithHistory(args: {
+  commonDir: string;
+  packet: SemanticApprovalPacket;
+  adapter?: ReviewerAdapter;
+}): ApprovalResult {
+  const prior = approvalReceipts(args.commonDir).filter((receipt) => receipt.packetHash === args.packet.packetHash);
+  if (prior.length >= 2) return { state: "NeedsHuman", code: "REVIEWER_ATTEMPT_LIMIT", packet: args.packet };
+  const attempt = (prior.length + 1) as 1 | 2;
+  const result = reviewSemanticApproval({ packet: args.packet, adapter: args.adapter, attempt });
+  const receipt: ApprovalAttemptReceipt = {
+    schemaVersion: "approval-attempt/3.0", kind: "approval-attempt", id: `approval-${args.packet.packetHash.slice(0, 16)}-${attempt}`,
+    packetHash: args.packet.packetHash, attempt, state: result.state, ...(result.code ? { code: result.code } : {}),
+    ...(result.verdict ? { verdict: result.verdict } : {}), receiptHash: "",
+  };
+  receipt.receiptHash = hashObject(approvalReceiptWithoutHash(receipt));
+  try {
+    durableWriteOnce(safePath(args.commonDir, `harness/approvals/${receipt.id}.json`), prettyJson(receipt));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("APPROVAL_HISTORY_CONFLICT");
+    throw error;
+  }
+  return result;
 }

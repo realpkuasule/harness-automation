@@ -74,7 +74,7 @@ import {
   worktreeHostBindingFile as hostBindingFile,
 } from "./config.js";
 import { runGit, runGitCommand, runGitToFile } from "../repository/git.js";
-import { createSemanticApprovalPacket, reviewSemanticApproval, type ApprovalActionKind } from "../approval/service.js";
+import { createSemanticApprovalPacket, reviewSemanticApprovalWithHistory, type ApprovalActionKind } from "../approval/service.js";
 export { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
 import { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
 
@@ -2836,7 +2836,8 @@ export function reviewAndApplyWorkspacePlan(args: {
       reversible: !["adopt", "recover", "close", "migrate"].includes(plan.operation.kind), recovery: "Use the exact transaction receipt.",
     }],
   });
-  const approval = reviewSemanticApproval({
+  const approval = reviewSemanticApprovalWithHistory({
+    commonDir: plan.commonDir,
     packet,
     adapter: {
       identity: `legacy-claude:${policy.reviewer.model}`,

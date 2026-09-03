@@ -93,6 +93,24 @@ export function atomicWrite(path: string, content: string): void {
   }
 }
 
+/** Write a receipt exactly once and make both file and parent directory durable. */
+export function durableWriteOnce(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const descriptor = openSync(path, "wx");
+  try {
+    writeFileSync(descriptor, content, "utf8");
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  const directory = openSync(dirname(path), "r");
+  try {
+    fsyncSync(directory);
+  } finally {
+    closeSync(directory);
+  }
+}
+
 export function assertCurrentHash(path: string, expected: string | null): void {
   const actual = fileHash(path);
   if (actual !== expected) {
