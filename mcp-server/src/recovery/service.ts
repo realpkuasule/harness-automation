@@ -29,12 +29,21 @@ export function recoveryExecutionAllowed(approval: RecoveryApproval | undefined,
 /** Shared mutation boundary for existing domain-plan Apply paths. */
 export function inspectRecoveryState(context: { projectDir: string; commonDir: string }): void {
   const receipts = safePath(context.commonDir, "harness/worktree-delivery/receipts");
-  if (!existsSync(receipts)) return;
-  for (const name of readdirSync(receipts).filter((entry) => entry.endsWith(".json"))) {
-    const receipt = readJson<{ status?: string; id?: string }>(join(receipts, name));
-    if (receipt.status === "started" || receipt.status === "failed") {
-      throw new Error(`RECOVERY_REQUIRED: ${receipt.id ?? name}`);
+  if (existsSync(receipts)) {
+    for (const name of readdirSync(receipts).filter((entry) => entry.endsWith(".json"))) {
+      const receipt = readJson<{ status?: string; id?: string }>(join(receipts, name));
+      if (receipt.status === "started" || receipt.status === "failed") {
+        throw new Error(`RECOVERY_REQUIRED: ${receipt.id ?? name}`);
+      }
     }
+  }
+  const changes = safePath(context.projectDir, ".harness/changes");
+  if (!existsSync(changes)) return;
+  for (const id of readdirSync(changes)) {
+    const journal = join(changes, id, "apply.json");
+    if (!existsSync(journal)) continue;
+    const state = readJson<{ status?: string }>(journal);
+    if (state.status === "started" || state.status === "failed-uncompensated") throw new Error(`RECOVERY_REQUIRED: ${id}`);
   }
 }
 

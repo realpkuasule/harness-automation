@@ -1402,6 +1402,7 @@ function applyFilePlan(args: {
   const plan = readJson<ChangePlan>(safePath(root, args.planPath));
   validatePlan(root, plan, args.approval);
   const changeFile = harnessPath(root, `changes/${plan.id}/change.json`);
+  const journalFile = harnessPath(root, `changes/${plan.id}/apply.json`);
   if (existsSync(changeFile)) {
     const existing = readJson<AppliedChange>(changeFile);
     if (existing.planHash === plan.planHash && existing.operations.every((item) => fileHash(safePath(root, item.path)) === item.afterHash)) {
@@ -1409,24 +1410,33 @@ function applyFilePlan(args: {
     }
     throw new Error(`CHANGE_ID_CONFLICT: ${plan.id} was already applied but repository outputs have drifted`);
   }
+  const existingJournal = existsSync(journalFile) ? readJson<{ planHash: string; status: "started" | "failed-compensated" | "failed-uncompensated"; written: string[] }>(journalFile) : null;
+  if (existingJournal && (existingJournal.planHash !== plan.planHash || existingJournal.status !== "started")) throw new Error(`RECOVERY_REQUIRED: ${plan.id}`);
   validateUpdateTransition(root, plan);
   validateTypeScriptNamingTransition(root, plan);
-  for (const item of plan.operations) assertCurrentHash(safePath(root, item.path), item.beforeHash);
+  for (const item of plan.operations) {
+    const current = fileHash(safePath(root, item.path));
+    if (current !== item.beforeHash && (!existingJournal || current !== item.afterHash)) throw new Error(`RECOVERY_REQUIRED: ${item.path}`);
+  }
 
   const originals = plan.operations.map((item) => ({
     item,
     content: item.beforeHash === null ? null : readFileSync(safePath(root, item.path), "utf8"),
   }));
   const written: typeof originals = [];
+  const checkpoint = (status: "started" | "failed-compensated" | "failed-uncompensated", entries: string[]) => atomicWrite(journalFile, prettyJson({ planHash: plan.planHash, status, written: entries }));
+  checkpoint("started", existingJournal?.written ?? []);
   try {
     for (const original of originals) {
       const { item, content } = original;
+      if (fileHash(safePath(root, item.path)) === item.afterHash) continue;
       if (content !== null) {
         atomicWrite(harnessPath(root, `changes/${plan.id}/before/${item.path}`), content);
       }
       atomicWrite(safePath(root, item.path), item.content);
       assertCurrentHash(safePath(root, item.path), item.afterHash);
       written.push(original);
+      checkpoint("started", [...(existingJournal?.written ?? []), ...written.map((entry) => entry.item.path)]);
     }
     const verification = checkProject(root);
     if (!verification.ok) {
@@ -1436,11 +1446,14 @@ function applyFilePlan(args: {
       throw new Error(`POST_APPLY_VERIFICATION_FAILED: ${failures.join("; ")}`);
     }
   } catch (error) {
+    let uncompensated = false;
     for (const { item, content } of written.reverse()) {
       const target = safePath(root, item.path);
+      if (fileHash(target) !== item.afterHash) { uncompensated = true; continue; }
       if (content === null) rmSync(target, { force: true });
       else atomicWrite(target, content);
     }
+    checkpoint(uncompensated ? "failed-uncompensated" : "failed-compensated", [...(existingJournal?.written ?? []), ...written.map((entry) => entry.item.path)]);
     throw error;
   }
 
@@ -1458,6 +1471,7 @@ function applyFilePlan(args: {
     })),
   };
   atomicWrite(changeFile, prettyJson(change));
+  rmSync(journalFile, { force: true });
   return change;
 }
 
