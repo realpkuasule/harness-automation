@@ -1312,12 +1312,25 @@ describe("hash-approved worktree lifecycle", () => {
     })).toThrow(/WORKSPACE_DRIFT/);
   });
 
-  it("delegates an allocation to an isolated AI reviewer and records its authorization", () => {
+  it("keeps legacy delegated reviewers behind the DG-02 human gate", () => {
     installAiReviewer();
     const root = repository();
     const worktreePath = `${root}-ai-allocation`;
     repositories.push(worktreePath);
-    configure(root, { approval: delegatedApproval(["allocate", "renew"]) });
+    expect(() => planWorkspaceConfiguration({
+      projectRoot: root,
+      mode: "enforced",
+      allowedRoots: [join(root, "..")],
+      remoteBranchDeletion: false,
+      approval: delegatedApproval(["allocate", "renew"]),
+    })).toThrow(/DG02_REVIEWER_CONFIGURATION_REQUIRED/);
+    configure(root);
+    const bindingPath = workspaceStatus(root).hostBinding.path;
+    const binding = JSON.parse(readFileSync(bindingPath, "utf8")) as Record<string, unknown>;
+    writeFileSync(bindingPath, prettyJson({
+      ...binding,
+      approval: delegatedApproval(["allocate", "renew"]),
+    }));
     const planned = planWorkspaceAllocation({
       projectRoot: root,
       workItem: "github:example/project#ai-allocation",
@@ -1325,188 +1338,26 @@ describe("hash-approved worktree lifecycle", () => {
       path: worktreePath,
       owner: "PM",
     });
+    const inputFile = join(root, "reviewer-input.txt");
+    process.env.HARNESS_TEST_AI_INPUT_FILE = inputFile;
     expect(() => applyWorkspacePlan({
       projectRoot: root,
       planPath: planned.path,
       approval: planned.plan.planHash,
-    })).toThrow(/WORKSPACE_AI_AUTHORIZATION_REQUIRED/);
-
-    const inputFile = join(root, "reviewer-input.txt");
-    process.env.HARNESS_TEST_AI_INPUT_FILE = inputFile;
+    })).toThrow(/DG02_REVIEWER_CONFIGURATION_REQUIRED/);
     const result = reviewAndApplyWorkspacePlan({
       projectRoot: root,
       planPath: planned.path,
       intent: "Create one isolated workspace for Issue ai-allocation without changing main or remotes.",
     });
 
-    expect(result.decision).toMatchObject({
-      verdict: "approve",
-      planHash: planned.plan.planHash,
-      operation: "allocate",
-      reviewer: { kind: "claude", model: "test-reviewer" },
+    expect(result).toEqual({
+      status: "ReviewPending",
+      code: "DG02_REVIEWER_CONFIGURATION_REQUIRED",
     });
-    expect(result.decision.decisionHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(JSON.parse(readFileSync(result.decisionPath, "utf8"))).toEqual(result.decision);
-    expect(result.receipt).toMatchObject({
-      status: "applied",
-      authorizationMode: "delegated-ai",
-      authorizationDecisionHash: result.decision.decisionHash,
-      authorizationPolicyHash: result.decision.policyHash,
-    });
-    expect(readFileSync(inputFile, "utf8")).toContain(planned.plan.planHash);
-    expect(worktreeCount(root)).toBe(2);
-    expect(workspaceStatus(root).leases).toEqual([
-      expect.objectContaining({ workItem: "github:example/project#ai-allocation" }),
-    ]);
-    const renewal = planWorkspaceRenew({
-      projectRoot: root,
-      workItem: "github:example/project#ai-allocation",
-    });
-    expect(() => applyWorkspacePlan({
-      projectRoot: root,
-      planPath: renewal.path,
-      approval: renewal.plan.planHash,
-      authorization: { ...result.decision, planHash: renewal.plan.planHash, operation: "renew" },
-    })).toThrow(/WORKSPACE_AI_AUTHORIZATION_INVALID/);
-  });
-
-  it("fails closed for denied, expired, malformed, and out-of-scope AI reviews", () => {
-    installAiReviewer();
-    const root = repository();
-    configure(root, { approval: delegatedApproval(["renew"], 60) });
-    const allocation = planWorkspaceAllocation({
-      projectRoot: root,
-      workItem: "github:example/project#ai-denied",
-      branch: "issue-ai-denied",
-      path: `${root}-ai-denied`,
-      owner: "PM",
-      now: new Date("2030-01-01T00:00:00.000Z"),
-    });
-
-    const outOfScope = reviewAndApplyWorkspacePlan({
-      projectRoot: root,
-      planPath: allocation.path,
-      intent: "Allocate the requested worktree.",
-      now: new Date("2030-01-01T00:00:01.000Z"),
-    });
-    expect(outOfScope).toMatchObject({
-      decision: { verdict: "deny", reasonCodes: ["OPERATION_NOT_DELEGATED"] },
-    });
-    expect(outOfScope.receipt).toBeUndefined();
-    expect(worktreeCount(root)).toBe(1);
-
-    configure(root, { approval: delegatedApproval(["allocate"], 60) });
-    const expired = planWorkspaceAllocation({
-      projectRoot: root,
-      workItem: "github:example/project#ai-expired",
-      branch: "issue-ai-expired",
-      path: `${root}-ai-expired`,
-      owner: "PM",
-      now: new Date("2030-01-01T00:00:00.000Z"),
-    });
-    const expiredReview = reviewAndApplyWorkspacePlan({
-      projectRoot: root,
-      planPath: expired.path,
-      intent: "Allocate the requested worktree.",
-      now: new Date("2030-01-01T00:02:00.000Z"),
-    });
-    expect(expiredReview).toMatchObject({
-      decision: { verdict: "abstain", reasonCodes: ["PLAN_EXPIRED"] },
-    });
-    expect(expiredReview.receipt).toBeUndefined();
-
-    const malformed = planWorkspaceAllocation({
-      projectRoot: root,
-      workItem: "github:example/project#ai-malformed",
-      branch: "issue-ai-malformed",
-      path: `${root}-ai-malformed`,
-      owner: "PM",
-    });
-    process.env.HARNESS_TEST_AI_INVALID = "1";
-    const malformedReview = reviewAndApplyWorkspacePlan({
-      projectRoot: root,
-      planPath: malformed.path,
-      intent: "Allocate the requested worktree.",
-    });
-    expect(malformedReview).toMatchObject({
-      decision: { verdict: "abstain", reasonCodes: ["REVIEWER_INVALID"] },
-    });
-    expect(malformedReview.receipt).toBeUndefined();
+    expect(existsSync(inputFile)).toBe(false);
     expect(worktreeCount(root)).toBe(1);
     expect(workspaceStatus(root).leases).toHaveLength(0);
-  });
-
-  it("rechecks workspace drift after AI approval before applying", () => {
-    installAiReviewer();
-    const root = repository();
-    const worktreePath = `${root}-ai-renew`;
-    repositories.push(worktreePath);
-    configure(root, { approval: delegatedApproval(["allocate", "renew"]) });
-    const allocation = planWorkspaceAllocation({
-      projectRoot: root,
-      workItem: "github:example/project#ai-renew",
-      branch: "issue-ai-renew",
-      path: worktreePath,
-      owner: "PM",
-    });
-    reviewAndApplyWorkspacePlan({
-      projectRoot: root,
-      planPath: allocation.path,
-      intent: "Create the isolated Issue workspace.",
-    });
-    const renewal = planWorkspaceRenew({
-      projectRoot: root,
-      workItem: "github:example/project#ai-renew",
-    });
-    process.env.HARNESS_TEST_AI_DRIFT_PATH = join(worktreePath, "reviewer-drift.txt");
-
-    expect(() => reviewAndApplyWorkspacePlan({
-      projectRoot: root,
-      planPath: renewal.path,
-      intent: "Renew only the active lease heartbeat.",
-    })).toThrow(/WORKSPACE_DRIFT/);
-    expect(workspaceStatus(root).leases[0].heartbeatAt)
-      .toBe((allocation.plan.operation as { lease: { heartbeatAt: string } }).lease.heartbeatAt);
-  });
-
-  it("denies destructive AI recovery when ignored or unreachable content exists", () => {
-    installAiReviewer();
-    const root = repository();
-    configure(root, { approval: delegatedApproval(["recover"]) });
-    const ignoredPath = `${root}-ai-recover-ignored`;
-    repositories.push(ignoredPath);
-    git(root, "worktree", "add", "--detach", ignoredPath, "HEAD");
-    writeFileSync(join(root, ".git", "info", "exclude"), "ignored.bin\n", "utf8");
-    writeFileSync(join(ignoredPath, "ignored.bin"), "valuable ignored content\n", "utf8");
-    const ignoredPlan = planWorkspaceRecover({ projectRoot: root, path: ignoredPath });
-    const ignoredReview = reviewAndApplyWorkspacePlan({
-      projectRoot: root,
-      planPath: ignoredPlan.path,
-      intent: "Remove the clean detached residual worktree.",
-    });
-    expect(ignoredReview.decision).toMatchObject({
-      verdict: "deny",
-      reasonCodes: ["DESTRUCTIVE_EVIDENCE_UNSAFE"],
-    });
-    expect(existsSync(ignoredPath)).toBe(true);
-
-    const uniquePath = `${root}-ai-recover-unique`;
-    repositories.push(uniquePath);
-    git(root, "worktree", "add", "--detach", uniquePath, "HEAD");
-    writeFileSync(join(uniquePath, "unique.txt"), "unique commit\n", "utf8");
-    git(uniquePath, "add", "unique.txt");
-    git(uniquePath, "commit", "-m", "test: unique detached work");
-    const uniquePlan = planWorkspaceRecover({ projectRoot: root, path: uniquePath });
-    const uniqueReview = reviewAndApplyWorkspacePlan({
-      projectRoot: root,
-      planPath: uniquePlan.path,
-      intent: "Remove the clean detached residual worktree.",
-    });
-    expect(uniqueReview.decision).toMatchObject({
-      verdict: "deny",
-      reasonCodes: ["DESTRUCTIVE_EVIDENCE_UNSAFE"],
-    });
-    expect(existsSync(uniquePath)).toBe(true);
   });
 
   it("fails closed when enforced policy has no host-local path binding", () => {

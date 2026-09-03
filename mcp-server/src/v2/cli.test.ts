@@ -269,7 +269,7 @@ describe("v2 CLI forward flow", () => {
     ]);
   }, 30_000);
 
-  it("runs portable worktree audit without PRD and applies exact-hash configuration", () => {
+  it("runs portable worktree audit and keeps delegated review behind DG-02", () => {
     const root = mkdtempSync(join(tmpdir(), "harness-cli-worktree-"));
     projects.push(root);
     execFileSync("git", ["init", "-b", "main"], { cwd: root });
@@ -281,7 +281,7 @@ describe("v2 CLI forward flow", () => {
 
     expect(run(root, ["worktree", "status"]).configured).toBe(false);
     expect(run(root, ["worktree", "audit"]).passing).toBe(true);
-    const planned = run(root, [
+    expect(() => run(root, [
       "worktree",
       "configure",
       "--mode",
@@ -298,6 +298,18 @@ describe("v2 CLI forward flow", () => {
       "allocate",
       "--delegate-operation",
       "renew",
+    ])).toThrow(/DG02_REVIEWER_CONFIGURATION_REQUIRED/);
+    const planned = run(root, [
+      "worktree",
+      "configure",
+      "--mode",
+      "enforced",
+      "--management-branch",
+      "main",
+      "--allow-root",
+      join(root, ".."),
+      "--approval-mode",
+      "manual",
     ]);
     expect(planned.operation).toBe("configure");
     expect(planned.summary).toMatchObject({ risk: "high" });
@@ -312,11 +324,7 @@ describe("v2 CLI forward flow", () => {
       configured: true,
       config: { managementBranch: "main" },
       hostBinding: {
-        approval: {
-          mode: "delegated-ai",
-          reviewer: { kind: "claude", model: "test-reviewer" },
-          allowedOperations: ["allocate", "renew"],
-        },
+        approval: { mode: "manual" },
       },
     });
   }, 15_000);

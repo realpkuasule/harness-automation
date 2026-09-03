@@ -1135,6 +1135,9 @@ export function planWorkspaceConfiguration(args: {
     });
     topology = status.topology;
   }
+  if (hostBinding.approval.mode === "delegated-ai") {
+    throw new Error("DG02_REVIEWER_CONFIGURATION_REQUIRED");
+  }
   const content = prettyJson(config);
   const hostBindingContent = prettyJson(hostBinding);
   const operation: WorkspacePlan["operation"] = {
@@ -2789,7 +2792,7 @@ function workspaceAuthorization(args: {
     if (args.decision) throw new Error("WORKSPACE_AI_DELEGATION_NOT_ENABLED");
     return undefined;
   }
-  return validateAiAuthorization(args.plan, binding.approval, args.decision, args.now);
+  throw new Error("DG02_REVIEWER_CONFIGURATION_REQUIRED");
 }
 
 function receiptAuthorization(decision?: WorkspaceAiDecision): Pick<
@@ -2823,10 +2826,12 @@ export function reviewAndApplyWorkspacePlan(args: {
   if (!binding.configured || binding.approval.mode !== "delegated-ai") {
     return { status: "ReviewPending", code: "DG02_REVIEWER_CONFIGURATION_REQUIRED" };
   }
-  // DG-02 requires an explicitly approved provider, model, credential reference, and
-  // private-content scope. Legacy host bindings carry none of that evidence.
-  const dg02Approved = false;
-  if (!dg02Approved) return { status: "ReviewPending", code: "DG02_REVIEWER_CONFIGURATION_REQUIRED" };
+  // Legacy bindings lack the human-approved provider, credential, private-content scope,
+  // and trust evidence required by DG-02. Apply independently enforces the same gate.
+  const legacyBindingHasDg02Evidence = false;
+  if (!legacyBindingHasDg02Evidence) {
+    return { status: "ReviewPending", code: "DG02_REVIEWER_CONFIGURATION_REQUIRED" };
+  }
   const policy = binding.approval;
   const now = args.now ?? new Date();
   const unsafeDestructiveEvidence = destructiveAiEvidence(root, plan);
@@ -3829,6 +3834,9 @@ function applyWorkspacePlanLocked(
       const hostBindingTarget = safePath(plan.commonDir, plan.operation.hostBindingPath);
       const plannedConfig = validConfig(JSON.parse(plan.operation.content));
       const plannedBinding = validHostBinding(JSON.parse(plan.operation.hostBindingContent));
+      if (plannedBinding.approval.mode === "delegated-ai") {
+        throw new Error("DG02_REVIEWER_CONFIGURATION_REQUIRED");
+      }
       if (plannedBinding.topology) {
         containerTopology(
           root,
