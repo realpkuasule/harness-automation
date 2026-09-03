@@ -178,21 +178,35 @@ function approvalReceipts(commonDir: string): ApprovalAttemptReceipt[] {
   try {
     const lkg = readLkgChain({ root: commonDir, domain: "approval" });
     const receipts: ApprovalAttemptReceipt[] = [];
+    let repairedTail = false;
     for (const packetHash of readdirSync(directory)) {
       if (!/^[a-f0-9]{64}$/u.test(packetHash)) throw new Error("APPROVAL_HISTORY_TAMPERED");
       const events = readReceiptChain<ApprovalAttemptReceipt>({ root: commonDir, domain: "approval", transactionId: packetHash });
       const records = lkg.filter((record) => record.transactionId === packetHash);
-      if (events.length !== records.length || events.length > 2) throw new Error("APPROVAL_HISTORY_TAMPERED");
+      if (events.length > 2 || records.length > events.length) throw new Error("APPROVAL_HISTORY_TAMPERED");
+      const recordsMatchEvents = records.every((record, index) => record.sequence === events[index]?.sequence &&
+        record.receiptEventHash === events[index]?.eventHash && record.planHash === events[index]?.snapshot.packet.planHash &&
+        record.observedHash === packetHash);
+      if (!recordsMatchEvents) throw new Error("APPROVAL_HISTORY_TAMPERED");
+      if (records.length === events.length - 1) {
+        const event = events.at(-1)!;
+        if (!validApprovalReceipt(event.snapshot, packetHash, event.sequence)) throw new Error("APPROVAL_HISTORY_TAMPERED");
+        appendLkgRecord({
+          root: commonDir, domain: "approval", transactionId: packetHash,
+          appliedReceiptEventHash: event.eventHash, planHash: event.snapshot.packet.planHash, observedHash: packetHash,
+        });
+        repairedTail = true;
+        continue;
+      }
+      if (records.length !== events.length) throw new Error("APPROVAL_HISTORY_TAMPERED");
       for (const event of events) {
-        if (!validApprovalReceipt(event.snapshot, packetHash, event.sequence) ||
-            !records.some((record) => record.sequence === event.sequence && record.receiptEventHash === event.eventHash &&
-              record.planHash === event.snapshot.packet.planHash && record.observedHash === packetHash)) {
+        if (!validApprovalReceipt(event.snapshot, packetHash, event.sequence)) {
           throw new Error("APPROVAL_HISTORY_TAMPERED");
         }
         receipts.push(event.snapshot);
       }
     }
-    return receipts;
+    return repairedTail ? approvalReceipts(commonDir) : receipts;
   } catch {
     throw new Error("APPROVAL_HISTORY_TAMPERED");
   }

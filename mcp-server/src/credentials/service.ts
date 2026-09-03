@@ -98,6 +98,10 @@ export function runWithCredential(args: {
   testAdapter?: CredentialTestAdapter;
   now?: Date;
 }): { status: number | null; stdout: string; stderr: string; credentialRef: string; identity: string; expiresAt: string } {
+  // DG-02 is checked before any test or production probe can resolve or expose a reviewer secret.
+  if (args.purpose === "reviewer" || args.ref.purpose === "reviewer") {
+    throw new Error("DG02_REVIEWER_CONFIGURATION_REQUIRED");
+  }
   let resolved: ResolvedCredential;
   try {
     resolved = args.resolver.resolve(args.ref);

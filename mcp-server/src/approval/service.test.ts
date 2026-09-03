@@ -76,6 +76,22 @@ describe("semantic approval", () => {
     expect(() => reviewSemanticApprovalWithHistory({ commonDir: root, packet, adapter })).toThrow("APPROVAL_HISTORY_TAMPERED");
   });
 
+  it("repairs only a valid receipt tail whose LKG record was interrupted", () => {
+    const root = mkdtempSync(join(tmpdir(), "harness-approval-"));
+    roots.push(root);
+    const packet = base();
+    const adapter = { identity: "reviewer", review: () => ({
+      schemaVersion: "reviewer-verdict/1.0" as const, packetHash: packet.packetHash,
+      planHash: packet.planHash, inputHash: packet.inputHash, reviewerIdentity: "reviewer",
+      verdict: "reject" as const, reasonCodes: ["NO"],
+    }) };
+    reviewSemanticApprovalWithHistory({ commonDir: root, packet, adapter });
+    rmSync(join(root, "harness", "lkg", "approval", "records", "000000000001.json"));
+    expect(reviewSemanticApprovalWithHistory({ commonDir: root, packet, adapter })).toMatchObject({ state: "ReviewPending" });
+    expect(reviewSemanticApprovalWithHistory({ commonDir: root, packet, adapter }))
+      .toMatchObject({ state: "NeedsHuman", code: "REVIEWER_ATTEMPT_LIMIT" });
+  });
+
   it("binds the reviewer verdict to the exact packet and rejects action or binding drift", () => {
     const packet = base();
     const adapter = { identity: "reviewer", review: () => ({

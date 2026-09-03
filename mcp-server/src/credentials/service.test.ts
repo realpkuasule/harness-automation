@@ -56,6 +56,7 @@ describe("credentials", () => {
     expect(() => runWithCredential({
       ref: reviewer, purpose: "reviewer", resolver: { resolve: () => ({ ref: reviewer, secret: "secret" }) },
       command: "reviewer", argv: [], requiredCapability: "issues:write",
+      testAdapter: { probe: () => { throw new Error("TEST_PROBE_MUST_NOT_RUN"); } },
       runner: () => { throw new Error("REVIEWER_MUST_NOT_RUN"); },
     })).toThrow("DG02_REVIEWER_CONFIGURATION_REQUIRED");
   });
