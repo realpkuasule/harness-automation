@@ -275,6 +275,22 @@ describe("recovery safe mode", () => {
     expect(inspectRecoveryState(ctx)).toEqual([]);
     expect(existsSync(join(ctx.projectDir, ".harness", "receipts", "recovery-quarantine", approval.id, "events", "000000000002.json"))).toBe(true);
   });
+
+  it("rejects a quarantine approval when the invalid evidence changes", () => {
+    const ctx = context();
+    const journal = writeJournal(ctx.projectDir, "change-one");
+    const path = join(ctx.projectDir, ".harness", "changes", "change-one", "apply.json");
+    writeFileSync(path, prettyJson({ ...journal, written: ["other.txt"] }));
+    const finding = inspectRecoveryState(ctx).find((item) => item.kind === "invalid")!;
+    const approval = createRecoveryApproval({
+      context: ctx, finding, approvedBy: "owner", approvedAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-01-01T00:01:00.000Z",
+    });
+    recordRecoveryApproval(ctx, approval);
+    writeFileSync(path, prettyJson({ ...journal, written: ["another.txt"] }));
+    expect(() => quarantineInvalidEvidence(ctx, approval.id, finding.id, new Date("2026-01-01T00:00:30.000Z")))
+      .toThrow("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+    expect(existsSync(path)).toBe(true);
+  });
 });
 
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
