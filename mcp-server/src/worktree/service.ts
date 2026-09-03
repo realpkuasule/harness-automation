@@ -65,19 +65,20 @@ import {
   WORKTREE_DELEGATABLE_OPERATIONS,
 } from "./types.js";
 import { commandJson, observeProvider } from "./provider.js";
+import {
+  HOST_BINDING_PATH,
+  loadWorktreeConfig,
+  loadWorktreeHostBinding,
+  validWorktreeConfig as validConfig,
+  validWorktreeHostBinding as validHostBinding,
+  worktreeHostBindingFile as hostBindingFile,
+} from "./config.js";
+import { runGit, runGitCommand, runGitToFile } from "../repository/git.js";
+export { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
+import { githubEndpointRepository, remotePushEndpoint, remoteRefHead } from "../repository/remote.js";
 
 function git(cwd: string, args: string[], allowFailure = false): string {
-  const result = spawnSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    maxBuffer: 10 * 1024 * 1024,
-    timeout: 30_000,
-  });
-  if (result.error || (!allowFailure && result.status !== 0)) {
-    const detail = `${result.stderr ?? result.stdout ?? result.error ?? ""}`.trim();
-    throw new Error(`GIT_COMMAND_FAILED: git ${args.join(" ")}: ${detail}`);
-  }
-  return result.status === 0 ? result.stdout : "";
+  return runGit(cwd, args, { allowFailure });
 }
 
 function gitCommand(cwd: string, args: string[], env: NodeJS.ProcessEnv): {
@@ -86,19 +87,7 @@ function gitCommand(cwd: string, args: string[], env: NodeJS.ProcessEnv): {
   stderr: string;
   error: string | null;
 } {
-  const result = spawnSync("git", args, {
-    cwd,
-    env,
-    encoding: "buffer",
-    maxBuffer: 10 * 1024 * 1024,
-    timeout: 30_000,
-  });
-  return {
-    status: result.status,
-    stdout: Buffer.isBuffer(result.stdout) ? result.stdout.toString("utf8") : String(result.stdout ?? ""),
-    stderr: Buffer.isBuffer(result.stderr) ? result.stderr.toString("utf8") : String(result.stderr ?? ""),
-    error: result.error ? result.error.message : null,
-  };
+  return runGitCommand(cwd, args, env);
 }
 
 function removeTemporaryTree(path: string): void {
@@ -117,17 +106,7 @@ function gitDirtyPatch(cwd: string, args: string[], allowFailure = false): {
   const path = join(tmpdir(), `harness-dirty-patch-${process.pid}-${randomUUID()}`);
   const output = openSync(path, "wx+");
   try {
-    const result = spawnSync("git", args, {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", output, "pipe"],
-      timeout: 30_000,
-    });
-    if (result.error || (!allowFailure && result.status !== 0)) {
-      const detail = `${result.stderr ?? result.error ?? ""}`.trim();
-      throw new Error(`GIT_COMMAND_FAILED: git ${args.join(" ")}: ${detail}`);
-    }
-    if (result.status !== 0) return { size: 0, sha256: sha256("") };
+    if (runGitToFile(cwd, args, output, allowFailure) !== 0) return { size: 0, sha256: sha256("") };
 
     const hash = createHash("sha256");
     const buffer = Buffer.allocUnsafe(64 * 1024);
@@ -238,87 +217,6 @@ function gitCommonDir(root: string): string {
   return canonicalPath(commonDir);
 }
 
-function defaultConfig(): WorktreeDeliveryConfig {
-  return {
-    schemaVersion: WORKTREE_SCHEMA_VERSION,
-    mode: "audit-only",
-    maxPersistentWorktrees: 2,
-    leaseTtlHours: 72,
-    reviewTtlMinutes: 120,
-    remoteBranchRetentionDays: 1,
-    remoteBranchDeletion: true,
-    provider: { kind: "none" },
-  };
-}
-
-const uniqueAbsolutePaths = z.array(z.string().min(1)).min(1)
-  .refine((paths) => paths.every(isAbsolute), "must contain only absolute paths")
-  .refine((paths) => new Set(paths).size === paths.length, "must contain unique paths");
-
-const providerSchema = z.object({
-  kind: z.enum(["none", "github", "gitlab", "jira"]),
-  repository: z.string().min(1).optional(),
-  project: z.object({
-    owner: z.string().min(1),
-    number: z.number().int().positive(),
-    statusField: z.string().min(1),
-    doneValues: z.array(z.string().min(1)).min(1)
-      .refine((values) => new Set(values).size === values.length, "must be unique"),
-  }).strict().optional(),
-}).strict().superRefine((provider, context) => {
-  if (provider.kind !== "none" && !provider.repository?.trim()) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["repository"],
-      message: "is required for configured providers",
-    });
-  }
-});
-
-const worktreeConfigShape = {
-  schemaVersion: z.literal(WORKTREE_SCHEMA_VERSION),
-  mode: z.enum(["audit-only", "enforced"]),
-  managementBranch: z.string().trim().min(1).optional(),
-  maxPersistentWorktrees: z.number().int().positive(),
-  leaseTtlHours: z.number().int().positive(),
-  reviewTtlMinutes: z.number().int().positive(),
-  remoteBranchRetentionDays: z.number().int().positive(),
-  remoteBranchDeletion: z.boolean(),
-  provider: providerSchema,
-};
-
-const worktreeConfigSchema = z.object(worktreeConfigShape).strict();
-const legacyWorktreeConfigSchema = z.object({
-  ...worktreeConfigShape,
-  allowedRoots: uniqueAbsolutePaths,
-  protectedRoots: uniqueAbsolutePaths,
-}).strict();
-const hostBindingSchema = z.object({
-  schemaVersion: z.literal(WORKTREE_SCHEMA_VERSION),
-  allowedRoots: uniqueAbsolutePaths,
-  protectedRoots: uniqueAbsolutePaths,
-  topology: z.object({
-    kind: z.literal("container-v1"),
-    workspaceContainer: z.string().min(1).refine(isAbsolute, "must be absolute"),
-    managementCheckout: z.string().min(1).refine(isAbsolute, "must be absolute"),
-    persistentWorktreeRoot: z.string().min(1).refine(isAbsolute, "must be absolute"),
-  }).strict().optional(),
-  approval: z.discriminatedUnion("mode", [
-    z.object({ mode: z.literal("manual") }).strict(),
-    z.object({
-      mode: z.literal("delegated-ai"),
-      reviewer: z.object({
-        kind: z.literal("claude"),
-        model: z.string().trim().min(1),
-      }).strict(),
-      allowedOperations: z.array(z.enum(WORKTREE_DELEGATABLE_OPERATIONS)).min(1)
-        .refine((operations) => new Set(operations).size === operations.length, "must be unique"),
-      planTtlSeconds: z.number().int().min(30).max(3600),
-      reviewerTimeoutSeconds: z.number().int().min(10).max(600),
-    }).strict(),
-  ]).optional(),
-}).strict();
-
 const adoptionInputSchema = z.object({
   workItem: z.string().trim().min(1),
   owner: z.string().trim().min(1),
@@ -344,66 +242,12 @@ export function parseWorkspaceAdoptionManifest(input: unknown): WorkspaceAdoptio
   return parsed.data;
 }
 
-function validConfig(input: unknown): WorktreeDeliveryConfig {
-  const parsed = worktreeConfigSchema.safeParse(input);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    throw new Error(`WORKTREE_CONFIG_INVALID: ${issue.path.join(".") || "config"} ${issue.message}`);
-  }
-  return parsed.data;
-}
-
-function validHostBinding(input: unknown): WorktreeHostBinding {
-  const parsed = hostBindingSchema.safeParse(input);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    throw new Error(
-      `WORKTREE_HOST_BINDING_INVALID: ${issue.path.join(".") || "binding"} ${issue.message}`,
-    );
-  }
-  return { ...parsed.data, approval: parsed.data.approval ?? { mode: "manual" } };
-}
-
-const HOST_BINDING_PATH = "harness/worktree-delivery/host-binding.json" as const;
-
-function hostBindingFile(commonDir: string): string {
-  return safePath(commonDir, HOST_BINDING_PATH);
-}
-
 export function loadConfig(root: string): {
   configured: boolean;
   config: WorktreeDeliveryConfig;
   legacyBinding?: WorktreeHostBinding;
 } {
-  const path = join(root, ".harness", "worktree-delivery.json");
-  if (!existsSync(path)) return { configured: false, config: defaultConfig() };
-  const input = readJson<unknown>(path);
-  const portable = worktreeConfigSchema.safeParse(input);
-  if (portable.success) return { configured: true, config: portable.data };
-  const legacy = legacyWorktreeConfigSchema.safeParse(input);
-  if (legacy.success) {
-    const { allowedRoots, protectedRoots, ...config } = legacy.data;
-    return {
-      configured: true,
-      config,
-      legacyBinding: {
-        schemaVersion: WORKTREE_SCHEMA_VERSION,
-        allowedRoots,
-        protectedRoots,
-        approval: { mode: "manual" },
-      },
-    };
-  }
-  return { configured: true, config: validConfig(input) };
-}
-
-function defaultHostBinding(root: string, commonDir: string): WorktreeHostBinding {
-  return {
-    schemaVersion: WORKTREE_SCHEMA_VERSION,
-    allowedRoots: [],
-    protectedRoots: [root, commonDir, resolve("/")],
-    approval: { mode: "manual" },
-  };
+  return loadWorktreeConfig(root);
 }
 
 function loadHostBinding(
@@ -411,36 +255,7 @@ function loadHostBinding(
   commonDir: string,
   legacyBinding?: WorktreeHostBinding,
 ): WorktreeHostBindingObservation {
-  const path = hostBindingFile(commonDir);
-  if (legacyBinding) {
-    return {
-      ...legacyBinding,
-      configured: false,
-      loaded: true,
-      source: "legacy-config",
-      path,
-      hash: fileHash(path),
-    };
-  }
-  if (existsSync(path)) {
-    return {
-      ...validHostBinding(readJson<unknown>(path)),
-      configured: true,
-      loaded: true,
-      source: "host-local",
-      path,
-      hash: fileHash(path),
-    };
-  }
-  const binding = defaultHostBinding(root, commonDir);
-  return {
-    ...binding,
-    configured: false,
-    loaded: true,
-    source: "default",
-    path,
-    hash: null,
-  };
+  return loadWorktreeHostBinding(root, commonDir, legacyBinding);
 }
 
 function observedTopology(
@@ -2090,68 +1905,6 @@ function branchUpstream(
     throw new Error(`BRANCH_UPSTREAM_REQUIRED: ${branch}`);
   }
   return { remote: remote[0], ref: merge[0], config };
-}
-
-export function remotePushEndpoint(root: string, remote: string): { value: string; hash: string } {
-  const result = gitCommand(root, ["remote", "get-url", "--push", "--all", remote], process.env);
-  if (result.status !== 0) throw new Error(`REMOTE_PUSH_ENDPOINT_UNAVAILABLE: ${remote}`);
-  const endpoints = result.stdout.split(/\r?\n/u).filter(Boolean);
-  if (endpoints.length !== 1) throw new Error(`REMOTE_PUSH_ENDPOINT_AMBIGUOUS: ${remote}`);
-  const rewrites = gitCommand(root, [
-    "config",
-    "-z",
-    "--get-regexp",
-    "^url\\..*\\.(insteadof|pushinsteadof)$",
-  ], process.env);
-  if (rewrites.status !== 0 && rewrites.status !== 1) {
-    throw new Error(`REMOTE_PUSH_ENDPOINT_UNAVAILABLE: ${remote}`);
-  }
-  const prefixes = rewrites.stdout.split("\0").filter(Boolean).map((entry) => {
-    const separator = entry.indexOf("\n");
-    if (separator === -1) throw new Error(`REMOTE_PUSH_ENDPOINT_UNAVAILABLE: ${remote}`);
-    return entry.slice(separator + 1);
-  });
-  if (prefixes.some((prefix) => endpoints[0].startsWith(prefix))) {
-    throw new Error(`REMOTE_PUSH_ENDPOINT_UNSTABLE: ${remote}`);
-  }
-  return { value: endpoints[0], hash: sha256(endpoints[0]) };
-}
-
-export function remoteRefHead(root: string, endpoint: string, remote: string, ref: string): string | null {
-  const observed = gitCommand(root, ["ls-remote", "--heads", endpoint, ref], process.env);
-  if (observed.status !== 0) {
-    const detail = (observed.stderr || observed.error || "unknown error").replaceAll(endpoint, "<remote>");
-    throw new Error(
-      `REMOTE_BRANCH_OBSERVATION_FAILED: ${remote} ${ref}: ${detail}`,
-    );
-  }
-  const lines = observed.stdout.split(/\r?\n/u).filter(Boolean);
-  if (lines.length === 0) return null;
-  if (lines.length !== 1) throw new Error(`REMOTE_BRANCH_AMBIGUOUS: ${remote} ${ref}`);
-  const [head, observedRef] = lines[0].split(/\s+/u, 2);
-  if (observedRef !== ref || !/^[0-9a-f]{40,64}$/u.test(head)) {
-    throw new Error(`REMOTE_BRANCH_OBSERVATION_INVALID: ${remote} ${ref}`);
-  }
-  return head;
-}
-
-export function githubEndpointRepository(endpoint: string, remote: string): string {
-  const scp = endpoint.match(/^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?\/?$/iu);
-  let repository = scp?.[1];
-  if (!repository) {
-    try {
-      const url = new URL(endpoint);
-      if (url.hostname.toLowerCase() === "github.com") {
-        repository = url.pathname.replace(/^\//u, "").replace(/\.git\/?$/u, "").replace(/\/$/u, "");
-      }
-    } catch {
-      // Non-URL push targets cannot prove a GitHub repository identity.
-    }
-  }
-  if (!repository || !/^[^/\s]+\/[^/\s]+$/u.test(repository)) {
-    throw new Error(`GITHUB_REMOTE_REPOSITORY_MISMATCH: ${remote}`);
-  }
-  return repository;
 }
 
 function deleteRemoteBranch(

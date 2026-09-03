@@ -125,6 +125,13 @@ describe("v2 MCP transport", () => {
       name: "harness_apply",
       arguments: { projectDir, planPath: configured.planPath, approval: configured.planHash },
     });
+    const statusResult = await client.callTool({
+      name: "harness_worktree_status",
+      arguments: { projectDir },
+    });
+    expect(JSON.parse(
+      (statusResult.content[0] as { type: "text"; text: string }).text,
+    )).toMatchObject({ configured: true, config: { mode: "enforced", managementBranch: "main" } });
     const worktreePath = `${projectDir}-mcp-adopt`;
     directories.push(worktreePath);
     execFileSync("git", ["worktree", "add", "-b", "issue-mcp", worktreePath, "HEAD"], {
