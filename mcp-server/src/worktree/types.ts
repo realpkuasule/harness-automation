@@ -425,8 +425,10 @@ export interface WorkspaceAiDecision {
 }
 
 export interface WorkspaceAiReviewResult {
-  decisionPath: string;
-  decision: WorkspaceAiDecision;
+  status?: "ReviewPending" | "NeedsHuman";
+  code?: string;
+  decisionPath?: string;
+  decision?: WorkspaceAiDecision;
   receipt?: WorkspaceReceipt;
 }
 

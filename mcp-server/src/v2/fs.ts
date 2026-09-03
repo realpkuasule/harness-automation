@@ -1,8 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
+  closeSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -71,8 +74,20 @@ export function atomicWrite(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.harness-${process.pid}-${randomUUID()}.tmp`;
   try {
-    writeFileSync(temporary, content, "utf8");
+    const descriptor = openSync(temporary, "wx");
+    try {
+      writeFileSync(descriptor, content, "utf8");
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
     renameSync(temporary, path);
+    const directory = openSync(dirname(path), "r");
+    try {
+      fsyncSync(directory);
+    } finally {
+      closeSync(directory);
+    }
   } finally {
     if (existsSync(temporary)) rmSync(temporary, { force: true });
   }
