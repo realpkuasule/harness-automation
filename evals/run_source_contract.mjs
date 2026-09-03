@@ -2,8 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const root = process.cwd();
-const overrideSource = process.argv[2];
-const tasks = readFileSync(resolve(root, "evals/tasks/session-admission.jsonl"), "utf8")
+const tasksPath = process.argv[2];
+const overrideSource = process.argv[3];
+if (!tasksPath) throw new Error("TASKS_PATH_REQUIRED");
+const tasks = readFileSync(resolve(root, tasksPath), "utf8")
   .split(/\r?\n/u)
   .filter(Boolean)
   .map((line) => JSON.parse(line));

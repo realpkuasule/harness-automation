@@ -31,13 +31,13 @@
       "baseline": {
         "origin": "pre-implementation",
         "score": 0,
-        "trials": 2,
+        "trials": 1,
         "evidence": "evals/baselines/npm-release-worktree-pre-implementation.json"
       },
       "target": {
         "metric": "pass-all-trials",
         "threshold": 1,
-        "trials": 2
+        "trials": 1
       },
       "graders": [
         {
@@ -62,8 +62,8 @@
       "kind": "capability",
       "owner": "zhichao",
       "description": "New coding sessions are admitted from durable repository facts before managed writes, while unchanged continuing sessions avoid repeated intent classification.",
-      "command": ["node", "evals/run_session_admission_policy.mjs"],
-      "runnerSources": ["evals/run_session_admission_policy.mjs"],
+      "command": ["node", "evals/run_source_contract.mjs", "evals/tasks/session-admission.jsonl"],
+      "runnerSources": ["evals/run_source_contract.mjs"],
       "tasks": ["evals/tasks/session-admission.jsonl"],
       "traceability": [
         {
@@ -82,13 +82,13 @@
       "baseline": {
         "origin": "pre-implementation",
         "score": 0,
-        "trials": 1,
+        "trials": 2,
         "evidence": "evals/baselines/session-admission-pre-implementation.json"
       },
       "target": {
         "metric": "pass-all-trials",
         "threshold": 1,
-        "trials": 1
+        "trials": 2
       },
       "graders": [
         {
@@ -98,8 +98,54 @@
         }
       ],
       "negativeControl": {
-        "command": ["node", "evals/run_session_admission_policy.mjs", "evals/fixtures/known-bad-session-admission.ts"],
+        "command": ["node", "evals/run_source_contract.mjs", "evals/tasks/session-admission.jsonl", "evals/fixtures/known-bad-session-admission.ts"],
         "fixture": "evals/fixtures/known-bad-session-admission.ts",
+        "expectedExitCode": 1
+      }
+    },
+    {
+      "id": "delivery-prepare-saga",
+      "kind": "capability",
+      "owner": "zhichao",
+      "description": "One confirmed delivery preparation is journaled and reaches Prepared only when the work item, mode lease, branch, worktree, and session binding are all verifiable.",
+      "command": ["node", "evals/run_source_contract.mjs", "evals/tasks/delivery-prepare.jsonl"],
+      "runnerSources": ["evals/run_source_contract.mjs"],
+      "tasks": ["evals/tasks/delivery-prepare.jsonl"],
+      "traceability": [
+        {
+          "requirementId": "W-05",
+          "ruleIds": ["atomic-delivery-workspace"]
+        },
+        {
+          "requirementId": "W-06",
+          "ruleIds": ["exact-worktree-adoption"]
+        },
+        {
+          "requirementId": "S-03",
+          "ruleIds": ["single-confirmation-prepare", "prepared-not-opened"]
+        }
+      ],
+      "baseline": {
+        "origin": "pre-implementation",
+        "score": 0,
+        "trials": 1,
+        "evidence": "evals/baselines/delivery-prepare-pre-implementation.json"
+      },
+      "target": {
+        "metric": "pass-all-trials",
+        "threshold": 1,
+        "trials": 1
+      },
+      "graders": [
+        {
+          "id": "prepare-saga-contract-check",
+          "kind": "code",
+          "role": "gate"
+        }
+      ],
+      "negativeControl": {
+        "command": ["node", "evals/run_source_contract.mjs", "evals/tasks/delivery-prepare.jsonl", "evals/fixtures/known-bad-delivery-prepare.ts"],
+        "fixture": "evals/fixtures/known-bad-delivery-prepare.ts",
         "expectedExitCode": 1
       }
     }

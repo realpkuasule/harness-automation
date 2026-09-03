@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "evaluation-baseline/1.0",
+  "suite": "delivery-prepare-saga",
+  "origin": "pre-implementation",
+  "observedAt": "2026-09-03T11:22:51.246Z",
+  "score": 0,
+  "trials": 1,
+  "evidence": {
+    "source": "mcp-server/src/delivery/prepare.ts",
+    "sourcePresent": false,
+    "finding": "No cross-domain Admission-to-Prepared journaled saga existed at origin/main 6059146430fdfe9ab3013841d48e43ac62f5d3eb."
+  }
+}
