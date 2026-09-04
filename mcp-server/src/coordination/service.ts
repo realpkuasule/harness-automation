@@ -1,43 +1,30 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { atomicWrite, hashObject, readJson, safePath } from "../v2/fs.js";
-import { remotePushEndpoint } from "../repository/remote.js";
+import { z } from "zod";
+import { readJson, safePath } from "../v2/fs.js";
 import { runGitCommand } from "../repository/git.js";
-import { COORDINATION_SCHEMA_VERSION, type CoordinationConfig, type CoordinationExpected, type CoordinationLifecycle, type CoordinationRecord } from "./types.js";
+import { type CoordinationConfig, type CoordinationExpected, type CoordinationLifecycle, type CoordinationRecord } from "./types.js";
+import { assertExpected, createCoordinationRecord, recordWithoutHash } from "./record.js";
+import { GitCoordinationStore } from "./store.js";
+export { assertExpected, createCoordinationRecord } from "./record.js";
+export { GitCoordinationStore } from "./store.js";
 
-const SHA = /^[a-f0-9]{40,64}$/u;
-const DIGEST = /^[a-f0-9]{64}$/u;
-const WORK_ITEM = /^github:[^/\s]+\/[^#\s]+#\d+$/u;
-const LIFECYCLES: CoordinationLifecycle[] = ["Admitted", "Prepared", "Active", "Draft", "Ready", "MergeArmed", "Integrated", "Closing", "Closed", "Abandoned"];
+const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 
 function fail(code: string): never { throw new Error(code); }
-function recordWithoutHash(record: CoordinationRecord): Omit<CoordinationRecord, "recordHash"> { const copy = { ...record }; delete (copy as Partial<CoordinationRecord>).recordHash; return copy; }
-function recordPath(workItem: string): string { return `records/${hashObject(workItem)}.json`; }
-function validRecord(record: CoordinationRecord): boolean {
-  return record.schemaVersion === COORDINATION_SCHEMA_VERSION && WORK_ITEM.test(record.workItem) && record.repository.length > 0 && record.repositoryId.length > 0 && record.branch.length > 0 && record.sourceRepositoryId.length > 0 && record.owner.length > 0 && record.machine.length > 0 && Number.isSafeInteger(record.generation) && record.generation > 0 && DIGEST.test(record.controlEpochDigest) && SHA.test(record.lastObservedHead) && Number.isFinite(Date.parse(record.createdAt)) && (record.expiresAt === null || Number.isFinite(Date.parse(record.expiresAt))) && LIFECYCLES.includes(record.lifecycleState) && (record.closeOwnerGeneration === undefined || record.closeOwnerGeneration === record.generation) && (!record.renewal || typeof record.renewal.transactionId === "string" && Number.isFinite(Date.parse(record.renewal.proposedExpiresAt)) && Number.isFinite(Date.parse(record.renewal.reservedAt)) && (record.renewal.observedBeforeExpiryAt === undefined || Number.isFinite(Date.parse(record.renewal.observedBeforeExpiryAt)))) && record.recordHash === hashObject(recordWithoutHash(record));
-}
-
-export function createCoordinationRecord(input: Omit<CoordinationRecord, "schemaVersion" | "recordHash">): CoordinationRecord {
-  const record: CoordinationRecord = { schemaVersion: COORDINATION_SCHEMA_VERSION, ...input, recordHash: "" };
-  record.recordHash = hashObject(recordWithoutHash(record));
-  if (!validRecord(record)) fail("COORDINATION_RECORD_INVALID");
-  return record;
-}
-
-export function assertExpected(record: CoordinationRecord | null, expected: CoordinationExpected): void {
-  if (!record) { if (Object.values(expected).some((value) => value !== undefined && value !== null)) fail("COORDINATION_RECORD_ABSENT"); return; }
-  for (const [key, value] of Object.entries(expected)) if (value !== undefined && value !== null && record[key as keyof CoordinationRecord] !== value) fail(`COORDINATION_STALE_${key.toUpperCase()}`);
-}
 
 export function loadCoordinationConfig(root: string): CoordinationConfig | null {
   const path = safePath(root, ".harness/coordination.json");
   if (!existsSync(path)) return null;
-  let config: CoordinationConfig;
-  try { config = readJson<CoordinationConfig>(path); } catch { fail("COORDINATION_CONFIG_INVALID"); }
-  if (config.schemaVersion !== "coordination-config/1.0" || typeof config.enabled !== "boolean" || !/^[^/\s]+\/[^/\s]+$/u.test(config.repository) || !config.repositoryId || !config.remote || !/^refs\/harness\/coordination\/[A-Za-z0-9._/-]+$/u.test(config.controlRef) || (config.qualificationEvidenceHash !== undefined && !DIGEST.test(config.qualificationEvidenceHash))) fail("COORDINATION_CONFIG_INVALID");
-  return config;
+  const text = z.string().min(1).max(512).refine((value) => !/[\x00-\x1f\x7f]/u.test(value));
+  const schema = z.object({
+    schemaVersion: z.literal("coordination-config/1.0"), enabled: z.boolean(),
+    repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u), repositoryId: text,
+    remote: text, controlRef: z.string().regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._/-]*$/u)
+      .refine((value) => !value.includes("..") && value.split("/").every((part) => part && !part.startsWith(".") && !part.endsWith(".lock") && !part.endsWith("."))),
+    qualificationEvidenceHash: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  }).strict();
+  try { return schema.parse(readJson<unknown>(path)); } catch { fail("COORDINATION_CONFIG_INVALID"); }
 }
 
 export function coordinationStatus(root: string): Record<string, unknown> {
@@ -59,50 +46,6 @@ function controlRefHead(root: string, endpoint: string, ref: string, env: NodeJS
   const [sha, observed] = lines[0].split(/\s+/u, 2);
   if (lines.length !== 1 || observed !== ref || !SHA.test(sha)) fail("COORDINATION_REMOTE_OBSERVATION_INVALID");
   return sha;
-}
-
-/** Git's one-ref CAS serializes unrelated work items; ponytail: shard only with measured contention. */
-export class GitCoordinationStore {
-  constructor(private readonly root: string, private readonly remote: string, private readonly controlRef: string, private readonly env: NodeJS.ProcessEnv = process.env) {}
-  read(workItem: string): { controlSha: string | null; record: CoordinationRecord | null } {
-    const endpoint = remotePushEndpoint(this.root, this.remote).value;
-    const controlSha = controlRefHead(this.root, endpoint, this.controlRef, this.env);
-    if (!controlSha) return { controlSha: null, record: null };
-    const directory = mkdtempSync(join(tmpdir(), "harness-coordination-read-"));
-    try {
-      git(directory, ["init", "--quiet"], this.env); git(directory, ["fetch", "--quiet", endpoint, controlSha], this.env);
-      const raw = git(directory, ["show", `${controlSha}:${recordPath(workItem)}`], this.env, true);
-      if (!raw) return { controlSha, record: null };
-      let record: CoordinationRecord; try { record = JSON.parse(raw) as CoordinationRecord; } catch { fail("COORDINATION_RECORD_INVALID"); }
-      if (!validRecord(record) || record.workItem !== workItem) fail("COORDINATION_RECORD_INVALID");
-      return { controlSha, record };
-    } finally { rmSync(directory, { recursive: true, force: true }); }
-  }
-  compareAndSwap(args: { workItem: string; expectedControlSha: string | null; expected: CoordinationExpected; next: CoordinationRecord }): CoordinationRecord {
-    const current = this.read(args.workItem);
-    if (current.controlSha !== args.expectedControlSha) fail("COORDINATION_CAS_CONFLICT");
-    assertExpected(current.record, args.expected);
-    if (!validRecord(args.next) || args.next.workItem !== args.workItem) fail("COORDINATION_RECORD_INVALID");
-    const endpoint = remotePushEndpoint(this.root, this.remote).value;
-    const directory = mkdtempSync(join(tmpdir(), "harness-coordination-write-"));
-    try {
-      git(directory, ["init", "--quiet"], this.env);
-      if (current.controlSha) { git(directory, ["fetch", "--quiet", endpoint, current.controlSha], this.env); git(directory, ["checkout", "--quiet", "--detach", current.controlSha], this.env); }
-      mkdirSync(join(directory, "records"), { recursive: true });
-      writeFileSync(join(directory, recordPath(args.workItem)), `${JSON.stringify(args.next, null, 2)}\n`, { encoding: "utf8", flag: "w" });
-      git(directory, ["add", "records"], this.env);
-      git(directory, ["-c", "user.name=Harness Coordination", "-c", "user.email=coordination@harness.invalid", "commit", "--quiet", "-m", `coordination ${args.next.transactionId}`], this.env);
-      const commit = git(directory, ["rev-parse", "HEAD"], this.env);
-      const lease = `--force-with-lease=${this.controlRef}:${current.controlSha ?? ""}`;
-      git(directory, ["push", "--porcelain", lease, endpoint, `${commit}:${this.controlRef}`], this.env);
-      const readback = this.read(args.workItem);
-      if (!readback.record || readback.record.recordHash !== args.next.recordHash || readback.record.transactionId !== args.next.transactionId) fail("COORDINATION_READBACK_FAILED");
-      // Cache is only a readback projection; remote state always wins on the next operation.
-      const common = git(this.root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], this.env);
-      atomicWrite(safePath(common, `harness/coordination/cache/${hashObject(args.workItem)}.json`), JSON.stringify({ controlSha: readback.controlSha, record: readback.record }, null, 2));
-      return readback.record;
-    } finally { rmSync(directory, { recursive: true, force: true }); }
-  }
 }
 
 export function requireEnabledCoordination(root: string): CoordinationConfig {
@@ -179,22 +122,26 @@ export class CoordinationLifecycleService {
     const current = this.store.read(input.workItem);
     if (current.record) fail("COORDINATION_ALREADY_ACQUIRED");
     const next = nextLease({ ...input, prior: null });
-    return this.store.compareAndSwap({ workItem: input.workItem, expectedControlSha: current.controlSha, expected: {}, next });
+    return this.confirm(this.store.compareAndSwap({ workItem: input.workItem, expectedControlSha: current.controlSha, expected: {}, next }));
   }
   rebind(workItem: string, expected: CoordinationExpected, sessionRef: string | undefined, head: string): CoordinationRecord {
     const current = this.store.read(workItem); if (!current.record) fail("COORDINATION_RECORD_ABSENT");
     const next = rebindLease(current.record, expected, sessionRef, head);
-    return this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next });
+    return this.confirm(this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next }));
   }
   transfer(workItem: string, expected: CoordinationExpected, target: { owner: string; machine: string; sessionRef?: string }, evidence: ZeroLossTransferEvidence): CoordinationRecord {
     const current = this.store.read(workItem); if (!current.record) fail("COORDINATION_RECORD_ABSENT");
     const next = transferLease(current.record, expected, target, evidence);
-    return this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next });
+    return this.confirm(this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next }));
   }
   terminalClaim(workItem: string, expected: CoordinationExpected, integratedHead: string): CoordinationRecord {
     const current = this.store.read(workItem); if (!current.record) fail("COORDINATION_RECORD_ABSENT");
     const next = terminalClaim(current.record, expected, integratedHead);
-    return this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next });
+    return this.confirm(this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next }));
+  }
+  private confirm(applied: ReturnType<GitCoordinationStore["compareAndSwap"]>): CoordinationRecord {
+    if (applied.disposition !== "current" || !applied.current.record) fail("COORDINATION_TRANSACTION_SUPERSEDED");
+    return applied.current.record;
   }
 }
 

@@ -1,0 +1,72 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, it } from "vitest";
+import { createCoordinationRecord, expectedRecord } from "./record.js";
+import { GitCoordinationStore, type CoordinationCandidate } from "./store.js";
+import { localHistory, localTransport } from "./__fixtures__/transport.js";
+
+const roots: string[] = [];
+const ref = "refs/heads/harness-automation/coordination/test";
+const first = () => createCoordinationRecord({ repository: "owner/repo", repositoryId: "R_1", workItem: "github:owner/repo#1", branch: "codex/one", sourceRepositoryId: "R_1", owner: "octo", machine: "mac", generation: 1, controlEpochDigest: "a".repeat(64), createdAt: "2026-09-04T04:00:00.000Z", expiresAt: "2026-09-04T04:01:00.000Z", lastObservedHead: "b".repeat(40), lifecycleState: "Admitted", transactionId: "tx-first" });
+function git(cwd: string, args: string[], input?: string) {
+  const result = spawnSync("git", args, { cwd, input, encoding: "utf8", env: { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.test", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.test" } });
+  if (result.status !== 0) throw new Error(result.stderr); return result.stdout.trim();
+}
+function fixture() {
+  const root = mkdtempSync(join(tmpdir(), "harness-object-test-")); roots.push(root);
+  const remote = join(root, "remote.git"); git(root, ["init", "--bare", "--quiet", remote]);
+  const transport = localTransport(root, remote); const candidates: CoordinationCandidate[] = [];
+  let genesis = "";
+  const history = localHistory(root, ref, () => genesis);
+  const beforePush = (candidate: CoordinationCandidate) => { candidates.push(candidate); if (!candidate.expectedControlSha) genesis = candidate.controlSha; };
+  const store = new GitCoordinationStore(ref, transport, beforePush, true, history);
+  const record = first();
+  return { root, remote, transport, candidates, store, history, beforePush, pin: (value: string) => { genesis = value; }, record, acquire: () => store.compareAndSwap({ workItem: record.workItem, expectedControlSha: null, expected: {}, next: record }) };
+}
+afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
+it("requires bootstrap authority and a durable candidate before its sole remote write", () => {
+  const f = fixture(); let pushes = 0;
+  const transport = { ...f.transport, push: () => { pushes++; throw new Error("unexpected"); } };
+  const args = { workItem: f.record.workItem, expectedControlSha: null, expected: {}, next: f.record };
+  expect(() => new GitCoordinationStore(ref, transport, () => {}).compareAndSwap(args)).toThrow("COORDINATION_BOOTSTRAP_AUTHORIZATION_REQUIRED");
+  expect(() => new GitCoordinationStore(ref, transport, () => { throw new Error("receipt failed"); }, true, f.history).compareAndSwap(args)).toThrow("receipt failed");
+  expect(pushes).toBe(0); expect(f.transport.readRef(ref)).toBeNull();
+});
+it("rejects unknown paths, symlinks, gitlinks, invalid blobs and fetch failures rather than claiming absence", () => {
+  for (const mode of ["100644", "120000", "160000"]) {
+    const f = fixture();
+    const blob = git(f.remote, ["hash-object", "-w", "--stdin"], mode === "100644" ? "not-json" : "../../outside");
+    const empty = git(f.remote, ["mktree"], "");
+    const commit = git(f.remote, ["commit-tree", empty], "fixture\n");
+    const tree = git(f.remote, ["mktree"], `${mode} ${mode === "160000" ? "commit" : "blob"} ${mode === "160000" ? commit : blob}\tunknown\n`);
+    const bad = git(f.remote, ["commit-tree", tree], "bad metadata\n"); git(f.remote, ["update-ref", ref, bad]); f.pin(bad);
+    expect(() => f.store.read(f.record.workItem)).toThrow("COORDINATION_TREE_INVALID");
+  }
+  const f = fixture(); f.acquire();
+  const broken = new GitCoordinationStore(ref, { ...f.transport, fetch: () => { throw new Error("FETCH_DENIED"); } }, () => {}, false, f.history);
+  expect(() => broken.read("github:owner/repo#404")).toThrow("FETCH_DENIED");
+});
+it("preserves an unknown-outcome candidate and recovers by exact history without repeating the push", () => {
+  const f = fixture(); let writes = 0; let candidate: CoordinationCandidate | undefined;
+  const uncertain = new GitCoordinationStore(ref, { ...f.transport, push(...args) { writes++; const result = f.transport.push(...args); expect(result.status).toBe(0); return { ...result, status: null, error: "connection interrupted" }; } }, (value) => { candidate = value; f.beforePush(value); }, true, f.history);
+  expect(() => uncertain.compareAndSwap({ workItem: f.record.workItem, expectedControlSha: null, expected: {}, next: f.record })).toThrow("COORDINATION_WRITE_OUTCOME_UNKNOWN");
+  expect(candidate).toBeDefined(); roots.push(candidate!.objectDirectory); expect(existsSync(candidate!.objectDirectory)).toBe(true);
+  const recovered = f.store.recover(candidate!); expect(recovered.disposition).toBe("current"); expect(writes).toBe(1);
+  const next = createCoordinationRecord({ ...f.record, owner: "another", generation: 2, transactionId: "tx-second" });
+  const applied = f.store.compareAndSwap({ workItem: f.record.workItem, expectedControlSha: recovered.current.controlSha, expected: expectedRecord(f.record), next });
+  expect(applied.current.record?.generation).toBe(2);
+  expect(f.store.recover(candidate!).disposition).toBe("superseded"); expect(writes).toBe(1);
+  expect(() => f.store.recover({ ...candidate!, treeSha: "a".repeat(40) })).toThrow("COORDINATION_RECOVERY_REQUIRED");
+});
+
+it("rejects a bad intermediate tree even when the latest tree returns to valid metadata", () => {
+  const f = fixture(); const first = f.acquire().candidate;
+  const blob = git(f.remote, ["hash-object", "-w", "--stdin"], "not metadata");
+  const badTree = git(f.remote, ["mktree"], `100644 blob ${blob}\tunknown\n`);
+  const bad = git(f.remote, ["commit-tree", badTree, "-p", first.controlSha], "invalid intermediate\n");
+  const restored = git(f.remote, ["commit-tree", first.treeSha, "-p", bad], "valid latest tree\n");
+  git(f.remote, ["update-ref", ref, restored]);
+  expect(() => f.store.read(f.record.workItem)).toThrow("COORDINATION_TREE_INVALID");
+});

@@ -124,7 +124,8 @@ Provider adapter 的证据，以及未注册、错用途、伪造批准、secret
 每次 mutation 必须执行：
 
 1. 验证获批配置、不可变仓库 ID、唯一实际 endpoint/其 hash、actor、对应用途 credentialRef；
-   获取 exact control-ref SHA 及目标记录，验证 schema、recordHash、Work Item/source 映射。
+   按 §3.1/§3.2 验证 exact control-ref SHA、完整树及历史，再验证目标记录的
+   schema、recordHash、Work Item/source 映射。
 2. 首次获取验证该记录不存在；已有记录验证 expected recordHash、generation、owner、
    source Head 和 control epoch，另加该操作的时间/状态/授权前置条件。
 3. 构造唯一父节点等于 observed control-ref SHA 的新 commit，原子保留其他工作项；
@@ -139,6 +140,47 @@ Provider adapter 的证据，以及未注册、错用途、伪造批准、secret
 `coordinated`。普通 Git push 没有 fencing token；不得声称阻止拥有凭据者绕过 Harness。
 受管 append-only 规则不覆盖有权限者在外部回退、删除重建或恢复同一 SHA 的 ABA；
 未知/不兼容记录必须失败关闭，但不能声称能检测全部 ABA 或抵抗恶意同权限写者。
+
+### 3.1 无 checkout 的对象存储
+
+控制树仅在隔离 bare object store/index 中处理，不 checkout 到文件系统，不继承
+项目 hooks、filters、任意 Git 配置或外部 object alternates。Broker 先认证观察
+精确 ref → SHA，再 fetch 该完整 SHA 并验证 commit 类型；期间 ref 漂移不改变本次
+expected SHA，读取失败不能偷偷跟随新 tip。所有网络读写仍经过同一 Broker。
+
+完整 `ls-tree` 必须包含 tree 项并采用 NUL 分隔；只允许规定的 `records` 目录和
+`records/<hash>.json` 的 `100644` blob，拒绝 symlink/gitlink/可执行文件、未知或
+异常路径（包括未知空目录）。逐条 `cat-file` 校验严格记录和文件名映射，明确限制
+条目数、单 blob/总字节与命令输出，超限或截断不能继续。只有成功验证的树中缺少
+目标路径才是 record absent；命令失败不是 absent，ref absent 另需认证查询证明。
+初始空树只允许获批 bootstrap。构造时使用 raw `hash-object` 与隔离的
+`read-tree/update-index/write-tree/commit-tree`，再次比较新旧条目，证明只替换
+目标 Work Item；不经工作区、过滤器或 shell 执行远端内容。
+
+### 3.2 Genesis 与增量历史验证
+
+获批 bootstrap 使用**无父节点、仅允许元数据的 root commit**；exact genesis
+SHA/tree、repo ID、endpoint/ref 和协议版本绑定既有配置批准回执。不能以项目源码
+commit 为父节点，也不能把未知链的当前 tip 自动采纳为可信起点；既有链 adoption
+须另有明确批准与历史验证。本节是实现约束，不批准任何实际生产 genesis/ref、
+配置变更或权限扩展；隔离资格 genesis 只受该次测试 scope 授权。
+
+正常读取从最近可信的已验证 tip 检查到本次 exact remote head：每个新增 commit
+只有一个父节点且连续连接，树结构合规，新增/改变的 blob 逐条严格验证；未变的
+已验证对象可复用结果。只验证当前树再做 `merge-base --is-ancestor` 不够，必须能
+拒绝中间曾混入未知版本、后来又恢复的链。当前完整树仍按 §3.1 验证。
+
+验证检查点复用既有 coordination receipt/LKG，绑定 genesis、repo/endpoint/ref、
+tip/tree 和验证语义版本，不另建账本。它不授予 owner/generation/TTL 或写能力；
+每次仍读取远端事实，发现回退、断链或无法证明连续性时停止正常写入。历史校验规则
+变化须明确重验/迁移，无关源码改动不必使全部历史缓存失效；这与 exact-candidate
+资格证据和当前操作的 epoch/授权校验分开。Git 对象缓存同样可重建、非权威。
+
+新机器或检查点丢失时从可信 genesis 完整验证一次，允许按单次时间/对象/字节预算
+分段并在同一回执机制保存进度；不设累计历史 commit 数硬上限，不把单批超预算当成
+永久不可恢复。未验证完不得 PASS 或授权写入，继续只读验证不依赖有效写租约、
+Reviewer 或生产写资格；无变化观察不追加重复证据。此机制不升级前述同权限恶意
+改历史/ABA 的保证，也不把本机 hash chain 宣称为同 UID 恶意篡改防护。
 
 ## 4. 时间、缓存和恢复
 
@@ -163,10 +205,18 @@ Provider adapter 的证据，以及未注册、错用途、伪造批准、secret
 - 本机只保存 `<git-common-dir>/harness/` 下的缓存/回执。损坏、删除或旧缓存都不能
   赢过远端记录；无网络不能首次获取/renew/transfer/push。已确认持有者仅可沿最后
   可信的单调时钟截止点保留本地写资格；重启后没有该时间证据则阻断，绝不离线延长。
-- 远端 CAS 成功、本地写回前崩溃：按同一 transactionId readback 并补齐已有回执，
-  不再次增加 generation、不发第二个 token。远端未知时保留本地工作和恢复信息，
-  不用删除/回退 ref 补偿。**同一事务的回执恢复**不等于**重新获得写资格**；后者
-  必须重新验证，过期/所有权不明时走显式恢复路径和新代 fencing。
+- CAS 前由现有用例层记录同一事务的 transactionId、批准绑定、expected SHA/
+  recordHash 和 candidate commit/tree/recordHash。Store 只返回对象/传输证据，
+  不另建 journal；started、确认、恢复继续由同一 receipt/LKG 服务持久化。
+- 远端 CAS 成功、本地写回前崩溃：先验证 §3.2 的当前历史。exact candidate/record
+  匹配时补齐原事务回执；ref 已推进时须证明 candidate 在合法链内且父/tree/record
+  精确匹配，不能只凭 transactionId 相同认定成功。后续新代或 terminal 已取代它时
+  只恢复历史成功事实，不再增加 generation、不发第二个 token、不恢复旧权限。
+- push 超时、信号终止、断连或不可分类结果是 unknown outcome；等待所有子进程结束，
+  保留必要候选对象及原回执引用的恢复资产，停止授权且不删除/回退 ref 补偿。
+  readback 已推进不等于本次失败，读到旧 SHA 也不能证明超时写绝不会迟到；证据不足
+  保持 RecoveryRequired，不刷新 expected 重放业务转换。**回执恢复不等于重新获得
+  写资格**；后者重验当前远端状态和时间，过期/所有权不明走显式恢复与新代 fencing。
 
 ## 5. 条件转换与交接
 
@@ -225,9 +275,10 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
 |---|---|
 | 身份/范围 | 正确 actor/repository/credentialRef 成功；wrong ID、fork/source 映射错、endpoint rewrite、多 pushurl、secret 泄露和隐式凭据继承被拒 |
 | CAS/唯一主写 | 两个进程首次 acquire 只有一个赢家；stale expected SHA/generation/owner/Head/epoch/recordHash 逐项拒绝；其他 Work Item 的记录不丢失 |
+| 对象/历史 | 无 checkout；未知路径/模式、symlink、截断与读取失败不当 absent；拒绝源码祖先、断链和中间未知版本；冷缓存可分段恢复，超过单批预算的合法长链可完成，检查点不授予写权限 |
 | 时间/renew | 有效窗口 renew 不增代；到期边界、秒级 Date、往返延迟、陈旧/缺失/倒退样本、本机时间跳变、休眠和超时不能延长授权 |
 | 迟到 renew/跨进程 | 旧到期后 reservation 才落远端、发起进程退出、新进程读取时无同代写权；及时证明后的确认可恢复，但与 takeover/terminal 竞争必须拒绝旧确认，未确认拟延长期限永不授权 |
-| 缓存/恢复 | 删缓存不删远端事实；成功 CAS 后逐点崩溃可按 transactionId 恢复；unknown outcome、401/403/5xx、复读旧 SHA 不报告成功 |
+| 缓存/恢复 | 删缓存不删远端事实；CAS 后崩溃按 exact candidate/合法历史恢复原事务，ref 推进或新代取代不重复转换；同 transactionId 内容漂移、unknown outcome、401/403/5xx、复读旧 SHA 不报告成功 |
 | transfer/takeover | 双机器/独立 clone 取回 exact Head 后单 CAS 换代；dirty/untracked/ignored/unique/unpushed/离线/资产批准漂移逐项阻断；旧代永不重新授权 |
 | terminal | 有效 exact merge 可在租约过期后终结；新代/epoch/身份漂移拒绝；claim 无 TTL 无写权，不产生 cleanup token、不删 Branch/Worktree |
 | CLI/安全面 | 正常入口真实进入用例；无配置/资格/启用授权零 mutation；未知字段/伪造审批/伪造 merge 证据拒绝；safe-mode 只读恢复观察仍可用 |

@@ -8,3 +8,22 @@ The implementation uses one configured internal ref and exact-old-SHA Git `--for
 references alone does not qualify or enable this coordination backend. Lifecycle
 handlers and production transport integration are still under development; local
 primitive tests are not a completed Wave 3 qualification.
+
+Object storage never checks out the control tree. Only `records/<hash>.json`
+ordinary blobs are accepted; unknown entries, malformed records and failed reads
+fail closed. Current limits are 10,000 records, 64 KiB per record and 8 MiB of
+record content per tree; exceeding them reports a limit, never silently truncates.
+Only the selected record changes, using exact-old-SHA Git CAS. A candidate must be
+recorded before push. Unknown write outcomes retain its temporary objects for
+same-transaction recovery; recovery never repeats the push or restores old ownership.
+
+History starts from a separately trusted, metadata-only root commit. New segments
+are validated against checkpoints in the existing receipt/LKG store. Cold validation
+resumes in bounded batches (default 1,000 commits), without a cumulative history
+limit. A checkpoint cannot supply owner, generation, expiry, or write permission.
+Unknown intermediate records, divergent history, or an unapproved anchor block use.
+
+`CoordinationClock` supplies conservative Date/RTT/monotonic bounds with explicit
+clock limits. It rejects stale or malformed samples and clock discontinuities;
+local wall time is only an anomaly detector. This primitive is not yet wired into
+all lifecycle transitions and does not constitute LIVE lease qualification.
