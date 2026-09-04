@@ -81,6 +81,7 @@ import {
   readGitHubWorkItem,
   updateGitHubWorkItem,
 } from "./tracking/service.js";
+import { coordinationStatus, requireEnabledCoordination } from "./coordination/service.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -672,6 +673,17 @@ function runDeliveryCommand(root: string, args: ParsedArguments): void {
   }
 }
 
+function runCoordinationCommand(root: string, args: ParsedArguments): void {
+  const action = args.positionals[0];
+  if (action === "status") { printJson(coordinationStatus(root)); return; }
+  if (["acquire", "renew", "rebind", "transfer", "takeover", "terminal-claim"].includes(action ?? "")) {
+    // The production composition is deliberately gated; this is the same entrypoint future qualification enables.
+    requireEnabledCoordination(root);
+    return;
+  }
+  throw new Error("COORDINATION_COMMAND_REQUIRED: choose status, acquire, renew, rebind, transfer, takeover, or terminal-claim");
+}
+
 function usage(): void {
   console.log(`Harness Automation v2
 
@@ -717,6 +729,7 @@ Usage:
   harness-automation delivery push --authorization <sha256> [--project .]
   harness-automation delivery pr --authorization <sha256> --title <title> [--body <body>] [--project .]
   harness-automation delivery merge --authorization <sha256> --pull-request <number> [--project .]
+  harness-automation coordination status|acquire|renew|rebind|transfer|takeover|terminal-claim [--project .]
   harness-automation session handoff --work-item <provider:repo#issue> --session <session-id> [--to-status in-progress|ready-for-review] [--dry-run] [--project .]
   harness-automation session status [--work-item <provider:repo#issue>] [--project .]
   harness-automation session seed --work-item <provider:repo#issue> [--project .]
@@ -916,6 +929,9 @@ function runWorkflow(argv: string[]): void {
       return;
     case "delivery":
       runDeliveryCommand(root, args);
+      return;
+    case "coordination":
+      runCoordinationCommand(root, args);
       return;
     case "github": {
       if (args.positionals[0] !== "audit") throw new Error("GITHUB_COMMAND_REQUIRED: choose audit");

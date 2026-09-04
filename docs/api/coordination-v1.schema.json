@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://harness-automation.dev/schemas/coordination-v1.schema.json",
+  "title": "GitHub coordination record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "repository", "repositoryId", "workItem", "branch", "sourceRepositoryId", "owner", "machine", "generation", "controlEpochDigest", "createdAt", "expiresAt", "lastObservedHead", "lifecycleState", "transactionId", "recordHash"],
+  "properties": {
+    "schemaVersion": { "const": "github-coordination/1.0" },
+    "repository": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$" },
+    "repositoryId": { "type": "string", "minLength": 1 },
+    "workItem": { "type": "string", "pattern": "^github:[^/\\s]+/[^#\\s]+#[1-9][0-9]*$" },
+    "branch": { "type": "string", "minLength": 1 },
+    "sourceRepositoryId": { "type": "string", "minLength": 1 },
+    "owner": { "type": "string", "minLength": 1 },
+    "machine": { "type": "string", "minLength": 1 },
+    "sessionRef": { "type": "string" },
+    "generation": { "type": "integer", "minimum": 1 },
+    "controlEpochDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": ["string", "null"], "format": "date-time" },
+    "lastObservedHead": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
+    "lifecycleState": { "enum": ["Admitted", "Prepared", "Active", "Draft", "Ready", "MergeArmed", "Integrated", "Closing", "Closed", "Abandoned"] },
+    "renewal": { "type": "object", "additionalProperties": false, "required": ["transactionId", "proposedExpiresAt", "reservedAt"], "properties": { "transactionId": { "type": "string", "minLength": 1 }, "proposedExpiresAt": { "type": "string", "format": "date-time" }, "reservedAt": { "type": "string", "format": "date-time" }, "observedBeforeExpiryAt": { "type": "string", "format": "date-time" } } },
+    "closeOwnerGeneration": { "type": "integer", "minimum": 1 },
+    "transactionId": { "type": "string", "minLength": 1 },
+    "recordHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}
