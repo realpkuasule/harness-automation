@@ -63,8 +63,13 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
 - `coordination/cli.ts` awaits the fixed local runner, native remote observation and
   bounded cleanup in one process. Each deletion gets fresh cohort evidence. Runner,
   collector and cleanup handles are process-private and cannot be imported from JSON.
-  Reports retain partial progress without claiming drain; pre-dispatch accounting
-  and positive-result recovery still use the original approval-human receipt/LKG.
+  On operation failure, a fixed cooperative abort can prove actual process-group
+  drain while retaining the original error and completed prefix. Only that private
+  settlement permits exact cleanup of a known published subset; absent refs use
+  zero writes. Unknown launches, invalid IPC/identity, residual descendants or
+  unresolved candidates/attempts still block cleanup. Safe cleanup never changes
+  failed execution to PASS. Pre-dispatch accounting and positive-result recovery
+  still use the original approval-human receipt/LKG.
   Complete finite execution returns `2` / qualification `incomplete`, not PASS.
   See [CLI usage and limits](../reference/coordination.md#finite-local-qualification-cli).
 - Synthetic publication shares private prepare/dispatch boundaries. Normal

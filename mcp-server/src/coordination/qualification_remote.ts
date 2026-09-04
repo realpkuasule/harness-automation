@@ -90,6 +90,7 @@ export function observedQualificationCases(handle: QualificationRemoteEvidence) 
   const facts = readQualificationRemote(handle); const cases = requiredQualificationCases(facts.manifest.requiredCases);
   if (facts.manifest.execution?.kind !== "local-same-sha-publication/1") return cases;
   const proof = readSettledQualification(facts.settled); const negative = facts.manifest.sameShaPublicationNegativeControl!;
+  if (proof.executionStatus !== "completed") return cases;
   const reader = proof.instances.find((instance) => instance.launch.role === "rejected-recovery");
   const winner = facts.observations.find((item) => item.ref === negative.ref)?.winner;
   if (proof.instances.length !== 3 || new Set(proof.instances.map((instance) => instance.leader.pid)).size !== 3 || !reader ||

@@ -11,12 +11,14 @@ import { sameShaClientFacts } from "./same_sha.js";
 const targetSchema = z.object({ clientId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u), projectRoot: z.string().min(1), approvalRef: z.string().regex(/^[a-f0-9]{64}$/u) }).strict();
 export type QualificationClientTarget = z.infer<typeof targetSchema>;
 export type SettledQualification = Readonly<{ kind: "settled-local-qualification" }>;
-type Settlement = { manifestHash: string; clients: ClientProcess[]; evidence: VerifiedClientEvidence[]; steps: Array<{ stepId: string; resultHash: string }> };
+type Settlement = { manifestHash: string; clients: ClientProcess[]; evidence: VerifiedClientEvidence[]; steps: Array<{ stepId: string; resultHash: string }>;
+  executionStatus: "completed" | "aborted"; executionError: string | null };
 const settled = new WeakMap<SettledQualification, Settlement>();
 
 export function readSettledQualification(handle: SettledQualification) {
   const state = settled.get(handle); if (!state) throw new Error("QUALIFICATION_RUNNER_DRAIN_UNPROVEN");
-  return { manifestHash: state.manifestHash, instances: state.clients.map(readClientSettlement), steps: structuredClone(state.steps), evidence: [...state.evidence] };
+  return { manifestHash: state.manifestHash, instances: state.clients.map(readClientSettlement), steps: structuredClone(state.steps), evidence: [...state.evidence],
+    executionStatus: state.executionStatus, executionError: state.executionError };
 }
 
 /** Settlement fixes the closed run prefix, not a permanently frozen LKG head that its own cleanup would advance. */
@@ -58,6 +60,23 @@ export async function runLocalQualification(input: QualificationManifest, inputT
   if (new Set(prepared.map((target) => target.hostId)).size !== 1) throw new Error("QUALIFICATION_LOCAL_HOST_MISMATCH");
   const clients = new Map<string, ClientProcess>(); const supervised: ClientProcess[] = [];
   const steps: Settlement["steps"] = []; const launchRequestedClients: string[] = [];
+  const closeClientWrites = async () => {
+    const evidence: VerifiedClientEvidence[] = [];
+    for (const target of prepared) {
+      const context = resolveRepositoryContext(target.projectRoot);
+      evidence.push(await withMutationLock(context, (lock) => {
+        closeQualificationWritesLocked(lock, context.commonDir, target.approvalRef);
+        return collectClientEvidence(context.projectDir, target.approvalRef, lock);
+      }));
+    }
+    return evidence;
+  };
+  const recordSettlement = (evidence: VerifiedClientEvidence[], executionStatus: Settlement["executionStatus"], executionError: string | null) => {
+    const handle: SettledQualification = Object.freeze({ kind: "settled-local-qualification" });
+    supervised.forEach(readClientSettlement);
+    settled.set(handle, { manifestHash: manifest.manifestHash, clients: [...supervised], evidence, steps: structuredClone(steps), executionStatus, executionError });
+    return handle;
+  };
   try {
     for (const target of prepared) {
       launchRequestedClients.push(target.clientId);
@@ -83,14 +102,7 @@ export async function runLocalQualification(input: QualificationManifest, inputT
     } else for (const step of scheduled) steps.push({ stepId: step.stepId, resultHash: await runClientStep(clients.get(step.clientId)!, step.stepId) });
     // No parent holds apply.lock while waiting for a child which needs that same lock.
     for (const client of clients.values()) await settleClientProcess(client);
-    const evidence: VerifiedClientEvidence[] = [];
-    for (const target of prepared) {
-      const context = resolveRepositoryContext(target.projectRoot);
-      evidence.push(await withMutationLock(context, (lock) => {
-        closeQualificationWritesLocked(lock, context.commonDir, target.approvalRef);
-        return collectClientEvidence(context.projectDir, target.approvalRef, lock);
-      }));
-    }
+    const evidence = await closeClientWrites();
     if (manifest.execution.kind === "local-same-sha-publication/1") {
       const target = prepared.find((item) => item.clientId === scheduled[1].clientId)!;
       const before = sameShaClientFacts(target.projectRoot, target.approvalRef, "no-op");
@@ -102,17 +114,28 @@ export async function runLocalQualification(input: QualificationManifest, inputT
       if (hashObject(before) !== hashObject(after) || resultHash !== hashObject({ before, after, result: "rejected-unchanged" })) throw new Error("QUALIFICATION_RESTART_EVIDENCE_INVALID");
       await settleClientProcess(reader); steps.push({ stepId: "rejected-restart", resultHash });
     }
-    const handle: SettledQualification = Object.freeze({ kind: "settled-local-qualification" });
-    settled.set(handle, { manifestHash: manifest.manifestHash, clients: supervised, evidence, steps });
+    const handle = recordSettlement(evidence, "completed", null);
     const proof = readSettledQualification(handle); const observed = evaluateQualificationRun(manifest, evidence);
     return { settled: handle, evidence, report: { ...observed,
       execution: { kind: manifest.execution.kind, steps: proof.steps, instances: proof.instances, drainCoverage: "this-run-native-process-groups-only" },
       blockers: observed.blockers.filter((item) => item.code !== "QUALIFICATION_RUNNER_DRAIN_UNPROVEN") } };
   } catch (error) {
-    supervised.forEach(abandonClientProcess);
-    throw new Error(error instanceof Error ? error.message : "QUALIFICATION_EXECUTION_FAILED", {
-      cause: { error, qualificationProgress: { kind: manifest.execution.kind, steps: structuredClone(steps),
-        launchRequestedClients, readyClients: [...clients.keys()], drainCoverage: "unproven" } },
+    const code = error instanceof Error ? error.message : "QUALIFICATION_EXECUTION_FAILED";
+    let abortedSettlement: SettledQualification | undefined; let abortError: string | null = null;
+    try {
+      // A failed launch without a returned owned handle is unknown, never an inferred zero-process start.
+      if (launchRequestedClients.length !== supervised.length) throw new Error("QUALIFICATION_PROCESS_DRAIN_UNPROVEN");
+      for (const client of supervised) await settleClientProcess(client, "abort");
+      abortedSettlement = recordSettlement(await closeClientWrites(), "aborted", code);
+    } catch (failure) {
+      abortError = failure instanceof Error ? failure.message : "QUALIFICATION_ABORT_FAILED";
+      supervised.forEach(abandonClientProcess);
+    }
+    throw new Error(code, {
+      cause: { error, abortedSettlement, qualificationProgress: { kind: manifest.execution.kind, steps: structuredClone(steps),
+        launchRequestedClients, readyClients: [...clients.keys()], executionStatus: abortedSettlement ? "aborted" : "failed", executionError: code, abortError,
+        instances: abortedSettlement ? readSettledQualification(abortedSettlement).instances : [],
+        drainCoverage: abortedSettlement ? "this-run-native-process-groups-only" : "unproven" } },
     });
   }
 }

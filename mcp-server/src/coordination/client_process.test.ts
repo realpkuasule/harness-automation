@@ -56,20 +56,31 @@ it("does not confuse completed synchronous work or quiescent IPC with descendant
   expect(readClientSettlement(handle).finalMembers).toEqual([]);
 });
 
-it("retains unresolved descendants and never upgrades an abandoned run to settled", async () => {
+it.each(["complete", "abort"] as const)("retains unresolved descendants and never upgrades an abandoned run to settled (%s)", async (mode) => {
   const { handle } = await launch("residual"); await runClientStep(handle, "one");
-  await expect(settleClientProcess(handle)).rejects.toThrow("QUALIFICATION_PROCESS_DESCENDANTS_UNSETTLED");
+  await expect(settleClientProcess(handle, mode)).rejects.toThrow("QUALIFICATION_PROCESS_DESCENDANTS_UNSETTLED");
   abandonClientProcess(handle); expect(() => readClientSettlement(handle)).toThrow("QUALIFICATION_PROCESS_DRAIN_UNPROVEN");
 }, 15_000);
 
-it("refuses wrong IPC identity and abnormal leader exit even if a result was already received", async () => {
+it.each(["complete", "abort"] as const)("refuses wrong IPC identity and abnormal leader exit even if a result was already received (%s)", async (mode) => {
   await expect(launch("wrong-nonce")).rejects.toThrow("QUALIFICATION_PROCESS_PROTOCOL_INVALID");
   const { handle } = await launch("orphan");
   try { await runClientStep(handle, "one"); } catch { /* Exit may race the last IPC result, but can never attest drain. */ }
-  await expect(settleClientProcess(handle)).rejects.toThrow();
+  await expect(settleClientProcess(handle, mode)).rejects.toThrow();
   expect(() => readClientSettlement(handle)).toThrow("QUALIFICATION_PROCESS_DRAIN_UNPROVEN");
 });
 
 it("preserves a required host-capability gate reported by its actual child", async () => {
   await expect(launch("environment-blocked")).rejects.toThrow("ENVIRONMENT_BLOCKED: PROCESS_GROUP_INSPECTION_UNAVAILABLE");
+});
+
+it.each(["operation-failed", "unfinished"])("settles a cooperative abort without erasing execution failure or requiring every step (%s)", async (mode) => {
+  const { handle } = await launch(mode);
+  if (mode === "operation-failed") await expect(runClientStep(handle, "one")).rejects.toThrow("FIXTURE_OPERATION_FAILED");
+  if (mode === "operation-failed") await expect(settleClientProcess(handle)).rejects.toThrow("QUALIFICATION_PROCESS_NOT_READY");
+  await settleClientProcess(handle, "abort");
+  expect(readClientSettlement(handle)).toMatchObject({ executionStatus: "aborted", finalMembers: [],
+    operationError: mode === "operation-failed" ? "FIXTURE_OPERATION_FAILED" : null });
+  const proof = readClientSettlement(handle); await settleClientProcess(handle, "abort"); expect(readClientSettlement(handle)).toEqual(proof);
+  await expect(runClientStep(handle, "one")).rejects.toThrow("QUALIFICATION_PROCESS_NOT_READY");
 });

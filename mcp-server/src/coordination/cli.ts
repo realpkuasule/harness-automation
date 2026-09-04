@@ -5,7 +5,7 @@ import type { ParsedArguments } from "../cli.js";
 import { loadHumanAuthorization } from "../approval/human.js";
 import { canonicalJson, durableWriteOnce, hashObject, safePath } from "../v2/fs.js";
 import { evaluateQualificationRun } from "./evidence.js";
-import { collectSettledEvidence, runLocalQualification } from "./qualification.js";
+import { collectSettledEvidence, runLocalQualification, type SettledQualification } from "./qualification.js";
 import { applyQualificationCleanup, planQualificationCleanup, recoverQualificationCleanup } from "./qualification_cleanup.js";
 import { approveQualificationCommand, loadQualificationCliPlan, planQualificationCommand, readQualificationInput, type QualificationCliPlan } from "./qualification_plan.js";
 import { observeQualificationRemote, observedQualificationCases, readQualificationRemote } from "./qualification_remote.js";
@@ -47,9 +47,17 @@ async function runPlan(plan: QualificationCliPlan) {
     return { exitCode: 2, value: { ...report, reportPath } };
   } catch (error) {
     const code = error instanceof Error ? error.message : "QUALIFICATION_EXECUTION_FAILED";
-    if (execution === null && error instanceof Error) execution = (error.cause as { qualificationProgress?: unknown } | undefined)?.qualificationProgress ?? null;
+    const failure = error instanceof Error ? error.cause as { qualificationProgress?: unknown; abortedSettlement?: SettledQualification } | undefined : undefined;
+    if (execution === null) execution = failure?.qualificationProgress ?? null;
+    let cleanupError: string | null = null;
+    if (failure?.abortedSettlement) {
+      try {
+        // Same original scope, native facts and one-shot cleaner; never retry the failed operation or cleanup.
+        for (const ref of plan.manifest.refs) cleanup.push(await applyQualificationCleanup(planQualificationCleanup(observeQualificationRemote(failure.abortedSettlement), ref)));
+      } catch (failure) { cleanupError = failure instanceof Error ? failure.message : "QUALIFICATION_CLEANUP_FAILED"; }
+    }
     const report = { executionStatus: "failed", qualificationStatus: "incomplete", qualified: false, planHash: plan.planHash,
-      error: code, execution, cleanup, recovery, requiredCases };
+      error: code, execution, cleanup, cleanupError, recovery, requiredCases };
     try { durableWriteOnce(reportPath, canonicalJson(report), 0o600); }
     catch (recordError) { throw new AggregateError([error, recordError], "QUALIFICATION_EXECUTION_AND_REPORT_FAILED"); }
     return { exitCode: code.startsWith("ENVIRONMENT_BLOCKED:") ? 3 : 1, value: { ...report, reportPath } };

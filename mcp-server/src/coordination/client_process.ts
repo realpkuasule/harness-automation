@@ -10,13 +10,14 @@ const digest = z.string().regex(/^[a-f0-9]{64}$/u);
 export const clientCommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.enum(["step", "prepare", "dispatch", "recover-rejected"]), nonce: z.string().uuid(), stepId: id }).strict(),
   z.object({ type: z.literal("stop"), nonce: z.string().uuid() }).strict(),
+  z.object({ type: z.literal("abort-stop"), nonce: z.string().uuid() }).strict(),
   z.object({ type: z.literal("exit"), nonce: z.string().uuid() }).strict(),
 ]);
 const messageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ready"), nonce: z.string().uuid(), pid: z.number().int().positive(), bindingHash: digest }).strict(),
   z.object({ type: z.literal("result"), nonce: z.string().uuid(), stepId: id, resultHash: digest }).strict(),
   z.object({ type: z.literal("quiescent"), nonce: z.string().uuid() }).strict(),
-  z.object({ type: z.literal("failure"), nonce: z.string().uuid(), code: z.string().regex(/^(?:ENVIRONMENT_BLOCKED: )?[A-Z][A-Z0-9_]{0,127}$/u) }).strict(),
+  z.object({ type: z.literal("failure"), nonce: z.string().uuid(), code: z.string().regex(/^(?:ENVIRONMENT_BLOCKED: )?[A-Z][A-Z0-9_]{0,127}$/u), recoverable: z.literal(true).optional() }).strict(),
 ]);
 type Message = z.infer<typeof messageSchema>;
 type Member = { pid: number; parent: number; group: number; started: string };
@@ -24,9 +25,10 @@ type Pending = { accept: (message: Message) => boolean; resolve: (message: Messa
 export type ClientProcess = Readonly<{ kind: "native-qualification-client" }>;
 export type ClientLaunch = { projectRoot: string; approvalRef: string; manifestHash: string; clientId: string; bindingHash: string;
   role?: "writer" | "rejected-recovery"; attemptId?: string };
-type State = { child: ChildProcess; launch: ClientLaunch; nonce: string; pid: number; identity?: Member; pending?: Pending; failure?: Error;
-  phase: "starting" | "ready" | "running" | "quiescent" | "exiting" | "settled" | "failed"; outputBytes: number;
-  closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }>; settlement?: { leader: Member; finalMembers: Member[] } };
+type State = { child: ChildProcess; launch: ClientLaunch; nonce: string; pid: number; identity?: Member; pending?: Pending; failure?: Error; operationFailure?: Error;
+  phase: "starting" | "ready" | "running" | "operation-failed" | "stopping" | "quiescent" | "exiting" | "settled" | "failed"; outputBytes: number;
+  closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  settlement?: { leader: Member; finalMembers: Member[]; executionStatus: "completed" | "aborted"; operationError: string | null } };
 const clients = new WeakMap<ClientProcess, State>();
 function stateOf(handle: ClientProcess): State {
   const state = clients.get(handle); if (!state) throw new Error("QUALIFICATION_PROCESS_ORIGIN_UNPROVEN"); return state;
@@ -97,7 +99,13 @@ export async function startClientProcess(launch: ClientLaunch): Promise<ClientPr
     const parsed = messageSchema.safeParse(input);
     if (!parsed.success || parsed.data.nonce !== nonce) { fail(state, "QUALIFICATION_PROCESS_PROTOCOL_INVALID"); return; }
     const message = parsed.data;
-    if (message.type === "failure") { fail(state, message.code); return; }
+    if (message.type === "failure") {
+      if (!message.recoverable) { fail(state, message.code); return; }
+      if (state.phase !== "running" || !state.pending || state.failure) { fail(state, "QUALIFICATION_PROCESS_PROTOCOL_INVALID"); return; }
+      // An operation failure may stop cooperatively, but can never resume work or become a successful execution.
+      state.operationFailure = new Error(message.code); state.phase = "operation-failed";
+      const pending = state.pending; state.pending = undefined; clearTimeout(pending.timer); pending.reject(state.operationFailure); return;
+    }
     if (!state.pending || !state.pending.accept(message)) { fail(state, "QUALIFICATION_PROCESS_PROTOCOL_INVALID"); return; }
     const pending = state.pending; state.pending = undefined; clearTimeout(pending.timer); pending.resolve(message);
   });
@@ -117,10 +125,12 @@ export async function runClientStep(handle: ClientProcess, stepId: string, actio
   state.phase = "ready"; return (message as Extract<Message, { type: "result" }>).resultHash;
 }
 
-export async function settleClientProcess(handle: ClientProcess): Promise<void> {
+export async function settleClientProcess(handle: ClientProcess, mode: "complete" | "abort" = "complete"): Promise<void> {
   const state = stateOf(handle);
-  if (state.phase !== "ready") throw new Error("QUALIFICATION_PROCESS_NOT_READY");
-  const quiescent = waiting(state, (message) => message.type === "quiescent", 10_000); send(state, { type: "stop", nonce: state.nonce });
+  if (mode === "abort" && state.phase === "settled") { readClientSettlement(handle); return; }
+  if (state.failure || state.phase !== "ready" && !(mode === "abort" && state.phase === "operation-failed")) throw new Error("QUALIFICATION_PROCESS_NOT_READY");
+  state.phase = "stopping";
+  const quiescent = waiting(state, (message) => message.type === "quiescent", 10_000); send(state, { type: mode === "abort" ? "abort-stop" : "stop", nonce: state.nonce });
   await quiescent; state.phase = "quiescent";
   const started = performance.now(); let members: Member[];
   while (true) {
@@ -135,7 +145,7 @@ export async function settleClientProcess(handle: ClientProcess): Promise<void> 
     const result = await Promise.race([state.closed, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("QUALIFICATION_PROCESS_EXIT_TIMEOUT")), 10_000); })]);
     if (state.failure || result.code !== 0 || result.signal !== null) throw new Error("QUALIFICATION_PROCESS_EXIT_UNEXPECTED");
     const finalMembers = groupMembers(state.pid); if (finalMembers.length) throw new Error("QUALIFICATION_PROCESS_DESCENDANTS_UNSETTLED");
-    state.settlement = { leader: state.identity!, finalMembers }; state.phase = "settled";
+    state.settlement = { leader: state.identity!, finalMembers, executionStatus: mode === "abort" ? "aborted" : "completed", operationError: state.operationFailure?.message ?? null }; state.phase = "settled";
   } finally { clearTimeout(timer); }
 }
 

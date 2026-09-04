@@ -1145,8 +1145,9 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
    既有 host-binding strict schema。两个 common-dir 不假装共享锁：先逐端完成
    前置检查/有限预留，任一端失败就停止后续创建并精确收尾本轮已知资源。
 4. 只通过现有 Broker 将 exact source 图取到 config-free bare 暂存区，核验批准
-   object bytes、全部祖先与空树后，以固定对象导入原语（如受限 pack/index-pack）
-   将**仅该有限合成图**导入原 common-dir；不得用项目对象作父，也不经项目 URL
+   object bytes、全部祖先与空树后，复用固定 `objectGit` 的 `hash-object -w -t
+   tree/commit --stdin` 将**仅该有限合成图的原始字节**导入原 common-dir，核验
+   兼容对象格式及逐对象 exact SHA；不需要 pack 管线。不得用项目对象作父，也不经项目 URL
    rewrite 的任意 fetch 路由。已有对象字节的复制不是再生成 candidate，但本地
    object-store 写入必须在 localResources 中披露。沿用受管 add 原语创建新 branch
    与 no-checkout linked worktree，固定命令禁 hooks/fsmonitor/自动维护副作用，
@@ -1195,6 +1196,73 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
    导入但无 ref 的合成对象可留待正常 Git 维护，本流程不运行广域 gc/prune。报告
    只增加本次实际执行的固定子断言；LOCAL 双进程不等于跨机器或 GitHub LIVE，
    其余 §7 子断言继续 not-run，完整 qualification/生产采用目标与门禁不变。
+
+##### 6.1.7.1 创建失败后的中止、停稳与有限收尾
+
+- **执行失败与停稳证据分离。** 原 fixed worker 增加 `abort-stop`：允许步骤未完
+  或已报告业务失败，但永久停止新 step/prepare/dispatch，保留原错误和实际完成
+  前缀，不补结果。串行处理正在执行的操作及其 finally/锁释放，丢弃未 dispatch
+  的私有准备句柄，再复用 loader 停止、quiescent、真实 leader-only、exit、空组
+  的原监督过程。supervisor 在 catch 中先合作中止全部已启动进程并有界等待，不
+  立即 abandon；业务失败单独保存，不用它禁止仍可信通道上的 abort 握手。协议/
+  身份失效、失联、超时未收敛或残留后代仍无停稳证明，只能 abandon/retain，不
+  kill 数字 PID、不重启写者、不把退出码或超时当作空组。父进程自己的创建命令
+  也须实际结束且释放原锁，不能仅证明 worker 停了就当本地 mutation 已收敛。
+- 复用原 `SettledQualification` 私有句柄，新增真实 `executionStatus: aborted`
+  与失败/未执行前缀；它只证明本轮已启动集合停稳，不表示检查通过。实际未启动
+  的客户端须由同一 native supervisor 的启动记录和原完整零尝试/关闭链确认，
+  启动结果不明的客户端不能当未启动。停稳后用原 apply.lock 关闭各端普通写窗口
+  并 native collect；不使用 revoke。原唯一 cleaner 可据此观察**已发布的子集**，
+  原票时间/额度内精确删已知 SHA，未发布且真实 absent 的 ref 零写收尾；步骤不全
+  本身不是删除门，但 unresolved candidate/attempt、外来图或归属不明仍是门。
+  未完成断言保持 not-run、失败断言保持 failed，CLI 保留失败/门禁结局，不能因
+  清理成功转 PASS。unknown 只读恢复不重放；缺少耐久结果就保留，不虚构结果解锁。
+- 原 human 链只扩逐 resource 的事实，最小 phase 为 `reserved → mkdir-owned
+  → add-started → ready → released`；`retained` 是附原因的未收尾结果，保留最后
+  归属 phase/证据且继续占容量，不替代它们。import-source 在写对象前记 durable
+  开始事实，复用上节逐对象原字节/SHA 核验，结果不完整也不能读成已导入成功。
+  创建先确认 exact path/ref 不存在，在已允许且真实存在的父目录下以非 recursive
+  exclusive mkdir 建目标，记录 native lstat 的 device/inode、canonical parent
+  及路径身份后才进入 mkdir-owned。记录丢失/身份无法重验则 retain，不凭“路径
+  如今为空”认领；从未开始创建的 reservation 可在停稳、关闭且实读 absent 后
+  released。释放容量不是返还创建次数，原失败 run 不再分配。
+- 为避免 `worktree add -b` 部分失败后无法证明分支归属，固定流程先用本地
+  exact-absent `update-ref create` 创建批准 branch，耐久记录实际创建结果及 SHA，
+  再记 add-started，调用非 force 的 `worktree add --no-checkout <owned path>
+  <owned branch>`。这仍是同一批准资源的一次创建，不增加 refs/额度或授权面。
+  add 的非零退出不等于零副作用：实际 worktree 注册、目标 `.git` 与 common-dir
+  管理条目相互指向、本轮目录身份、branch/head 和 clean/资产检查均符合才可
+  ready 或精确移除；完整注册虽命令报错也只记已观察事实，不改执行失败 verdict。
+  无注册且目录仍为本轮已知空目录时仅 rmdir；本轮独立证明创建的 branch 在无任何
+  checkout 后 exact-SHA 删除。截断注册、未知文件、目录替换、branch 创建结果
+  未知或 SHA 漂移保留对应资源，不递归删目录、不手删 `.git/worktrees`、不 prune。
+- 中止收尾沿用“全部执行停稳/关闭 → 已知远端 refs → 本地 owned 工作区/branch”
+  次序；每次原锁内操作前重验身份、范围与清理窗口，之后记原链事实。released
+  仅在本轮 path、worktree 注册和 branch 均确实不再存在时写入；删除中断只读
+  复核已知事实，不重放不确定命令。collector 的合法 closed 后缀窄允许本轮已有
+  resource 的观察/精确收尾事实及原 cleanup 事件，不能因自己的正常收尾事件推进
+  LKG 而自锁，也不允许新增 import/create 或重开写窗。本节不增加审批库、后台、
+  新人工关口或真实资源操作；最低回归覆盖“发布成功后第二个目录创建失败仍可
+  aborted+真实停稳+已知清理”、add 部分失败/目录替换 retain、unknown 不清理、
+  失败 verdict 不因安全收尾变绿，以及相同 scope 不因释放容量重新获得创建次数。
+- 模块只窄拆两层：新增 `approval/human_resources.ts` 放纯 resource event schema、
+  reducer 与投影，不读盘/取锁/调用 Git；`human.ts` 保留唯一 receipt/LKG 写入和
+  Locked 入口，原生创建/观察/收尾留在现有 `worktree/qualification.ts`，复用
+  `workspaceLocalInventory`、路径校验、`observeWorkspaceAssets` 与既有对象原语。
+  scope schema 仍由 `human_scope.ts` 持有，依赖不反向到 worktree/runner；不增加
+  event store、通用回调或第二批准对象。reducer 只验证历史事实/次序，不把字段或
+  hash 自报当作删除能力；native 入口仍实读并校验原批准、持锁句柄和资源归属。
+- 固定推荐次序为整批 reserve → import-started/result → **create-started** →
+  mkdir-owned → branch-created → add-started → ready；create-started 在 mkdir 前
+  耐久消费本资源的一次创建，避免崩溃后从 reserved 猜是否执行过。import 也可置于
+  mkdir-owned 后，但必须在 reserve 之后、branch/add 之前；先验证 Broker 取回图，
+  再记 started，之后才写原 common-dir，结果不明不继续。全部事件引用原 resourceId，
+  import 绑定批准图摘要/逐对象 SHA，mkdir/branch/ready 保存本机实际身份与结果；
+  另以 released/retained 事实收尾，不新增通用 phase 引擎。开始事件禁止在 closed/
+  revoked/过期后登记；既有已开始操作的结果可随后补事实，不能因此恢复写资格。
+  失败或未知不从当前同 SHA ref、空目录或相同路径补造“本次创建成功”；只读观察
+  可收敛结果但不能再次执行 create-once。原范围内导入的无 ref 对象不做删除/GC，
+  不因这些已披露的对象留存伪称工作区仍存在，也不声称导入失败已变成资格通过。
 
 ## 7. 施工顺序与最小证据
 

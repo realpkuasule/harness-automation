@@ -26,7 +26,7 @@ function main(): void {
   const manifest = loadQualificationManifest(context.commonDir, manifestHash); if (!manifest.execution) throw new Error("QUALIFICATION_EXECUTION_REQUIRED");
   const binding = observeCoordinationBinding(context.projectDir, loadCoordinationConfig(context.projectDir)?.remote ?? "origin", scope.binding.repositoryId, scope.binding.credentialRef);
   if (hashObject(binding) !== hashObject(scope.binding)) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
-  const steps = qualificationSteps(manifest).filter((step) => step.clientId === clientId); let next = 0; let stopped = false; let quiescent = false;
+  const steps = qualificationSteps(manifest).filter((step) => step.clientId === clientId); let next = 0; let stopped = false; let quiescent = false; let stopRequested = false;
   let prepared: SyntheticPreparation | undefined; let recoveryDone = false;
   if (role === "rejected-recovery") {
     const facts = sameShaClientFacts(projectRoot, approvalRef, "no-op");
@@ -35,17 +35,20 @@ function main(): void {
   const send = (message: object) => process.send!({ ...message, nonce });
   process.on("disconnect", () => process.exit(1));
   process.on("message", async (input: unknown) => {
+    let recoverable = false;
     try {
       const command = clientCommandSchema.parse(input);
       if (command.nonce !== nonce) throw new Error("QUALIFICATION_PROCESS_PROTOCOL_INVALID");
       if (command.type === "exit") { if (!quiescent) throw new Error("QUALIFICATION_PROCESS_PROTOCOL_INVALID"); process.exit(0); }
-      if (command.type === "stop") {
-        if (stopped || (role === "writer" ? next !== steps.length : !recoveryDone)) throw new Error("QUALIFICATION_STEPS_INCOMPLETE"); stopped = true;
+      if (command.type === "stop" || command.type === "abort-stop") {
+        if (stopRequested || command.type === "stop" && (stopped || (role === "writer" ? next !== steps.length : !recoveryDone))) throw new Error("QUALIFICATION_STEPS_INCOMPLETE");
+        stopRequested = true; stopped = true; prepared = undefined;
         if (import.meta.url.endsWith(".ts")) await (await import("./client_source_loader.js")).stopSourceLoader();
         quiescent = true; send({ type: "quiescent" }); return;
       }
       if (role === "rejected-recovery") {
         if (stopped || recoveryDone || command.type !== "recover-rejected" || command.stepId !== "rejected-restart") throw new Error("QUALIFICATION_PROCESS_ROLE_INVALID");
+        recoverable = true;
         const result = verifyRejectedRestart(projectRoot, approvalRef, attemptId!); recoveryDone = true;
         send({ type: "result", stepId: command.stepId, resultHash: hashObject(result) }); return;
       }
@@ -57,10 +60,12 @@ function main(): void {
       if (!controlRef) throw new Error("COORDINATION_RUN_GENESIS_REQUIRED");
       if (manifest.execution!.kind === "local-same-sha-publication/1") {
         if (command.type === "prepare" && !prepared) {
+          recoverable = true;
           prepared = createQualificationRuntime(projectRoot, approvalRef, controlRef).prepareBootstrap();
           send({ type: "result", stepId: step.stepId, resultHash: hashObject(sameShaClientFacts(projectRoot, approvalRef, "prepared")) }); return;
         }
         if (command.type !== "dispatch" || !prepared) throw new Error("QUALIFICATION_STEP_ORDER_MISMATCH");
+        recoverable = true;
         const index = manifest.sameShaPublicationNegativeControl!.publications.findIndex((item) => item.clientId === clientId);
         try { dispatchSyntheticPublication(prepared); if (index !== 0) throw new Error("QUALIFICATION_SAME_SHA_EVIDENCE_INVALID"); }
         catch (error) { if (index !== 1 || !(error instanceof Error) || error.message !== "COORDINATION_CAS_NOT_PERFORMED") throw error; }
@@ -68,11 +73,12 @@ function main(): void {
         next++; send({ type: "result", stepId: step.stepId, resultHash: hashObject(result) }); return;
       }
       if (command.type !== "step") throw new Error("QUALIFICATION_STEP_ORDER_MISMATCH");
+      recoverable = true;
       const runtime = createQualificationRuntime(projectRoot, approvalRef, controlRef);
       const result = step.operation === "bootstrap" ? runtime.bootstrap() : runtime.sourceFixture(step.fixtureId);
       next++; send({ type: "result", stepId: step.stepId, resultHash: hashObject(result) });
     } catch (error) {
-      stopped = true; send({ type: "failure", code: failureCode(error) });
+      stopped = true; send({ type: "failure", code: failureCode(error), ...(recoverable ? { recoverable: true } : {}) });
     }
   });
   send({ type: "ready", pid: process.pid, bindingHash: hashObject(binding) });

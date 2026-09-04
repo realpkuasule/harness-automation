@@ -25,11 +25,13 @@ import { observeQualificationRemote, readQualificationRemote } from "./qualifica
 import { applyQualificationCleanup, planQualificationCleanup, recoverQualificationCleanup } from "./qualification_cleanup.js";
 import { startClientProcess } from "./client_process.js";
 
-const nativeHost = vi.hoisted(() => ({ home: "", sourceGroupSizes: [] as number[] }));
+const nativeHost = vi.hoisted(() => ({ home: "", sourceGroupSizes: [] as number[], badNonceClient: "" }));
 vi.mock("node:child_process", async (original) => {
   const native = await original<typeof import("node:child_process")>();
   return { ...native, spawn: ((command, args, options) => {
     if (!args?.some((arg) => arg.endsWith("/client_worker.ts"))) return native.spawn(command, args!, options!);
+    const worker = args.findIndex((arg) => arg.endsWith("/client_worker.ts"));
+    if (args[worker + 4] === nativeHost.badNonceClient) args = args.map((arg, index) => index === worker + 5 ? "00000000-0000-4000-8000-000000000000" : arg);
     const child = native.spawn(command, ["--loader", fileURLToPath(new URL("./__fixtures__/native-worker-loader.mjs", import.meta.url)),
       "--import", fileURLToPath(new URL("./__fixtures__/native-worker-os.mjs", import.meta.url)), ...args],
     { ...options, env: { ...options?.env, HARNESS_FIXTURE_USER_ROOT: nativeHost.home, TSX_DISABLE_CACHE: "1" } });
@@ -96,11 +98,13 @@ if(a.some(x=>['ls-remote','fetch','push'].includes(x))){
   a=a.map(x=>x===${JSON.stringify(endpoint)}?${JSON.stringify(remote)}:x);
 }
 if(a.includes('ls-remote')&&fault.readbackFailure&&fs.existsSync(${JSON.stringify(fired)}))process.exit(1);
-if(a.includes('ls-remote')&&fault.failReadRef&&a.includes(fault.failReadRef))process.exit(1);
+if(a.includes('ls-remote')&&fault.failReadRef&&a.includes(fault.failReadRef)){
+  if(fault.once)fs.writeFileSync(${JSON.stringify(fault)},'{}');process.exit(1);
+}
 if(deleting&&fault.beforeDeleteHead)cp.execFileSync(${JSON.stringify(realGit)},['--git-dir='+${JSON.stringify(remote)},'update-ref',a.at(-1).slice(1),fault.beforeDeleteHead]);
 const r=cp.spawnSync(${JSON.stringify(realGit)},a,{env:process.env,stdio:['inherit','pipe','pipe']});
 if(deleting&&fault.readbackFailure)fs.writeFileSync(${JSON.stringify(fired)},'deleted');
-process.stdout.write(deleting&&fault.dropDeleteOutput?'':r.stdout??'');process.stderr.write(r.stderr??'');process.exit(r.status??1);
+process.stdout.write(deleting&&fault.dropDeleteOutput||a.includes('push')&&fault.dropPushRef&&a.at(-1).endsWith(':'+fault.dropPushRef)?'':r.stdout??'');process.stderr.write(r.stderr??'');process.exit(r.status??1);
 `, { mode: 0o700 });
   return { trace, remote, realGit, fault };
 }
@@ -136,9 +140,9 @@ function prepareSupervisedFixture(crossClient = false) {
     ] } });
   return { f, native, manifest, projectRoots, source, sourceRef, controlRef, synthetic, sourceClient, now };
 }
-async function supervisedFixture(crossClient = false) {
-  const prepared = prepareSupervisedFixture(crossClient); const { manifest, projectRoots, now } = prepared;
-  const targets = manifest.clients.map((client, index) => {
+function registerSupervisedFixture(prepared: ReturnType<typeof prepareSupervisedFixture>) {
+  const { manifest, projectRoots, now } = prepared;
+  return manifest.clients.map((client, index) => {
     const commonDir = client.scope.binding.commonDir; saveQualificationManifest(commonDir, manifest);
     const scope = scopeForClient(manifest, client.clientId); const inputHash = hashObject(scope); const planHash = hashObject({ inputHash });
     const packet = createSemanticApprovalPacket({ planHash, inputHash, producerIdentity: "native-runner-fixture", binding: { planHash, inputDigest: inputHash, contextDigest: inputHash, observedHash: inputHash, policyDigest: inputHash },
@@ -146,7 +150,10 @@ async function supervisedFixture(crossClient = false) {
     const approvalRef = recordHumanApproval(commonDir, { scope, packet, approvedBy: "fixture-human", approvedAt: new Date(now).toISOString(), source: { kind: "explicit-human", messageHash: inputHash } }, planHash);
     return { clientId: client.clientId, projectRoot: projectRoots[index], approvalRef };
   });
-  const result = await runLocalQualification(manifest, targets);
+}
+async function supervisedFixture(crossClient = false) {
+  const prepared = prepareSupervisedFixture(crossClient); const targets = registerSupervisedFixture(prepared);
+  const result = await runLocalQualification(prepared.manifest, targets);
   return { ...prepared, targets, result, approvalRef: targets[0].approvalRef };
 }
 function qualificationCli(root: string, ...args: string[]): Promise<{ status: number; stdout: string; stderr: string }> {
@@ -164,6 +171,7 @@ function qualificationRequest(prepared: ReturnType<typeof prepareSupervisedFixtu
   return input;
 }
 afterEach(async () => {
+  nativeHost.badNonceClient = "";
   Object.defineProperty(process, "platform", nativePlatform); vi.unstubAllEnvs(); roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true }));
   // Native commands are synchronous. Drain pending worker/report RPC messages between cases, not after the entire file.
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -217,6 +225,21 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
     const f = fixture();
     await expect(startClientProcess({ projectRoot: f.root, approvalRef: "b".repeat(64), manifestHash: "c".repeat(64),
       clientId: "local", bindingHash: "a".repeat(64) })).rejects.toThrow("HUMAN_APPROVAL_REQUIRED");
+  });
+
+  it("cannot turn an unknown native startup into a zero-process aborted settlement", async () => {
+    const p = prepareSupervisedFixture(true); const targets = registerSupervisedFixture(p); nativeHost.badNonceClient = "other";
+    const error = await runLocalQualification(p.manifest, targets).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(Error);
+    const failure = error as Error;
+    expect(failure.message).toBe("QUALIFICATION_PROCESS_PROTOCOL_INVALID");
+    expect(failure.cause).toMatchObject({ abortedSettlement: undefined, qualificationProgress: {
+      steps: [], launchRequestedClients: ["local", "other"], readyClients: ["local"], instances: [],
+      executionStatus: "failed", drainCoverage: "unproven", abortError: "QUALIFICATION_PROCESS_DRAIN_UNPROVEN",
+    } });
+    for (const target of targets) expect(loadHumanAuthorization(p.manifest.clients.find((client) => client.clientId === target.clientId)!.scope.binding.commonDir, target.approvalRef))
+      .toMatchObject({ writesClosed: false, candidates: [], attempts: [] });
+    expect(existsSync(p.native.trace)).toBe(false);
   });
 
   it("runs the real CLI with native receipts, retryable partial approval and two-ref cleanup, never green qualification", async () => {
@@ -292,7 +315,9 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
     expect(JSON.parse(readFileSync(report.reportPath, "utf8"))).toEqual(expect.objectContaining({ error: report.error, recovery: report.recovery }));
     const reference = JSON.parse(approved.stdout).registered[0].approvalRef;
     if (phase === "publication") {
-      expect(report.execution).toMatchObject({ steps: [{ stepId: "init" }], launchRequestedClients: ["local"], readyClients: ["local"], drainCoverage: "unproven" });
+      expect(report.execution).toMatchObject({ steps: [{ stepId: "init" }], launchRequestedClients: ["local"], readyClients: ["local"],
+        executionStatus: "aborted", drainCoverage: "this-run-native-process-groups-only", instances: [{ executionStatus: "aborted", finalMembers: [] }] });
+      expect(report.cleanupError).toBeTruthy();
       expect(git(p.f.root, "--git-dir=" + p.native.remote, "rev-parse", p.controlRef)).toBe(p.synthetic.objects[0].commitSha);
       expect(loadHumanAuthorization(p.f.commonDir, reference).attempts.some((item) => item.operation === "cleanup")).toBe(false);
       return;
@@ -304,6 +329,41 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
     const recovered = await qualificationCli(p.f.root, "recover-cleanup", "--approval", reference, "--attempt", attempt.attemptId);
     expect(recovered.status, recovered.stderr).toBe(0); expect(JSON.parse(recovered.stdout)).toMatchObject({ status: "applied", attemptId: attempt.attemptId });
     expect(pushes()).toBe(count); expect(git(p.f.root, "--git-dir=" + p.native.remote, "rev-parse", p.sourceRef)).toBe(p.source.commitSha);
+  }, 180_000);
+
+  it.each(["known-prefix", "unknown-write"])("settles native aborts but only cleans a proven publication prefix (%s)", async (mode) => {
+    const p = prepareSupervisedFixture(true); const input = qualificationRequest(p);
+    const planned = await qualificationCli(p.f.root, "plan", "--input", input); expect(planned.status, planned.stderr).toBe(0);
+    const plan = JSON.parse(planned.stdout);
+    const approved = await qualificationCli(p.f.root, "approve", "--plan", plan.planPath, "--approve", plan.planHash, "--approved-by", "fixture-human", "--approval-source", "synthetic-abort-message");
+    expect(approved.status, approved.stderr).toBe(0);
+    writeFileSync(p.native.fault, JSON.stringify(mode === "known-prefix" ? { failReadRef: p.sourceRef, once: true } : { dropPushRef: p.sourceRef }));
+    const failed = await qualificationCli(p.f.root, "run", "--plan", plan.planPath); expect(failed.status, failed.stderr || failed.stdout).toBe(1);
+    const report = JSON.parse(failed.stdout);
+    expect(report).toMatchObject({ executionStatus: "failed", qualificationStatus: "incomplete", qualified: false,
+      execution: { executionStatus: "aborted", abortError: null, steps: [{ stepId: "init" }],
+        drainCoverage: "this-run-native-process-groups-only", launchRequestedClients: ["local", "other"], readyClients: ["local", "other"] } });
+    expectUnexecutedCas(report.requiredCases);
+    expect(report.execution.instances).toHaveLength(2);
+    expect(report.execution.instances.every((instance: { executionStatus: string; finalMembers: unknown[] }) => instance.executionStatus === "aborted" && instance.finalMembers.length === 0)).toBe(true);
+    expect(report.execution.instances[1].operationError).toBe(report.error);
+    expect(report.execution.instances[0].operationError).toBeNull();
+    const states = JSON.parse(approved.stdout).registered.map((client: { clientId: string; approvalRef: string }) =>
+      loadHumanAuthorization(p.manifest.clients.find((item) => item.clientId === client.clientId)!.scope.binding.commonDir, client.approvalRef));
+    expect(states.every((state: ReturnType<typeof loadHumanAuthorization>) => state.writesClosed)).toBe(true);
+    const pushes = readFileSync(p.native.trace, "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((call) => call.argv.includes("push"));
+    expect(pushes).toHaveLength(2); // One creation + one cleanup, or two creations; never replay the failed source.
+    if (mode === "known-prefix") {
+      expect(report).toMatchObject({ cleanupError: null, cleanup: [{ status: "deleted", ref: p.controlRef }, { status: "observed-absent", ref: p.sourceRef, attemptId: null }] });
+      expect(states[0].candidates).toHaveLength(1); expect(states[1].candidates).toHaveLength(0); expect(states[1].attempts).toHaveLength(0);
+      expect(git(p.f.root, "--git-dir=" + p.native.remote, "for-each-ref", "--format=%(refname)")).toBe("");
+    } else {
+      expect(report).toMatchObject({ cleanup: [], cleanupError: "HUMAN_WRITE_OUTCOME_UNRESOLVED" });
+      expect(states[1].candidates).toHaveLength(1); expect(states[1].attempts).toHaveLength(1); expect(states[1].attempts[0].outcome.status).toBe("unknown");
+      expect(git(p.f.root, "--git-dir=" + p.native.remote, "rev-parse", p.sourceRef)).toBe(p.source.commitSha);
+      expect(git(p.f.root, "--git-dir=" + p.native.remote, "rev-parse", p.controlRef)).toBe(p.synthetic.objects[0].commitSha);
+    }
+    expect(JSON.parse(readFileSync(report.reportPath, "utf8"))).toMatchObject({ error: report.error, cleanup: report.cleanup, executionStatus: "failed" });
   }, 180_000);
 
   it.each([false, true])("supervises fixed native publications and exact cleanup without claiming the full DG case (cross-client=%s)", async (crossClient) => {

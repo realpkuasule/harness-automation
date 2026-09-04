@@ -161,6 +161,13 @@ fixed assertion inventory: assertions not actually executed remain `not-run`,
 and a partly covered group remains `incomplete`. Failure exits `1`, or `3` only
 for a genuine missing host capability.
 Reports retain completed steps, cleanup outcomes and per-client recovery locations.
+An operation failure first requests a cooperative stop. If the original supervisor
+proves every started process group empty and closes ordinary writes, the sole cleaner
+may remove only the known published subset within the original cleanup scope.
+The original error/exit status remains failed, with any cleanup error recorded
+separately; unfinished assertions stay `not-run`. A failed or unknown start is not
+an empty process group, and invalid identity, lost supervision or remaining descendants
+cannot produce cleanup authority.
 An unknown outcome never triggers replay or deletion of the remaining resources.
 Read-only `recover-cleanup` may append proven original deletion facts, but cannot
 reconstruct a settled-run handle, reissue a push or clean another ref after restart.
