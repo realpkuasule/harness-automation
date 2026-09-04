@@ -717,6 +717,20 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
    bootstrap readback 可证明 exact genesis 当前存在或处于当前完整合法历史中，
    但不签发写租约，也不把竞争输家的拒绝改写为本次创建成功。远端已存在且无本次
    在途记录时不盲推/自动 adoption；unknown 只恢复原候选/事务，不重造对象或退回 ref。
+   **Git 的 up-to-date 不是本次 CAS 成功。** 完整、无超时/信号/执行错误的 porcelain
+   结果中，唯一获批 exact ref 为 `=`/`[up to date]` 时，即使 exit 0，本次 attempt
+   也记 `rejected`，原因区分为 `CAS_NOT_PERFORMED`，不冒充服务端 stale rejection。
+   已预留的尝试不退款；超时、输出截断或无法完整分类才保持 unknown。exit 0 加上
+   readback 同 SHA 不能取代实际 ref-update 结果；成功分类还须匹配本次已记录的精确
+   ref/expected/candidate 意图和正向更新结果，再完成原有对象/历史 readback。
+   将明确 no-op/拒绝事实尽早记入同一 attempt 回执，恢复首先读取该事实：已经
+   rejected 的尝试绝不因当前 SHA 相同或处于合法祖先中而升级为 Applied。底层对象
+   恢复只证明“状态已观察到”，不自行决定哪次 attempt 更新了 ref。对确实 unknown
+   且同一 SHA 可由多个 publisher 发布的情形，SHA/ancestry 本身不能归因；无绑定
+   本次尝试的可靠更新证据时保留 unknown 与观察结果，不计 CAS winner、不用它
+   自动取得本次创建/清理归属。已有正向更新结果可与只读 readback 合并补齐原事务，
+   无需重发。负面对照必须让同 SHA 竞争的一方得到 `=`，证明它不被计作第二个赢家，
+   其 rejected 结果跨进程恢复后仍不变；不另建 push 账本或降低未知结果恢复门。
 6. source fixture 使用一个窄 `runApprovedSourceFixture(fixtureId)` 入口，复用同一
    私有对象物化/精确 push 帮助函数及预算 guard，不另建 Store/账本，也不放宽 control
    的 entries/history。固定 descriptor 只允许空树合成 commit；父节点只能为空或

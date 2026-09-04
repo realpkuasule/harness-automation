@@ -1,13 +1,13 @@
-import { loadHumanAuthorization, type HumanScopeBinding } from "../approval/human.js";
+import { assertHumanCandidateScope, loadHumanAuthorization, type HumanScopeBinding } from "../approval/human.js";
 import { loadCredentialHostBinding } from "../credentials/host_binding.js";
 import { currentHarnessArtifact } from "../repository/artifact.js";
 import { assertMutationLock, type MutationLock } from "../recovery/service.js";
 import { resolveRepositoryContext, type RepositoryContext } from "../repository/git.js";
 import { githubEndpointRepository, remotePushEndpoint } from "../repository/remote.js";
 import { hashObject } from "../v2/fs.js";
-import { humanCoordinationGuards } from "./authorization.js";
+import { humanCoordinationGuards, recoverHumanSyntheticWrite } from "./authorization.js";
 import { GitHubCoordinationReader } from "./github.js";
-import { validateCoordinationHistory } from "./history.js";
+import { coordinationHistoryCheck } from "./history.js";
 import { CoordinationLifecycleService, loadCoordinationConfig } from "./service.js";
 import { GitCoordinationStore } from "./store.js";
 import { GitHubCoordinationTransport } from "./transport.js";
@@ -15,6 +15,8 @@ import { observeQualificationEpoch, qualificationOperationAuthority } from "./au
 import { handoffObservers } from "./handoff.js";
 import type { ManagedWriteContext } from "./writer.js";
 import { prepareTakeover } from "./takeover.js";
+import { approvedControlGenesis, approvedSyntheticPublication } from "./synthetic.js";
+import { runApprovedSourceFixture } from "./publication.js";
 
 /** Non-secret observation; all identity comes from the actual checkout, approved host binding and running artifact. */
 export function observeCoordinationBinding(projectRoot: string, remote: string, repositoryId: string, credentialId: string): HumanScopeBinding {
@@ -47,19 +49,16 @@ export function createQualificationRuntime(projectRoot: string, approvalRef: str
   const scope = state.approval.scope;
   if (scope.kind !== "qualification-run" || !scope.refs.includes(controlRef)) throw new Error("COORDINATION_QUALIFICATION_SCOPE_REQUIRED");
   if (state.revoked) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
+  const genesis = approvedControlGenesis(scope.synthetic, controlRef);
   const { remote, observeBinding, binding, provider } = nativeObservers(context, scope.binding);
   const authority = qualificationOperationAuthority(context.projectDir, binding, observeBinding, () => provider.serverClock());
-  const guards = humanCoordinationGuards(context.commonDir, approvalRef, observeBinding, () => provider.serverClock(), held, authority.assertCandidate);
+  const guards = humanCoordinationGuards(context.commonDir, approvalRef, observeBinding, () => provider.serverClock(), held, (intent) => {
+    if (intent.subject.kind === "coordination-record") authority.assertCandidate(intent);
+    else assertHumanCandidateScope(loadHumanAuthorization(context.commonDir, approvalRef).approval.scope, intent);
+  });
   const transport = new GitHubCoordinationTransport(context.projectDir, remote, binding.repositoryId, binding.credentialRef, guards.authorizeWrite);
-  const store = new GitCoordinationStore(controlRef, transport, guards.beforePush, true, (head, readValidatedCommit, isAncestor) => {
-    const history = loadHumanAuthorization(context.commonDir, approvalRef);
-    const bootstrap = history.attempts.find((attempt) => attempt.operation === "create" && attempt.ref === controlRef);
-    const candidate = history.candidates.find((item) => item.candidateId === bootstrap?.candidateId && item.parentSha === null);
-    if (!bootstrap?.head || candidate?.result?.head !== bootstrap.head) throw new Error("COORDINATION_RUN_GENESIS_REQUIRED");
-    const checked = validateCoordinationHistory({ commonDir: context.commonDir, anchor: { validationVersion: "coordination-history/1",
-      genesisSha: bootstrap.head, repository: binding.repository, repositoryId: binding.repositoryId, controlRef }, head, readValidatedCommit, isAncestor });
-    if (checked.status !== "verified") throw new Error("COORDINATION_HISTORY_VALIDATION_PENDING");
-  }, guards.beforeCommit);
+  const store = new GitCoordinationStore(controlRef, transport, guards.beforePush, genesis, coordinationHistoryCheck(context.commonDir,
+    { validationVersion: "coordination-history/2", genesis, endpointHash: binding.endpointHash, repository: binding.repository, repositoryId: binding.repositoryId, controlRef }), guards.beforeCommit);
   const handoff = handoffObservers(context, held, transport, observeBinding, () => provider.serverClock());
   const writer: ManagedWriteContext = { context, store, refreshClock: () => provider.serverClock(), observeAuthority: (record) => {
     const current = loadHumanAuthorization(context.commonDir, approvalRef); const observed = observeBinding();
@@ -69,7 +68,11 @@ export function createQualificationRuntime(projectRoot: string, approvalRef: str
         current.candidates.some((candidate) => !candidate.result || candidate.result.status === "unknown")) throw new Error("HUMAN_WRITE_OUTCOME_UNRESOLVED");
     provider.serverClock().requireBefore(current.approval.scope.expiresAt); return observed;
   } };
-  return { context, binding, store, provider, writer, lifecycle: new CoordinationLifecycleService(store, () => provider.serverClock(), provider, authority.prepare, handoff) };
+  return { context, binding, store, provider, writer,
+    bootstrap: () => store.bootstrap(approvedSyntheticPublication(scope.synthetic!, genesis.metadata.objectId).publication, guards.beforeSyntheticPush),
+    sourceFixture: (fixtureId: string) => runApprovedSourceFixture(transport, scope.synthetic!, fixtureId, guards.beforeCommit, guards.beforeSyntheticPush),
+    recoverSynthetic: (attemptId: string) => recoverHumanSyntheticWrite(context.commonDir, approvalRef, attemptId, store, transport, held),
+    lifecycle: new CoordinationLifecycleService(store, () => provider.serverClock(), provider, authority.prepare, handoff) };
 }
 
 /** Exact isolated takeover sub-ticket. Production will additionally consume its adopted configuration, never this ticket alone. */
@@ -79,18 +82,17 @@ export function createTakeoverRuntime(projectRoot: string, approvalRef: string, 
   if (scope.kind !== "takeover") throw new Error("COORDINATION_TAKEOVER_APPROVAL_REQUIRED");
   if (!scope.qualification) throw new Error("COORDINATION_PRODUCTION_ADOPTION_REQUIRED");
   if (state.revoked) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
+  const parent = loadHumanAuthorization(context.commonDir, scope.qualification.parentApprovalRef).approval.scope;
+  const genesis = approvedControlGenesis(parent.kind === "qualification-run" ? parent.synthetic : undefined, scope.controlRef);
+  if (genesis.commitSha !== scope.qualification.genesisSha) throw new Error("HUMAN_PARENT_SCOPE_MISMATCH");
   const { remote, observeBinding, binding, provider } = nativeObservers(context, scope.binding);
   let prepared: ReturnType<typeof prepareTakeover> | undefined;
   const guards = humanCoordinationGuards(context.commonDir, approvalRef, observeBinding, () => provider.serverClock(), held, (intent) => {
     if (!prepared) throw new Error("COORDINATION_OPERATION_AUTHORITY_REQUIRED"); prepared.assertCandidate(intent);
   }, "takeover");
   const transport = new GitHubCoordinationTransport(context.projectDir, remote, binding.repositoryId, binding.credentialRef, guards.authorizeWrite);
-  const store = new GitCoordinationStore(scope.controlRef, transport, guards.beforePush, false, (head, readValidatedCommit, isAncestor) => {
-    const checked = validateCoordinationHistory({ commonDir: context.commonDir, anchor: { validationVersion: "coordination-history/1",
-      genesisSha: scope.qualification!.genesisSha, repository: binding.repository, repositoryId: binding.repositoryId, controlRef: scope.controlRef },
-    head, readValidatedCommit, isAncestor });
-    if (checked.status !== "verified") throw new Error("COORDINATION_HISTORY_VALIDATION_PENDING");
-  }, guards.beforeCommit);
+  const store = new GitCoordinationStore(scope.controlRef, transport, guards.beforePush, genesis, coordinationHistoryCheck(context.commonDir,
+    { validationVersion: "coordination-history/2", genesis, endpointHash: binding.endpointHash, repository: binding.repository, repositoryId: binding.repositoryId, controlRef: scope.controlRef }), guards.beforeCommit);
   return { context, binding, store, provider, takeover() {
     prepared = undefined; prepared = prepareTakeover(context, held, approvalRef, store, transport, observeBinding, () => provider.serverClock());
     return prepared.apply();

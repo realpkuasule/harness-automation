@@ -13,7 +13,7 @@ import { requireWriteLease } from "./leases.js";
 import { expectedRecord } from "./record.js";
 import { CoordinationLifecycleService } from "./service.js";
 import { GitCoordinationStore, type CoordinationCommitIntent } from "./store.js";
-import { localHistory, localTransport } from "./__fixtures__/transport.js";
+import { localHistory, localTransport, seedLocalGenesis } from "./__fixtures__/transport.js";
 import { assertManagedWriteAllowedLocked, runManagedWrite } from "./writer.js";
 
 const roots: string[] = []; const digest = "a".repeat(64); const workItem = "github:owner/repo#86";
@@ -34,7 +34,7 @@ function fixture(sourceRepositoryId = "R_1") {
     credentialPurpose: "git-transport" as const, actor: side, hostId: side === "source" ? "741ba5a8-40e2-4848-b5a4-082f4f2145a9" : "841ba5a8-40e2-4848-b5a4-082f4f2145a9",
     configHash: digest, controlEpoch: observeQualificationEpoch(side === "source" ? sourceRoot : targetRoot, digest),
     implementation: { kind: "package" as const, artifactDigest: digest }, runnerHash: digest });
-  const controlRef = "refs/heads/coordination-fixture"; let genesis = ""; let date = "Fri, 04 Sep 2026 04:00:00 GMT";
+  const controlRef = "refs/heads/coordination-fixture"; const genesis = seedLocalGenesis(remote, controlRef); let date = "Fri, 04 Sep 2026 04:00:00 GMT";
   let writes = 0; let activeWriters = 0; let lateTarget = false; let retrieved = 0;
   const clock = () => { const c = new CoordinationClock(() => ({ monotonicMs: 0, wallMs: 0 })); c.observe(date, c.start()); return c; };
   function run<T>(side: "source" | "target", action: (service: CoordinationLifecycleService, store: GitCoordinationStore) => T, covered = true) {
@@ -46,8 +46,8 @@ function fixture(sourceRepositoryId = "R_1") {
         assertMutationLock(context, held); authority.assertCandidate(intent!); writes++;
         const result = local.push(directory, head, ref, expected); if (side === "target" && lateTarget) date = "Fri, 04 Sep 2026 04:02:00 GMT";
         return result;
-      } }, (candidate) => { if (!candidate.expectedControlSha) genesis = candidate.controlSha; }, true,
-      localHistory(context.commonDir, controlRef, () => genesis), (candidate) => { authority.assertCandidate(candidate); intent = candidate; return () => {}; });
+      } }, () => {}, genesis,
+      localHistory(context.commonDir, controlRef, genesis), (candidate) => { authority.assertCandidate(candidate); intent = candidate; return () => {}; });
       const observers = handoffObservers(context, held, { ...local, fetch(directory, head) { retrieved++; local.fetch(directory, head); } }, () => binding(side), clock,
         covered ? (record, lock) => {
           assertMutationLock(context, lock); if (activeWriters) throw new Error("COORDINATION_SOURCE_WRITERS_UNRESOLVED");

@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { hashObject } from "../v2/fs.js";
 import { CoordinationClock } from "../coordination/clock.js";
 import { controlEpochDigest } from "../coordination/authority.js";
+import { prepareSyntheticObject } from "../coordination/synthetic.js";
 import { listReceiptTransactions } from "../receipt/service.js";
 import { createSemanticApprovalPacket } from "./service.js";
 import { loadHumanAuthorization, recordCandidateResult, recordHumanApproval, recordWriteOutcome, reserveCandidateQuota, reserveWriteAttempt, revokeHumanAuthorization, type HumanScope, type HumanScopeBinding } from "./human.js";
@@ -61,6 +62,32 @@ function created(root: string, approvalRef: string, observed: HumanScopeBinding,
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
 
 describe("fixed-purpose human authorization receipts", () => {
+  it("binds synthetic candidates and dispatch to exact approved bytes, transaction, ref and old SHA", () => {
+    const plan = prepareSyntheticObject("source-fixture", { runId: scope.runId, objectId: "source", seconds: 1788480000 });
+    const publication = { fixtureId: "source", transactionId: "fixture-create", ref, expected: null };
+    const synthetic = { objects: [plan], controls: [], publications: [publication] };
+    const f = fixture({ ...scope, refs: [ref, "refs/heads/also-listed"], synthetic });
+    const approvalRef = f.register();
+    const exact = { ...intent, transactionId: publication.transactionId, treeSha: plan.treeSha, commitMetadataHash: plan.commitBytesSha256,
+      subject: { kind: "source-fixture" as const, fixtureId: "source", objectPlanHash: plan.objectPlanHash } };
+    for (const patch of [{ transactionId: "wrong" }, { parentSha: head }, { treeSha: head }, { commitMetadataHash: digest },
+      { subject: { ...exact.subject, fixtureId: "unknown" } }, { subject: { ...exact.subject, kind: "control-genesis" as const } }]) {
+      expect(() => reserveCandidateQuota(f.root, approvalRef, f.binding, { ...exact, ...patch }, clock())).toThrow("HUMAN_SYNTHETIC_SCOPE_REQUIRED");
+    }
+    expect(loadHumanAuthorization(f.root, approvalRef).candidates).toHaveLength(0);
+    const candidate = reserveCandidateQuota(f.root, approvalRef, f.binding, exact, clock());
+    recordCandidateResult(f.root, approvalRef, { candidateId: candidate.candidateId, status: "created", head: plan.commitSha, evidenceHash: digest });
+    const write = { ...request, transactionId: publication.transactionId, head: plan.commitSha };
+    for (const patch of [{ ref: "refs/heads/also-listed" }, { operation: "cas" as const, expected: head }]) {
+      expect(() => reserveWriteAttempt(f.root, approvalRef, f.binding, { ...write, ...patch }, clock())).toThrow("HUMAN_WRITE_SCOPE_MISMATCH");
+    }
+    expect(loadHumanAuthorization(f.root, approvalRef).attempts).toHaveLength(0);
+    reserveWriteAttempt(f.root, approvalRef, f.binding, write, clock());
+    expect(loadHumanAuthorization(f.root, approvalRef).attempts).toHaveLength(1);
+    expect(() => fixture({ ...scope, synthetic: { ...synthetic, publications: [{ ...publication, ref: "refs/heads/unlisted" }] } }).register()).toThrow("HUMAN_SCOPE_INVALID");
+    expect(() => fixture({ ...scope, runId: "different", synthetic }).register()).toThrow("HUMAN_SCOPE_INVALID");
+  });
+
   it("requires a recorded exact protected approval; no pre-existing write PASS is required for the bounded probe", () => {
     const { root, packet, approval, register, binding } = fixture();
     expect(() => loadHumanAuthorization(root, packet.packetHash)).toThrow("HUMAN_APPROVAL_REQUIRED");

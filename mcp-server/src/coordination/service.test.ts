@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CoordinationLifecycleService, GitCoordinationStore, confirmRenewal, coordinationStatus, nextLease, observeRenewal, reserveRenewal } from "./service.js";
 import { createCoordinationRecord, expectedRecord } from "./record.js";
 import { CoordinationClock } from "./clock.js";
-import { localHistory, localTransport } from "./__fixtures__/transport.js";
+import { localHistory, localTransport, fixtureGenesis, seedLocalGenesis } from "./__fixtures__/transport.js";
 
 const paths: string[] = [];
 function git(cwd: string, ...args: string[]): string { return execFileSync("git", args, { cwd, encoding: "utf8" }).trim(); }
@@ -14,8 +14,8 @@ function fixture(): { root: string; remote: string; store: GitCoordinationStore 
   const root = mkdtempSync(join(tmpdir(), "harness-coordination-")); paths.push(root);
   const remote = join(root, "remote.git"); git(root, "init", "--bare", remote);
   const local = join(root, "local"); git(root, "clone", "--quiet", remote, local); git(local, "config", "user.email", "test@example.test"); git(local, "config", "user.name", "Test");
-  const controlRef = "refs/heads/harness-automation/coordination/v3"; let genesis = "";
-  return { root: local, remote, store: new GitCoordinationStore(controlRef, localTransport(local, remote), (candidate) => { if (!candidate.expectedControlSha) genesis = candidate.controlSha; }, true, localHistory(local, controlRef, () => genesis), () => () => {}) };
+  const controlRef = "refs/heads/harness-automation/coordination/v3"; const genesis = seedLocalGenesis(remote, controlRef);
+  return { root: local, remote, store: new GitCoordinationStore(controlRef, localTransport(local, remote), () => {}, genesis, localHistory(local, controlRef, genesis), () => () => {}) };
 }
 function sampleClock(date = "Fri, 04 Sep 2026 04:00:00 GMT") { const clock = new CoordinationClock(() => ({ monotonicMs: 0, wallMs: 0 })); clock.observe(date, clock.start()); return clock; }
 function lease(workItem = "github:owner/repo#1") { return nextLease({ repository: "owner/repo", repositoryId: "R_1", workItem, branch: "codex/test", sourceRepositoryId: "R_1", owner: "octo", machine: "machine-a", controlEpochDigest: "a".repeat(64), head: "b".repeat(40), ttlMs: 86_400_000, transactionId: `tx-${workItem}` }, sampleClock()); }
@@ -24,7 +24,7 @@ afterEach(() => { while (paths.length) rmSync(paths.pop()!, { recursive: true, f
 describe("GitCoordinationStore", { timeout: 20_000 }, () => {
   it("refuses terminal claims without an authenticated merge observer", () => {
     const { store } = fixture(); const first = lease();
-    store.compareAndSwap({ workItem: first.workItem, expectedControlSha: null, expected: {}, next: first });
+    store.compareAndSwap({ workItem: first.workItem, expectedControlSha: fixtureGenesis().commitSha, expected: {}, next: first });
     const before = store.read(first.workItem).controlSha;
     const lifecycle = new CoordinationLifecycleService(store, sampleClock);
     expect(() => lifecycle.terminalClaim(first.workItem, expectedRecord(first), "c".repeat(40) as never, "main")).toThrow("COORDINATION_MERGE_OBSERVER_REQUIRED");
@@ -33,7 +33,7 @@ describe("GitCoordinationStore", { timeout: 20_000 }, () => {
   it("refuses an expired lease in the actual rebind handler before a remote mutation", () => {
     const { store } = fixture();
     const expired = createCoordinationRecord({ ...lease(), createdAt: "2020-01-01T00:00:00.000Z", expiresAt: "2020-01-02T00:00:00.000Z" });
-    store.compareAndSwap({ workItem: expired.workItem, expectedControlSha: null, expected: {}, next: expired });
+    store.compareAndSwap({ workItem: expired.workItem, expectedControlSha: fixtureGenesis().commitSha, expected: {}, next: expired });
     const clock = new CoordinationClock(() => ({ monotonicMs: 0, wallMs: 0 })); clock.observe("Fri, 04 Sep 2026 04:00:00 GMT", clock.start());
     const service = new CoordinationLifecycleService(store, () => clock);
     const before = store.read(expired.workItem).controlSha;
@@ -43,7 +43,7 @@ describe("GitCoordinationStore", { timeout: 20_000 }, () => {
   it("uses exact-old-SHA CAS, preserves other work items, and rejects stale ownership", () => {
     const { store } = fixture();
     const first = lease();
-    const saved = store.compareAndSwap({ workItem: first.workItem, expectedControlSha: null, expected: {}, next: first }).current.record!;
+    const saved = store.compareAndSwap({ workItem: first.workItem, expectedControlSha: fixtureGenesis().commitSha, expected: {}, next: first }).current.record!;
     const before = store.read(first.workItem);
     const other = lease("github:owner/repo#2");
     store.compareAndSwap({ workItem: other.workItem, expectedControlSha: before.controlSha, expected: {}, next: other });
@@ -80,7 +80,7 @@ describe("GitCoordinationStore", { timeout: 20_000 }, () => {
 
   it("persists both renewal phases and the timely proof without incrementing the generation", () => {
     const { store } = fixture(); const first = lease();
-    store.compareAndSwap({ workItem: first.workItem, expectedControlSha: null, expected: {}, next: first });
+    store.compareAndSwap({ workItem: first.workItem, expectedControlSha: fixtureGenesis().commitSha, expected: {}, next: first });
     const lifecycle = new CoordinationLifecycleService(store, sampleClock, undefined, () => {}); // LOCAL primitive fixture, not native authority.
     const renewed = lifecycle.renew(first.workItem, expectedRecord(first), 172_800_000);
     expect(renewed.generation).toBe(first.generation); expect(renewed.renewal).toBeUndefined();
@@ -90,7 +90,7 @@ describe("GitCoordinationStore", { timeout: 20_000 }, () => {
 
   it("never grants proposed time after a late reservation, including to a restarted handler", () => {
     const { store } = fixture(); const first = lease();
-    store.compareAndSwap({ workItem: first.workItem, expectedControlSha: null, expected: {}, next: first });
+    store.compareAndSwap({ workItem: first.workItem, expectedControlSha: fixtureGenesis().commitSha, expected: {}, next: first });
     let date = "Fri, 04 Sep 2026 04:00:00 GMT";
     const original = store.compareAndSwap.bind(store);
     const writes = vi.spyOn(store, "compareAndSwap").mockImplementation((args) => { const result = original(args); if (args.next.renewal) date = "Sat, 05 Sep 2026 04:00:00 GMT"; return result; });

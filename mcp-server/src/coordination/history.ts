@@ -1,10 +1,12 @@
 import { z } from "zod";
 import { hashObject } from "../v2/fs.js";
 import { appendLkgRecord, appendReceiptEvent, readLkgChain, readReceiptChain } from "../receipt/service.js";
+import { syntheticObjectSchema } from "./synthetic.js";
 
 const sha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
 const anchorSchema = z.object({
-  validationVersion: z.literal("coordination-history/1"), genesisSha: sha,
+  validationVersion: z.literal("coordination-history/2"), genesis: syntheticObjectSchema.refine((plan) => plan.kind === "control-genesis"),
+  endpointHash: z.string().regex(/^[a-f0-9]{64}$/u),
   repository: z.string().min(1), repositoryId: z.string().min(1), controlRef: z.string().startsWith("refs/heads/"),
 }).strict();
 export type CoordinationHistoryAnchor = z.infer<typeof anchorSchema>;
@@ -14,6 +16,13 @@ const stateSchema = z.object({
 type HistoryState = z.infer<typeof stateSchema>;
 export interface ControlCommit { parents: string[]; treeSha: string; }
 export type HistoryCheck = (head: string, readValidatedCommit: (sha: string) => ControlCommit, isAncestor: (ancestor: string, descendant: string) => boolean) => void;
+
+export function coordinationHistoryCheck(commonDir: string, anchor: CoordinationHistoryAnchor): HistoryCheck {
+  return (head, readValidatedCommit, isAncestor) => {
+    const checked = validateCoordinationHistory({ commonDir, anchor, head, readValidatedCommit, isAncestor });
+    if (checked.status !== "verified") throw new Error("COORDINATION_HISTORY_VALIDATION_PENDING");
+  };
+}
 
 /** A validation checkpoint is a rebuildable receipt, never owner/generation/time authority. */
 export function validateCoordinationHistory(args: {
@@ -39,10 +48,10 @@ export function validateCoordinationHistory(args: {
     if (!parsed.success || hashObject(parsed.data.anchor) !== contextHash || lkg.planHash !== contextHash || lkg.observedHash !== hashObject(parsed.data)) throw new Error("COORDINATION_HISTORY_CHECKPOINT_INVALID");
     prior = parsed.data;
   } else {
-    const genesis = readValidatedCommit(anchor.genesisSha);
-    if (genesis.parents.length !== 0 || !sha.safeParse(genesis.treeSha).success) throw new Error("COORDINATION_HISTORY_GENESIS_INVALID");
+    const genesis = readValidatedCommit(anchor.genesis.commitSha);
+    if (genesis.parents.length !== 0 || genesis.treeSha !== anchor.genesis.treeSha) throw new Error("COORDINATION_HISTORY_GENESIS_INVALID");
   }
-  const trusted = prior?.verifiedTip ?? anchor.genesisSha;
+  const trusted = prior?.verifiedTip ?? anchor.genesis.commitSha;
   if (!isAncestor(trusted, head) || (prior?.nextSha && !isAncestor(prior.targetSha, head))) throw new Error("COORDINATION_HISTORY_DISCONTINUITY");
   if (prior?.verifiedTip === head && prior.nextSha === null) return { status: "verified", verifiedTip: head, inspected: 0 };
   let state: HistoryState = prior?.nextSha ? { ...prior } : { anchor, targetSha: head, baseSha: trusted, nextSha: head, verifiedTip: prior?.verifiedTip ?? null };

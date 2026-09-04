@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { prepareSyntheticObject, syntheticObjectSchema, validateSourceFixtureGraph } from "./synthetic.js";
+import { approvedSyntheticPublication, prepareSyntheticObject, syntheticObjectSchema, syntheticScopeSchema, validateSourceFixtureGraph } from "./synthetic.js";
 
 const metadata = { runId: "bounded-run", objectId: "genesis", seconds: 1788480000 };
 it("precomputes exact Git bytes without creating commit objects or taking execution-time metadata", () => {
@@ -32,4 +32,20 @@ it("rejects arbitrary payload, headers, hash drift and source/control ancestry c
   const wrong = prepareSyntheticObject("source-fixture", { ...metadata, objectId: "wrong" }, [genesis.commitSha]);
   expect(() => validateSourceFixtureGraph([wrong, genesis])).toThrow("SYNTHETIC_SOURCE_GRAPH_INVALID");
   expect(() => validateSourceFixtureGraph([first, first])).toThrow("SYNTHETIC_SOURCE_GRAPH_INVALID");
+});
+
+it("keeps read-only graph entries separate from exact publication rights", () => {
+  const genesis = prepareSyntheticObject("control-genesis", metadata);
+  const source = prepareSyntheticObject("source-fixture", { ...metadata, objectId: "source-root" });
+  const next = prepareSyntheticObject("source-fixture", { ...metadata, objectId: "source-next" }, [source.commitSha]);
+  const publication = { fixtureId: next.metadata.objectId, transactionId: "source-update", ref: "refs/heads/source", expected: source.commitSha };
+  const scope = { objects: [genesis, source, next], controls: [{ fixtureId: genesis.metadata.objectId, ref: "refs/heads/control" }], publications: [publication] };
+  expect(approvedSyntheticPublication(scope, next.metadata.objectId)).toEqual({ plan: next, publication });
+  expect(() => approvedSyntheticPublication(scope, source.metadata.objectId)).toThrow("HUMAN_SYNTHETIC_SCOPE_REQUIRED");
+  for (const changed of [
+    { ...scope, publications: [publication, publication] },
+    { ...scope, publications: [{ ...publication, expected: genesis.commitSha }] },
+    { ...scope, publications: [publication, { fixtureId: genesis.metadata.objectId, transactionId: "bootstrap", ref: publication.ref, expected: null }] },
+    { ...scope, objects: [genesis, next] },
+  ]) expect(syntheticScopeSchema.safeParse(changed).success).toBe(false);
 });

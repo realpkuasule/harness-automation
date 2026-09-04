@@ -14,8 +14,8 @@ import { GitHubCoordinationReader } from "./github.js";
 import { GitHubCoordinationTransport, type CoordinationWriteIntent } from "./transport.js";
 import { CoordinationLifecycleService, GitCoordinationStore } from "./service.js";
 import { createCoordinationRecord, expectedRecord, validRecord } from "./record.js";
-import { localTransport } from "./__fixtures__/transport.js";
-import { validateCoordinationHistory } from "./history.js";
+import { localHistory, localTransport, seedLocalGenesis } from "./__fixtures__/transport.js";
+import { prepareSyntheticObject, type SyntheticScope } from "./synthetic.js";
 import { controlEpochDigest } from "./authority.js";
 
 const nativeHost = vi.hoisted(() => ({ home: "" }));
@@ -59,7 +59,15 @@ function nativeGitFixture({ root, bin, endpoint }: ReturnType<typeof fixture>) {
   writeFileSync(join(bin, "git"), `#!${process.execPath}\nconst fs=require('node:fs');const cp=require('node:child_process');let a=process.argv.slice(2);if(a.some(x=>['ls-remote','fetch','push'].includes(x))){if(!a.includes(${JSON.stringify(endpoint)})||process.env.HARNESS_GIT_TOKEN!=='synthetic-provider-canary')process.exit(2);fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({argv:a,global:process.env.GIT_CONFIG_GLOBAL,redirects:process.env.GIT_CONFIG_VALUE_2,hooks:process.env.GIT_CONFIG_VALUE_3})+'\\n');a=a.map(x=>x===${JSON.stringify(endpoint)}?${JSON.stringify(remote)}:x);}const r=cp.spawnSync(${JSON.stringify(realGit)},a,{env:process.env,stdio:['inherit','pipe','pipe']});process.stdout.write(r.stdout??'');process.stderr.write(r.stderr??'');process.exit(r.status??1);\n`, { mode: 0o700 });
   return { trace, remote, realGit };
 }
-afterEach(() => { Object.defineProperty(process, "platform", nativePlatform); vi.unstubAllEnvs(); roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })); });
+function syntheticScope(runId: string, controlRef: string): SyntheticScope {
+  const genesis = prepareSyntheticObject("control-genesis", { runId, objectId: "genesis", seconds: 1788480000 });
+  return { objects: [genesis], controls: [{ fixtureId: "genesis", ref: controlRef }], publications: [{ fixtureId: "genesis", transactionId: "bootstrap", ref: controlRef, expected: null }] };
+}
+afterEach(async () => {
+  Object.defineProperty(process, "platform", nativePlatform); vi.unstubAllEnvs(); roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true }));
+  // Native commands are synchronous. Drain pending worker/report RPC messages between cases, not after the entire file.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+});
 
 describe("authenticated GitHub merge observation (LOCAL native-command fixtures)", { timeout: 30_000 }, () => {
   it.each([false, true])("claims an expired unchanged generation from the real reader, including a frozen source (%s)", (frozen) => {
@@ -70,13 +78,10 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
       target: { owner: "another", machine: "another-host" },
     } }) : original;
     const remote = join(root, "remote.git"); git(root, "init", "--bare", "--quiet", remote);
-    const controlRef = "refs/heads/coordination"; let genesis = "";
-    const store = new GitCoordinationStore(controlRef, { ...localTransport(root, remote), repositoryId: "42" }, (candidate) => { if (!candidate.expectedControlSha) genesis = candidate.controlSha; }, true,
-      (head, readValidatedCommit, isAncestor) => {
-        const result = validateCoordinationHistory({ commonDir, anchor: { validationVersion: "coordination-history/1", genesisSha: genesis, repository: "owner/repo", repositoryId: "42", controlRef }, head, readValidatedCommit, isAncestor });
-        if (result.status !== "verified") throw new Error("COORDINATION_HISTORY_VALIDATION_PENDING");
-      }, () => () => {});
-    store.compareAndSwap({ workItem: record.workItem, expectedControlSha: null, expected: {}, next: record });
+    const controlRef = "refs/heads/coordination"; const genesis = seedLocalGenesis(remote, controlRef);
+    const store = new GitCoordinationStore(controlRef, { ...localTransport(root, remote), repositoryId: "42" }, () => {}, genesis,
+      localHistory(commonDir, controlRef, genesis, "42"), () => () => {});
+    store.compareAndSwap({ workItem: record.workItem, expectedControlSha: genesis.commitSha, expected: {}, next: record });
     const lifecycle = new CoordinationLifecycleService(store, () => provider.serverClock(), provider, () => {}); // LOCAL store fixture; actual PR observer remains native.
     const terminal = lifecycle.terminalClaim(record.workItem, expectedRecord(record), 9, "main");
     expect(terminal).toMatchObject({ expiresAt: null, lifecycleState: "Integrated", generation: 1, closeOwnerGeneration: 1, lastObservedHead: record.lastObservedHead,
@@ -149,7 +154,8 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
     const sourceHead = git(f.root, "rev-parse", "HEAD");
     const binding = observeCoordinationBinding(f.root, "origin", "42", "git"); const now = Date.now();
     const scope: HumanScope = { kind: "qualification-run", binding, runId: "native-fixture", refs: [controlRef], operations: ["create", "cas"],
-      maxCommits: 1, maxWriteAttempts: 1, maxCleanupAttempts: 1, expiresAt: new Date(now + 3600_000).toISOString(), cleanupExpiresAt: new Date(now + 7200_000).toISOString() };
+      synthetic: syntheticScope("native-fixture", controlRef),
+      maxCommits: 2, maxWriteAttempts: 2, maxCleanupAttempts: 1, expiresAt: new Date(now + 3600_000).toISOString(), cleanupExpiresAt: new Date(now + 7200_000).toISOString() };
     const inputHash = hashObject(scope); const planHash = hashObject({ inputHash });
     const packet = createSemanticApprovalPacket({ planHash, inputHash, producerIdentity: "native-fixture",
       binding: { planHash, inputDigest: inputHash, contextDigest: inputHash, observedHash: inputHash, policyDigest: inputHash },
@@ -166,21 +172,25 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
           head: sourceHead, ttlMs: 60_000, transactionId: "native-first-acquire" };
         const unapproved = createCoordinationRecord({ ...f.record, sourceRepositoryId: binding.repositoryId, lastObservedHead: sourceHead,
           controlEpochDigest: input.controlEpochDigest, createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 60_000).toISOString() });
-        expect(() => runtime.store.compareAndSwap({ workItem: unapproved.workItem, expectedControlSha: null, expected: {}, next: unapproved })).toThrow("COORDINATION_OPERATION_AUTHORITY_REQUIRED");
+        expect(() => runtime.store.compareAndSwap({ workItem: unapproved.workItem, expectedControlSha: null, expected: {}, next: unapproved })).toThrow("COORDINATION_BOOTSTRAP_AUTHORIZATION_REQUIRED");
         for (const patch of [{ owner: "another" }, { machine: "other-host" }, { repositoryId: "99" }, { controlEpochDigest: "f".repeat(64) },
           { repository: "other/repo", workItem: "github:other/repo#86" }, { head: "b".repeat(40) }, { branch: "different" }]) {
           expect(() => runtime.lifecycle.acquire({ ...input, ...patch })).toThrow();
         }
         expect(loadHumanAuthorization(f.commonDir, approvalRef).candidates).toHaveLength(0);
+        runtime.bootstrap();
+        const genesis = scope.synthetic!.objects[0];
+        expect(runtime.store.read(input.workItem)).toEqual({ controlSha: genesis.commitSha, record: null });
+        expect(() => runtime.store.compareAndSwap({ workItem: unapproved.workItem, expectedControlSha: genesis.commitSha, expected: {}, next: unapproved })).toThrow("COORDINATION_OPERATION_AUTHORITY_REQUIRED");
         return runtime.lifecycle.acquire(input);
       } finally { if (held) releaseMutationLock(held); }
     })();
     if (held) expect(() => createQualificationRuntime(f.root, approvalRef, controlRef, held)).toThrow("MUTATION_LOCK_NOT_HELD");
     expect(acquired.generation).toBe(1); expect(acquired.machine).toBe(binding.hostId);
     const receipt = loadHumanAuthorization(f.commonDir, approvalRef);
-    expect(receipt.candidates).toHaveLength(1); expect(receipt.attempts).toHaveLength(1); expect(receipt.attempts[0].outcome?.status).toBe("applied");
+    expect(receipt.candidates).toHaveLength(2); expect(receipt.attempts).toHaveLength(2); expect(receipt.attempts.every((attempt) => attempt.outcome?.status === "applied")).toBe(true);
     const before = readFileSync(trace, "utf8"); expect(before).not.toContain("synthetic-provider-canary");
-    expect(before.trim().split("\n").filter((line) => JSON.parse(line).argv.includes("push"))).toHaveLength(1);
+    expect(before.trim().split("\n").filter((line) => JSON.parse(line).argv.includes("push"))).toHaveLength(2);
     mkdirSync(join(f.root, ".harness"), { recursive: true });
     writeFileSync(join(f.root, ".harness/policy.yaml"), "{}");
     expect(() => createQualificationRuntime(f.root, approvalRef, controlRef)).toThrow("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
@@ -207,15 +217,17 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
         source: { kind: "explicit-human", messageHash: inputHash } }, planHash, f.provider.serverClock());
     }
     const run: Extract<HumanScope, { kind: "qualification-run" }> = { kind: "qualification-run", binding, runId: "native-seed", refs: [controlRef, `refs/heads/${f.record.branch}`],
-      operations: ["create", "cas"], maxCommits: 1, maxWriteAttempts: 1, maxCleanupAttempts: 1,
+      synthetic: syntheticScope("native-seed", controlRef),
+      operations: ["create", "cas"], maxCommits: 2, maxWriteAttempts: 2, maxCleanupAttempts: 1,
       expiresAt: new Date(now + 3600_000).toISOString(), cleanupExpiresAt: new Date(now + 7200_000).toISOString() };
     const seeded = createQualificationRuntime(f.root, approve(run), controlRef);
+    seeded.bootstrap(); const genesis = run.synthetic!.objects[0];
     const initial = seeded.lifecycle.acquire({ repository: binding.repository, repositoryId: binding.repositoryId, workItem: f.record.workItem,
       branch: f.record.branch, sourceRepositoryId: binding.repositoryId, owner: binding.actor, machine: binding.hostId,
       controlEpochDigest: controlEpochDigest(binding.controlEpoch), head, ttlMs: 120_000 });
     const current = seeded.store.read(initial.workItem);
-    const parent = approve({ ...run, runId: "native-takeover", maxCommits: 2, maxWriteAttempts: 2, takeoverAllocations: [{ allocationId: "one",
-      workItem: initial.workItem, controlRef, sourceRef: `refs/heads/${initial.branch}`, genesisSha: current.controlSha!, maxCommits: 1, maxWriteAttempts: 1 }] });
+    const parent = approve({ ...run, synthetic: { ...run.synthetic!, publications: [] }, maxCommits: 2, maxWriteAttempts: 2, takeoverAllocations: [{ allocationId: "one",
+      workItem: initial.workItem, controlRef, sourceRef: `refs/heads/${initial.branch}`, genesisSha: genesis.commitSha, maxCommits: 1, maxWriteAttempts: 1 }] });
     const context = { projectDir: f.root, commonDir: f.commonDir, repository: true }; let held = acquireMutationLock(context);
     let risk: ReturnType<typeof observeTakeoverRisk>;
     try { risk = observeTakeoverRisk(context, held, initial, new GitHubCoordinationTransport(f.root, "origin", "42", "git"), binding); }
@@ -225,7 +237,7 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
       targetWorkspace: f.root, targetBranch: initial.branch, targetHead: head, sourceRepositoryId: binding.repositoryId, newEpochDigest: controlEpochDigest(binding.controlEpoch),
       newLease: { ttlMs: 120_000, notAfter: new Date(now + 3600_000).toISOString() }, assetRisk: risk!, assetRiskHash: hashObject(risk!),
       transactionId: "native-takeover-once", maxCommits: 1, maxWriteAttempts: 1,
-      qualification: { parentApprovalRef: parent, runId: "native-takeover", allocationId: "one", genesisSha: current.controlSha! } });
+      qualification: { parentApprovalRef: parent, runId: run.runId, allocationId: "one", genesisSha: genesis.commitSha } });
     held = acquireMutationLock(context);
     try { expect(createTakeoverRuntime(f.root, child, held).takeover()).toMatchObject({ generation: 2, owner: binding.actor, machine: binding.hostId }); }
     finally { releaseMutationLock(held); }

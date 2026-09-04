@@ -11,7 +11,7 @@ import { harnessArtifactSchema } from "../repository/artifact.js";
 import { controlEpochDigest, controlEpochSchema } from "../coordination/authority.js";
 import { takeoverRiskSchema } from "../coordination/takeover_record.js";
 import { coordinationRecordSchema } from "../coordination/record.js";
-import { coordinationCommitSubjectSchema } from "../coordination/synthetic.js";
+import { approvedSyntheticPublication, coordinationCommitSubjectSchema, syntheticObjectSchema, syntheticScopeSchema } from "../coordination/synthetic.js";
 
 const DOMAIN = "approval-human";
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -38,9 +38,11 @@ export const humanScopeSchema = z.discriminatedUnion("kind", [
     refs: z.array(ref).min(1).max(32), operations: z.array(z.enum(["create", "cas"])).min(1).max(2),
     maxCommits: count, maxWriteAttempts: count, maxCleanupAttempts: count, cleanupExpiresAt: timestamp,
     takeoverAllocations: z.array(allocationSchema).max(32).optional(),
+    synthetic: syntheticScopeSchema.optional(),
   }).strict(),
   z.object({ ...fields, kind: z.literal("production-enable"), configBeforeHash: digest.nullable(), configAfterHash: digest,
     controlRef: ref, genesisSha: sha, genesisTree: sha, qualificationEvidenceHash: digest, maxBootstrapAttempts: count,
+    genesisObject: syntheticObjectSchema.optional(),
   }).strict(),
   z.object({ ...fields, kind: z.literal("takeover"), workItem: workItemSchema, controlRef: ref, expectedControlSha: sha,
     expected: expectation, targetOwner: text, targetHostId: z.string().uuid(), newEpochDigest: digest,
@@ -72,6 +74,7 @@ const candidateResultSchema = z.object({
 }).strict();
 const outcomeSchema = z.object({
   attemptId: z.string().uuid(), status: z.enum(["applied", "rejected", "unknown"]), evidenceHash: digest,
+  push: z.object({ status: z.number().int().nullable(), stdout: z.string().max(64 * 1024), error: z.string().max(8192).nullable() }).strict().optional(),
 }).strict();
 const eventSchema = z.union([approvalSchema,
   z.object({ kind: z.literal("candidate-reserved"), candidate: candidateSchema }).strict(),
@@ -105,6 +108,10 @@ function checkScope(scope: HumanScope): void {
           !scope.refs.includes(value.sourceRef) || value.controlRef === value.sourceRef || value.maxCommits < 1 || value.maxWriteAttempts < 1) ||
         allocations.reduce((sum, value) => sum + value.maxCommits, 0) > scope.maxCommits ||
         allocations.reduce((sum, value) => sum + value.maxWriteAttempts, 0) > scope.maxWriteAttempts) throw new Error("HUMAN_SCOPE_INVALID");
+    if (scope.synthetic && (scope.synthetic.objects.some((plan) => plan.metadata.runId !== scope.runId) ||
+        scope.synthetic.controls.some((anchor) => !scope.refs.includes(anchor.ref)) ||
+        scope.synthetic.publications.some((publication) => !scope.refs.includes(publication.ref) ||
+          !scope.operations.includes(publication.expected === null ? "create" : "cas")))) throw new Error("HUMAN_SCOPE_INVALID");
   }
   if (scope.kind === "takeover") {
     const { target, remote } = scope.assetRisk;
@@ -115,7 +122,8 @@ function checkScope(scope: HumanScope): void {
         target.branch !== scope.targetBranch || target.head !== scope.targetHead || remote.repositoryId !== scope.sourceRepositoryId ||
         remote.endpointHash !== scope.binding.endpointHash || remote.ref !== `refs/heads/${scope.targetBranch}` || remote.ref === scope.controlRef) throw new Error("HUMAN_SCOPE_INVALID");
   }
-  if (scope.kind === "production-enable" && scope.configAfterHash !== scope.binding.configHash) throw new Error("HUMAN_SCOPE_INVALID");
+  if (scope.kind === "production-enable" && (scope.configAfterHash !== scope.binding.configHash || scope.genesisObject &&
+      (scope.genesisObject.kind !== "control-genesis" || scope.genesisObject.commitSha !== scope.genesisSha || scope.genesisObject.treeSha !== scope.genesisTree))) throw new Error("HUMAN_SCOPE_INVALID");
 }
 
 /** Static reservations are charged even if a child is never created, fails or is revoked. */
@@ -180,7 +188,7 @@ function history(commonDir: string, approvalRef: string, repairTail: boolean): H
       if (!approval) throw new Error("HUMAN_HISTORY_INVALID");
       if (event.kind === "candidate-reserved") {
         if (revoked || candidates.some((candidate) => candidate.candidateId === event.candidate.candidateId)) throw new Error("HUMAN_HISTORY_INVALID");
-        checkCandidateQuota(approval.scope, attempts, candidates); checkCandidateScope(approval.scope, event.candidate); candidates.push(event.candidate);
+        checkCandidateQuota(approval.scope, attempts, candidates); assertHumanCandidateScope(approval.scope, event.candidate); candidates.push(event.candidate);
       } else if (event.kind === "candidate-result") {
         const candidate = candidates.find((value) => value.candidateId === event.result.candidateId);
         if (!candidate || (candidate.result && candidate.result.status !== "unknown") || (event.result.status === "created") !== (event.result.head !== null)) throw new Error("HUMAN_HISTORY_INVALID");
@@ -190,7 +198,8 @@ function history(commonDir: string, approvalRef: string, repairTail: boolean): H
         checkAttempt(approval.scope, attempts, candidates, event.attempt); attempts.push(event.attempt);
       } else if (event.kind === "outcome") {
         const attempt = attempts.find((value) => value.attemptId === event.outcome.attemptId);
-        if (!attempt || (attempt.outcome && attempt.outcome.status !== "unknown")) throw new Error("HUMAN_HISTORY_INVALID");
+        if (!attempt || (attempt.outcome && attempt.outcome.status !== "unknown") ||
+            attempt.outcome?.push && (!event.outcome.push || hashObject(attempt.outcome.push) !== hashObject(event.outcome.push))) throw new Error("HUMAN_HISTORY_INVALID");
         attempt.outcome = event.outcome;
       } else { if (revoked) throw new Error("HUMAN_HISTORY_INVALID"); revoked = true; }
     }
@@ -239,8 +248,17 @@ function checkCandidateQuota(scope: HumanScope, attempts: HumanAuthorization["at
   const maximum = scope.kind === "qualification-run" ? ordinaryLimit(scope, "maxCommits") : scope.kind === "production-enable" ? 1 : scope.maxCommits;
   if (candidates.length >= maximum) throw new Error("HUMAN_COMMIT_BUDGET_EXHAUSTED");
 }
-function checkCandidateScope(scope: HumanScope, intent: Pick<Candidate, "transactionId" | "parentSha" | "subject">): void {
-  if (intent.subject.kind !== "coordination-record") throw new Error("HUMAN_SYNTHETIC_SCOPE_REQUIRED");
+export function assertHumanCandidateScope(scope: HumanScope, intent: Pick<Candidate, "transactionId" | "parentSha" | "treeSha" | "commitMetadataHash" | "subject">): void {
+  if (intent.subject.kind !== "coordination-record") {
+    const approved = scope.kind === "qualification-run" && scope.synthetic ? approvedSyntheticPublication(scope.synthetic, intent.subject.fixtureId) :
+      scope.kind === "production-enable" && scope.genesisObject ? { plan: scope.genesisObject, publication: { transactionId: scope.genesisObject.metadata.objectId } } : undefined;
+    if (!approved || approved.plan.kind !== intent.subject.kind || approved.plan.metadata.objectId !== intent.subject.fixtureId ||
+        approved.plan.objectPlanHash !== intent.subject.objectPlanHash || approved.publication.transactionId !== intent.transactionId ||
+        approved.plan.treeSha !== intent.treeSha || (approved.plan.parents[0] ?? null) !== intent.parentSha ||
+        approved.plan.commitBytesSha256 !== intent.commitMetadataHash) throw new Error("HUMAN_SYNTHETIC_SCOPE_REQUIRED");
+    return;
+  }
+  if (scope.kind === "production-enable") throw new Error("HUMAN_WRITE_SCOPE_MISMATCH");
   if (scope.kind === "takeover" && (intent.transactionId !== scope.transactionId || intent.parentSha !== scope.expectedControlSha || intent.subject.workItem !== scope.workItem)) throw new Error("HUMAN_WRITE_SCOPE_MISMATCH");
 }
 
@@ -258,7 +276,7 @@ export function reserveCandidateQuotaLocked(lock: MutationLock, commonDir: strin
   checkCandidateQuota(state.approval.scope, state.attempts, state.candidates);
   const bounds = clock.requireBefore(state.approval.scope.expiresAt);
   const candidate = candidateSchema.parse({ ...intent, candidateId: randomUUID(), reservedAt: new Date(Math.floor(bounds.lowerMs)).toISOString() });
-  checkCandidateScope(state.approval.scope, candidate);
+  assertHumanCandidateScope(state.approval.scope, candidate);
   append(commonDir, state.approval.packet, { kind: "candidate-reserved", candidate });
   clock.requireBefore(state.approval.scope.expiresAt); return candidate;
 }
@@ -285,7 +303,14 @@ function checkAttempt(scope: HumanScope, attempts: HumanAuthorization["attempts"
   // ponytail: one in-flight attempt per authorization; parallel clients use separately bounded authorizations.
   if (unresolved.length) throw new Error("HUMAN_WRITE_OUTCOME_UNRESOLVED");
   if (candidates.some((candidate) => !candidate.result || candidate.result.status === "unknown")) throw new Error("HUMAN_WRITE_OUTCOME_UNRESOLVED");
-  if (cleanup ? request.candidateId !== null : !candidates.some((candidate) => candidate.candidateId === request.candidateId && candidate.transactionId === request.transactionId && candidate.result?.status === "created" && candidate.result.head === request.head)) throw new Error("HUMAN_CANDIDATE_UNPROVEN");
+  const candidate = candidates.find((value) => value.candidateId === request.candidateId && value.transactionId === request.transactionId && value.result?.status === "created" && value.result.head === request.head);
+  if (cleanup ? request.candidateId !== null : !candidate) throw new Error("HUMAN_CANDIDATE_UNPROVEN");
+  if (!cleanup && candidate!.subject.kind !== "coordination-record") {
+    assertHumanCandidateScope(scope, candidate!);
+    const approved = scope.kind === "qualification-run" && scope.synthetic ? approvedSyntheticPublication(scope.synthetic, candidate!.subject.fixtureId) :
+      scope.kind === "production-enable" && scope.genesisObject ? { plan: scope.genesisObject, publication: { ref: scope.controlRef, expected: null } } : undefined;
+    if (!approved || request.ref !== approved.publication.ref || request.expected !== approved.publication.expected || request.head !== approved.plan.commitSha) throw new Error("HUMAN_WRITE_SCOPE_MISMATCH");
+  }
   if (scope.kind === "qualification-run") {
     if (!scope.refs.includes(request.ref) || (!cleanup && !scope.operations.includes(request.operation as "create" | "cas"))) throw new Error("HUMAN_WRITE_SCOPE_MISMATCH");
     const used = attempts.filter((attempt) => (attempt.operation === "cleanup") === cleanup).length;
@@ -344,6 +369,7 @@ export function recordWriteOutcomeLocked(lock: MutationLock, commonDir: string, 
   if (!attempt) throw new Error("HUMAN_WRITE_ATTEMPT_UNKNOWN");
   if (attempt.outcome && hashObject(attempt.outcome) === hashObject(outcome)) return;
   if (attempt.outcome && attempt.outcome.status !== "unknown") throw new Error("HUMAN_WRITE_OUTCOME_FINAL");
+  if (attempt.outcome?.push && (!outcome.push || hashObject(attempt.outcome.push) !== hashObject(outcome.push))) throw new Error("HUMAN_PUSH_EVIDENCE_IMMUTABLE");
   append(commonDir, state.approval.packet, { kind: "outcome", outcome });
 }
 

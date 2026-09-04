@@ -9,15 +9,19 @@ references alone does not qualify or enable this coordination backend. Lifecycle
 handlers and production transport integration are still under development; local
 primitive tests are not a completed Wave 3 qualification.
 
-Object storage never checks out the control tree. Only `records/<hash>.json`
-ordinary blobs are accepted; unknown entries, malformed records and failed reads
+Object storage never checks out the control tree. Only the exact approved empty
+genesis and subsequent `records/<hash>.json` ordinary blobs are accepted; unknown entries, malformed records and failed reads
 fail closed. Current limits are 10,000 records, 64 KiB per record and 8 MiB of
 record content per tree; exceeding them reports a limit, never silently truncates.
 Only the selected record changes, using exact-old-SHA Git CAS. A candidate must be
 recorded before push. Unknown write outcomes retain its temporary objects for
 same-transaction recovery; recovery never repeats the push or restores old ownership.
 
-History starts from a separately trusted, metadata-only root commit. New segments
+History starts from a separately approved empty-tree, parentless metadata-only root
+commit. Its full precomputed bytes, tree/SHA and plan hash bind the history anchor
+along with the repository, endpoint and control ref; success receipts never invent
+that anchor. Ordinary acquire/CAS refuses an absent ref and cannot initialize it.
+New segments
 are validated against checkpoints in the existing receipt/LKG store. Cold validation
 resumes in bounded batches (default 1,000 commits), without a cumulative history
 limit. A checkpoint cannot supply owner, generation, expiry, or write permission.
@@ -97,9 +101,18 @@ budget allocation, not a cross-machine shared counter. Native command fixtures
 exercise the registered Broker/Git composition; real credential access, complete
 DG-01 LIVE qualification, production adoption and CLI assembly remain separate.
 
-Synthetic object planning now precomputes fixed empty-tree commit bytes and exact
-Git SHA without writing an object. Only approved synthetic source ancestry may
-appear in source-fixture plans. Candidate receipts use a strict subject discriminator
-for business records, control genesis and source fixtures; genesis is never a fake
-Work Item or record hash. Bootstrap publication and its CLI are still being wired;
-merely constructing such a plan does not authorize object creation or a ref write.
+The bounded native runtime now publishes approved genesis and source fixtures
+through the same candidate/attempt guards and private bare-object helpers. Pure
+planning creates no Git objects. Materialization requires a candidate slot; the
+first business record consumes a separate slot and is a child of genesis. The
+approved catalog distinguishes control anchors, read-only source ancestors and
+exact publication rights. Source fixtures contain only approved empty-tree ancestry,
+never project objects or control records. CLI/full-run assembly remains pending.
+
+Git exit 0 alone is not CAS success: exact-ref porcelain `up to date` is recorded as
+`rejected` / `COORDINATION_CAS_NOT_PERFORMED`, with no quota refund. A positive ref
+update is durably recorded before readback. Recovery needs that update evidence
+plus validated history to mark the attempt applied; an observed SHA alone proves
+only state, not which publisher won. Rejected attempts never become applied, and
+an attribution-unknown synthetic attempt remains unknown with `state-observed`
+recovery output. Recovery never grants a lease or automatic cleanup ownership.

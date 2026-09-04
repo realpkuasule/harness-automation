@@ -1,12 +1,21 @@
 import { runGitCommand } from "../../repository/git.js";
 import type { CoordinationTransport } from "../store.js";
-import { validateCoordinationHistory, type HistoryCheck } from "../history.js";
+import { coordinationHistoryCheck, type HistoryCheck } from "../history.js";
+import { prepareSyntheticObject, type SyntheticObjectPlan } from "../synthetic.js";
+import { objectGit } from "../objects.js";
 
-export function localHistory(commonDir: string, controlRef: string, genesis: () => string): HistoryCheck {
-  return (head, readValidatedCommit, isAncestor) => {
-    const result = validateCoordinationHistory({ commonDir, anchor: { validationVersion: "coordination-history/1", genesisSha: genesis(), repository: "owner/repo", repositoryId: "R_1", controlRef }, head, readValidatedCommit, isAncestor });
-    if (result.status !== "verified") throw new Error("COORDINATION_HISTORY_VALIDATION_PENDING");
-  };
+export const fixtureGenesis = () => prepareSyntheticObject("control-genesis", { runId: "local-fixture", objectId: "genesis", seconds: 1788480000 });
+export function localHistory(commonDir: string, controlRef: string, genesis: SyntheticObjectPlan, repositoryId = "R_1"): HistoryCheck {
+  return coordinationHistoryCheck(commonDir, { validationVersion: "coordination-history/2", genesis, endpointHash: "a".repeat(64), repository: "owner/repo", repositoryId, controlRef });
+}
+/** Fixture setup only, explicitly confined to an owned LOCAL bare repository. Not qualification evidence. */
+export function seedLocalGenesis(remote: string, controlRef: string): SyntheticObjectPlan {
+  if (!remote.startsWith("/") || !remote.endsWith(".git")) throw new Error("FIXTURE_LOCAL_ENDPOINT_REQUIRED");
+  const genesis = fixtureGenesis();
+  objectGit(remote, ["hash-object", "-w", "-t", "tree", "--stdin"], "");
+  objectGit(remote, ["hash-object", "-w", "-t", "commit", "--stdin"], genesis.commitText);
+  objectGit(remote, ["update-ref", controlRef, genesis.commitSha, "0".repeat(40)]);
+  return genesis;
 }
 
 /** LOCAL bare repositories only. Never selected by a production flag or environment variable. */

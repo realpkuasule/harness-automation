@@ -1,13 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rmSync } from "node:fs";
 import { hashObject, prettyJson } from "../v2/fs.js";
 import type { GitCommandResult } from "../repository/git.js";
 import { assertExpected, validRecord } from "./record.js";
 import type { CoordinationExpected, CoordinationRecord } from "./types.js";
 import type { HistoryCheck } from "./history.js";
-import type { CoordinationCommitSubject } from "./synthetic.js";
+import { syntheticObjectSchema, type CoordinationCommitSubject, type SyntheticObjectPlan, type SyntheticPublication } from "./synthetic.js";
+import { objectDirectory, objectEnv, objectGit, validateSyntheticObject } from "./objects.js";
+import { publishSyntheticObject, type SyntheticApplied, type SyntheticCandidate, type SyntheticPushGuard } from "./publication.js";
+import { requireCoordinationPush } from "./push_result.js";
 
 export interface CoordinationTransport {
   readonly repository: string;
@@ -35,13 +36,6 @@ export interface CoordinationCommitIntent {
 export type CoordinationCommitGuard = (intent: CoordinationCommitIntent) => (head: string | null) => void;
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 const pathFor = (workItem: string) => `records/${hashObject(workItem)}.json`;
-const objectEnv = () => ({ PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" });
-function objectGit(directory: string, argv: string[], input?: string, commitDate?: string): string {
-  const result = spawnSync("git", ["--no-replace-objects", ...argv], { cwd: directory, env: { ...objectEnv(), ...(commitDate ? { GIT_AUTHOR_DATE: commitDate, GIT_COMMITTER_DATE: commitDate } : {}) }, input, encoding: "utf8", timeout: 10_000, maxBuffer: 16 * 1024 * 1024 });
-  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") throw new Error("ENVIRONMENT_BLOCKED: GIT_UNAVAILABLE");
-  if (result.error || result.status !== 0) throw new Error("COORDINATION_OBJECT_READ_FAILED");
-  return result.stdout;
-}
 
 /** No checkout, hooks, project config, credential env or second transaction ledger. */
 export class GitCoordinationStore {
@@ -50,21 +44,19 @@ export class GitCoordinationStore {
     private readonly transport: CoordinationTransport,
     // The use-case must persist this candidate in the existing receipt chain before any push.
     private readonly beforePush: (candidate: CoordinationCandidate) => void | ((result: CoordinationWriteResult) => void),
-    private readonly initialize = false,
+    private readonly genesis?: SyntheticObjectPlan,
     private readonly historyCheck?: HistoryCheck,
     private readonly beforeCommit?: CoordinationCommitGuard,
   ) {
+    if (genesis && (syntheticObjectSchema.parse(genesis).kind !== "control-genesis")) throw new Error("COORDINATION_HISTORY_GENESIS_INVALID");
     if (!/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(controlRef) || controlRef.includes("..") || controlRef.endsWith("/") ||
         controlRef.split("/").some((part) => !part || part.startsWith(".") || part.endsWith(".lock") || part.endsWith("."))) throw new Error("COORDINATION_CONTROL_REF_INVALID");
   }
-  private directory(): string {
-    const directory = realpathSync(mkdtempSync(join(tmpdir(), "harness-coordination-objects-")));
-    try { objectGit(directory, ["init", "--bare", "--quiet", "--template="]); return directory; }
-    catch (error) { rmSync(directory, { recursive: true, force: true }); throw error; }
-  }
+  private directory = objectDirectory;
   private entries(directory: string, sha: string): Map<string, { blob: string; record: CoordinationRecord }> {
     if (!SHA.test(sha) || objectGit(directory, ["cat-file", "-t", sha]).trim() !== "commit") throw new Error("COORDINATION_CONTROL_OBJECT_INVALID");
     const raw = objectGit(directory, ["ls-tree", "-rz", "-t", "--full-tree", sha]);
+    if (raw === "" && this.genesis?.commitSha === sha) { validateSyntheticObject(directory, this.genesis); return new Map(); }
     const rows = raw.split("\0");
     if (rows.pop() !== "") throw new Error("COORDINATION_TREE_INVALID");
     const entries = new Map<string, { blob: string; record: CoordinationRecord }>();
@@ -112,21 +104,34 @@ export class GitCoordinationStore {
     try { const { controlSha, record } = this.snapshot(directory, workItem); return { controlSha, record }; }
     finally { rmSync(directory, { recursive: true, force: true }); }
   }
+  bootstrap(publication: SyntheticPublication, beforePush: SyntheticPushGuard): SyntheticApplied {
+    if (!this.genesis || !this.beforeCommit || !this.historyCheck || publication.ref !== this.controlRef || publication.expected !== null) throw new Error("COORDINATION_BOOTSTRAP_AUTHORIZATION_REQUIRED");
+    return publishSyntheticObject(this.transport, this.genesis, publication, this.beforeCommit, beforePush, () => {}, (candidate) => this.recoverBootstrap(candidate));
+  }
+  recoverBootstrap(candidate: SyntheticCandidate): SyntheticApplied {
+    const genesis = this.genesis;
+    if (!genesis || candidate.ref !== this.controlRef || candidate.expected !== null || candidate.head !== genesis.commitSha ||
+        candidate.intent.subject.kind !== "control-genesis" || candidate.intent.subject.objectPlanHash !== genesis.objectPlanHash ||
+        candidate.intent.subject.fixtureId !== genesis.metadata.objectId || candidate.intent.treeSha !== genesis.treeSha ||
+        candidate.intent.parentSha !== null || candidate.intent.commitMetadataHash !== genesis.commitBytesSha256) throw new Error("COORDINATION_RECOVERY_REQUIRED");
+    const current = this.read("bootstrap-observation");
+    if (!current.controlSha) throw new Error("COORDINATION_RECOVERY_REQUIRED");
+    return { candidate, observedHead: current.controlSha };
+  }
   compareAndSwap(args: { workItem: string; expectedControlSha: string | null; expected: CoordinationExpected; next: CoordinationRecord }): CoordinationApplied {
     const directory = this.directory(); let retain = false;
     try {
       const current = this.snapshot(directory, args.workItem);
       if (current.controlSha !== args.expectedControlSha) throw new Error("COORDINATION_CAS_CONFLICT");
-      if (!current.controlSha && !this.initialize) throw new Error("COORDINATION_BOOTSTRAP_AUTHORIZATION_REQUIRED");
+      if (!current.controlSha) throw new Error("COORDINATION_BOOTSTRAP_AUTHORIZATION_REQUIRED");
       if (!this.historyCheck) throw new Error("COORDINATION_HISTORY_ANCHOR_REQUIRED");
       assertExpected(current.record, args.expected);
       if (!validRecord(args.next) || args.next.workItem !== args.workItem || args.next.repository !== this.transport.repository || args.next.repositoryId !== this.transport.repositoryId) throw new Error("COORDINATION_RECORD_INVALID");
-      if (current.controlSha) objectGit(directory, ["read-tree", current.controlSha]);
-      else objectGit(directory, ["read-tree", "--empty"]);
+      objectGit(directory, ["read-tree", current.controlSha]);
       const blob = objectGit(directory, ["hash-object", "-w", "--stdin"], prettyJson(args.next)).trim();
       objectGit(directory, ["update-index", "--add", "--cacheinfo", "100644", blob, pathFor(args.workItem)]);
       const treeSha = objectGit(directory, ["write-tree"]).trim();
-      const parent = current.controlSha ? ["-p", current.controlSha] : [];
+      const parent = ["-p", current.controlSha];
       if (!this.beforeCommit) throw new Error("COORDINATION_CANDIDATE_AUTHORIZATION_REQUIRED");
       const metadata = { name: "Harness Coordination", email: "coordination@harness.invalid", seconds: Math.floor(Date.now() / 1000), timezone: "+0000", message: `coordination ${args.next.transactionId}\n` };
       const recordCreation = this.beforeCommit({ transactionId: args.next.transactionId, parentSha: current.controlSha, treeSha,
@@ -144,13 +149,13 @@ export class GitCoordinationStore {
       let pushed: GitCommandResult | undefined; let applied: CoordinationApplied;
       try {
         pushed = this.transport.push(directory, controlSha, this.controlRef, current.controlSha);
-        if (!pushed.error && pushed.status === 1 && /\[rejected\] \(stale info\)/u.test(pushed.stdout)) throw new Error("COORDINATION_CAS_CONFLICT");
-        if (pushed.error || pushed.status !== 0) throw new Error("COORDINATION_WRITE_OUTCOME_UNKNOWN");
+        requireCoordinationPush(pushed, controlSha, this.controlRef);
+        recordWrite?.({ candidate, pushed }); // Persist actual update evidence before readback can fail or the process can stop.
         applied = this.recover(candidate);
       } catch (error) {
         const code = error instanceof Error ? error.message : "COORDINATION_WRITE_OUTCOME_UNKNOWN";
         recordWrite?.({ candidate, pushed, error: code });
-        if (code === "COORDINATION_CAS_CONFLICT") retain = false;
+        if (code === "COORDINATION_CAS_CONFLICT" || code === "COORDINATION_CAS_NOT_PERFORMED") retain = false;
         throw error;
       }
       recordWrite?.({ candidate, pushed, applied });

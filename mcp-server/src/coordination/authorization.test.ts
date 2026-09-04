@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createSemanticApprovalPacket } from "../approval/service.js";
 import { loadHumanAuthorization, recordHumanApproval, type HumanScope } from "../approval/human.js";
 import { hashObject } from "../v2/fs.js";
-import { localHistory, localTransport } from "./__fixtures__/transport.js";
+import { localHistory, localTransport, seedLocalGenesis } from "./__fixtures__/transport.js";
 import { humanCoordinationGuards, recoverHumanCoordinationWrite } from "./authorization.js";
 import { CoordinationClock } from "./clock.js";
 import { createCoordinationRecord } from "./record.js";
@@ -32,19 +32,19 @@ function fixture() {
   const approvalRef = recordHumanApproval(root, { packet, scope, approvedBy: "fixture-human", approvedAt: "2026-09-04T03:00:00.000Z", source: { kind: "explicit-human", messageHash: digest } }, planHash);
   const clock = () => { const value = new CoordinationClock(() => ({ monotonicMs: 0, wallMs: 0 })); value.observe("Fri, 04 Sep 2026 04:00:00 GMT", value.start()); return value; };
   let observed = bound; const guards = humanCoordinationGuards(root, approvalRef, () => observed, clock);
-  const transport = localTransport(root, remote); let pushes = 0; let genesis = ""; let candidate: CoordinationCandidate | undefined;
+  const transport = localTransport(root, remote); let pushes = 0; const genesis = seedLocalGenesis(remote, controlRef); let candidate: CoordinationCandidate | undefined;
   const store = new GitCoordinationStore(controlRef, { ...transport, push(directory, head, ref, expected) {
     guards.authorizeWrite({ ...binding, ref, head, expected }); pushes++;
     return transport.push(directory, head, ref, expected);
-  } }, (value) => { candidate = value; if (!value.expectedControlSha) genesis = value.controlSha; return guards.beforePush(value); },
-  true, localHistory(root, controlRef, () => genesis), guards.beforeCommit);
+  } }, (value) => { candidate = value; return guards.beforePush(value); },
+  genesis, localHistory(root, controlRef, genesis), guards.beforeCommit);
   const record = createCoordinationRecord({ repository: binding.repository, repositoryId: binding.repositoryId, workItem: "github:owner/repo#1", branch: "codex/fixture",
     sourceRepositoryId: binding.repositoryId, owner: binding.actor, machine: binding.hostId, generation: 1, controlEpochDigest: digest,
     createdAt: "2026-09-04T04:00:00.000Z", expiresAt: "2026-09-04T04:01:00.000Z", lastObservedHead: sha, lifecycleState: "Admitted", transactionId: "tx-1" });
-  return { root, approvalRef, binding, store, record, guards, transport, controlRef, candidate: () => candidate!, pushes: () => pushes,
+  return { root, approvalRef, binding, store, record, guards, transport, controlRef, genesis, candidate: () => candidate!, pushes: () => pushes,
     drift: () => { observed = { ...bound, configHash: "d".repeat(64) }; },
     state: () => loadHumanAuthorization(root, approvalRef),
-    acquire: () => store.compareAndSwap({ workItem: record.workItem, expectedControlSha: null, expected: {}, next: record }) };
+    acquire: () => store.compareAndSwap({ workItem: record.workItem, expectedControlSha: genesis.commitSha, expected: {}, next: record }) };
 }
 
 it("connects commit quota, per-dispatch authority and exact readback through one real LOCAL Git CAS", () => {
@@ -78,5 +78,5 @@ it("rechecks changed bindings after candidate creation without dispatching or re
   vi.spyOn(f.guards, "beforePush").mockImplementation((candidate) => { const finish = before(candidate); f.drift(); return finish; });
   expect(() => f.acquire()).toThrow("HUMAN_AUTHORIZATION_BINDING_MISMATCH"); roots.push(f.candidate().objectDirectory);
   expect(f.pushes()).toBe(0); expect(f.state().candidates).toHaveLength(1); expect(f.state().attempts).toHaveLength(0);
-  expect(f.transport.readRef(f.controlRef)).toBeNull();
+  expect(f.transport.readRef(f.controlRef)).toBe(f.genesis.commitSha);
 });

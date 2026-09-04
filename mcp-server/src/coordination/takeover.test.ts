@@ -15,7 +15,7 @@ import { requireWriteLease } from "./leases.js";
 import { createCoordinationRecord, expectedRecord, validRecord } from "./record.js";
 import { GitCoordinationStore } from "./store.js";
 import { observeTakeoverRisk, prepareTakeover } from "./takeover.js";
-import { localHistory, localTransport } from "./__fixtures__/transport.js";
+import { localHistory, localTransport, seedLocalGenesis } from "./__fixtures__/transport.js";
 
 const roots: string[] = []; const digest = "a".repeat(64); const workItem = "github:owner/repo#86";
 const git = (root: string, ...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -31,7 +31,7 @@ function fixture(state: "Admitted" | "Active" | "Ready" | "MergeArmed" | "Prepar
   const binding = { commonDir: context.commonDir, repository: "owner/repo", repositoryId: "R_1", endpointHash: digest, credentialBindingHash: digest,
     credentialRef: "fixture-git", credentialPurpose: "git-transport" as const, actor: "target", hostId: "841ba5a8-40e2-4848-b5a4-082f4f2145a9",
     configHash: digest, controlEpoch: observeQualificationEpoch(target, digest), implementation: { kind: "package" as const, artifactDigest: digest }, runnerHash: digest };
-  const controlRef = "refs/heads/fixture-control"; const source = localTransport(target, remote); let genesis = "";
+  const controlRef = "refs/heads/fixture-control"; const source = localTransport(target, remote); const genesis = seedLocalGenesis(remote, controlRef);
   const initial = createCoordinationRecord({ repository: binding.repository, repositoryId: binding.repositoryId, workItem, branch: "codex/fixture", sourceRepositoryId: binding.repositoryId,
     owner: "old", machine: "old-machine", generation: 1, controlEpochDigest: "b".repeat(64), lastObservedHead: head,
     lifecycleState: state, createdAt: "2026-09-04T03:00:00.000Z", expiresAt: state === "Abandoned" ? null : "2026-09-04T03:01:00.000Z",
@@ -39,9 +39,9 @@ function fixture(state: "Admitted" | "Active" | "Ready" | "MergeArmed" | "Prepar
     handoff: state === "Abandoned" ? undefined : { transferId: "frozen-old", target: { owner: "unavailable-target", machine: "unknown-target" },
       source: { owner: "old", machine: "old-machine", generation: 1, epoch: "b".repeat(64), head, expiresAt: "2026-09-04T03:01:00.000Z" } } });
   // LOCAL setup only: these synthetic ancestors are not counted or reported as a qualified native run.
-  const history = localHistory(context.commonDir, controlRef, () => genesis);
-  const seeded = new GitCoordinationStore(controlRef, source, (candidate) => { genesis = candidate.controlSha; }, true, history, () => () => {});
-  const oldSha = seeded.compareAndSwap({ workItem, expectedControlSha: null, expected: {}, next: initial }).candidate.controlSha;
+  const history = localHistory(context.commonDir, controlRef, genesis);
+  const seeded = new GitCoordinationStore(controlRef, source, () => {}, genesis, history, () => () => {});
+  const oldSha = seeded.compareAndSwap({ workItem, expectedControlSha: genesis.commitSha, expected: {}, next: initial }).candidate.controlSha;
   let date = "Fri, 04 Sep 2026 04:00:00 GMT"; let late = false; let pushes = 0;
   const clock = () => { const c = new CoordinationClock(() => ({ monotonicMs: 0, wallMs: 0 })); c.observe(date, c.start()); return c; };
   function approve(scope: HumanScope) {
@@ -54,7 +54,7 @@ function fixture(state: "Admitted" | "Active" | "Ready" | "MergeArmed" | "Prepar
   }
   const run: HumanScope = { kind: "qualification-run", binding, runId: "fixture-run", refs: [controlRef, "refs/heads/codex/fixture"], operations: ["create", "cas"],
     maxCommits: 3, maxWriteAttempts: 3, maxCleanupAttempts: 1, expiresAt: "2026-09-04T05:00:00.000Z", cleanupExpiresAt: "2026-09-04T06:00:00.000Z",
-    takeoverAllocations: [{ allocationId: "takeover", workItem, controlRef, sourceRef: "refs/heads/codex/fixture", genesisSha: genesis, maxCommits: 2, maxWriteAttempts: 2 }] };
+    takeoverAllocations: [{ allocationId: "takeover", workItem, controlRef, sourceRef: "refs/heads/codex/fixture", genesisSha: genesis.commitSha, maxCommits: 2, maxWriteAttempts: 2 }] };
   const parentApprovalRef = approve(run);
   const locked = <T>(operation: (held: MutationLock) => T) => { const held = acquireMutationLock(context); try { return operation(held); } finally { releaseMutationLock(held); } };
   function scope(): Extract<HumanScope, { kind: "takeover" }> {
@@ -64,7 +64,7 @@ function fixture(state: "Admitted" | "Active" | "Ready" | "MergeArmed" | "Prepar
       targetWorkspace: target, targetBranch: initial.branch, targetHead: git(target, "rev-parse", "HEAD"), sourceRepositoryId: source.repositoryId,
       newEpochDigest: controlEpochDigest(binding.controlEpoch), newLease: { ttlMs: 120_000, notAfter: "2026-09-04T04:01:30.000Z" },
       assetRisk, assetRiskHash: hashObject(assetRisk), transactionId: "takeover-once", maxCommits: 2, maxWriteAttempts: 2,
-      qualification: { parentApprovalRef, runId: run.runId, allocationId: "takeover", genesisSha: genesis } };
+      qualification: { parentApprovalRef, runId: run.runId, allocationId: "takeover", genesisSha: genesis.commitSha } };
   }
   function runtime(approvalRef: string, held: MutationLock) {
     let prepared: ReturnType<typeof prepareTakeover> | undefined;
@@ -74,7 +74,7 @@ function fixture(state: "Admitted" | "Active" | "Ready" | "MergeArmed" | "Prepar
     const store = new GitCoordinationStore(controlRef, { ...source, push(directory, sha, ref, expected) {
       guards.authorizeWrite({ ...binding, ref, head: sha, expected }); pushes++;
       const result = source.push(directory, sha, ref, expected); if (late) date = "Fri, 04 Sep 2026 04:02:00 GMT"; return result;
-    } }, guards.beforePush, false, history, guards.beforeCommit);
+    } }, guards.beforePush, genesis, history, guards.beforeCommit);
     return { store, takeover() { prepared = prepareTakeover(context, held, approvalRef, store, source, () => binding, clock); return prepared.apply(); } };
   }
   return { root, target, context, initial, oldSha, binding, seeded, source, controlRef, clock, scope, approve, locked, runtime,

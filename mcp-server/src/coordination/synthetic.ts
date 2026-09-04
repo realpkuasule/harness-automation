@@ -63,3 +63,47 @@ export function validateSourceFixtureGraph(input: unknown): SyntheticObjectPlan[
   }
   return plans;
 }
+
+const publicationSchema = z.object({ fixtureId: id, transactionId: id,
+  ref: z.string().startsWith("refs/heads/").max(512), expected: gitSha.nullable() }).strict();
+export const syntheticScopeSchema = z.object({ objects: z.array(syntheticObjectSchema).min(1).max(4096),
+  controls: z.array(z.object({ fixtureId: id, ref: publicationSchema.shape.ref }).strict()).max(32),
+  publications: z.array(publicationSchema).max(4096) }).strict().superRefine((scope, context) => {
+  const byId = new Map(scope.objects.map((plan) => [plan.metadata.objectId, plan]));
+  const invalid = () => context.addIssue({ code: "custom", message: "SYNTHETIC_SCOPE_INVALID" });
+  if (byId.size !== scope.objects.length || new Set(scope.objects.map((plan) => plan.metadata.runId)).size !== 1 ||
+      new Set(scope.publications.map((value) => value.transactionId)).size !== scope.publications.length ||
+      new Set(scope.publications.map((value) => value.fixtureId)).size !== scope.publications.length ||
+      new Set(scope.controls.map((value) => value.fixtureId)).size !== scope.controls.length ||
+      new Set(scope.controls.map((value) => value.ref)).size !== scope.controls.length ||
+      scope.controls.some((value) => byId.get(value.fixtureId)?.kind !== "control-genesis") ||
+      scope.objects.some((plan) => plan.kind === "control-genesis" && !scope.controls.some((value) => value.fixtureId === plan.metadata.objectId))) invalid();
+  const sources = scope.objects.filter((plan) => plan.kind === "source-fixture");
+  try { if (sources.length) validateSourceFixtureGraph(sources); } catch { invalid(); }
+  const roles = new Map<string, SyntheticObjectPlan["kind"]>();
+  for (const publication of scope.publications) {
+    const plan = byId.get(publication.fixtureId);
+    if (!plan || roles.has(publication.ref) && roles.get(publication.ref) !== plan.kind ||
+        plan.kind === "control-genesis" && (publication.expected !== null || !scope.controls.some((value) => value.fixtureId === publication.fixtureId && value.ref === publication.ref)) ||
+        plan.kind === "source-fixture" && scope.controls.some((value) => value.ref === publication.ref) ||
+        plan.kind === "source-fixture" && publication.expected !== null && !sources.some((source) => source.commitSha === publication.expected)) { invalid(); continue; }
+    roles.set(publication.ref, plan.kind);
+  }
+});
+export type SyntheticScope = z.infer<typeof syntheticScopeSchema>;
+export type SyntheticPublication = z.infer<typeof publicationSchema>;
+
+export function approvedControlGenesis(scope: SyntheticScope | undefined, ref: string): SyntheticObjectPlan {
+  if (!scope) throw new Error("COORDINATION_RUN_GENESIS_REQUIRED");
+  const checked = syntheticScopeSchema.parse(scope); const anchor = checked.controls.find((value) => value.ref === ref);
+  const plan = checked.objects.find((value) => value.metadata.objectId === anchor?.fixtureId);
+  if (!plan || plan.kind !== "control-genesis") throw new Error("COORDINATION_RUN_GENESIS_REQUIRED");
+  return plan;
+}
+
+export function approvedSyntheticPublication(scope: SyntheticScope, fixtureId: string) {
+  const checked = syntheticScopeSchema.parse(scope); const publication = checked.publications.find((value) => value.fixtureId === fixtureId);
+  const plan = checked.objects.find((value) => value.metadata.objectId === fixtureId);
+  if (!publication || !plan) throw new Error("HUMAN_SYNTHETIC_SCOPE_REQUIRED");
+  return { publication, plan };
+}

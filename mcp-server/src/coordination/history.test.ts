@@ -3,16 +3,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { validateCoordinationHistory } from "./history.js";
+import { fixtureGenesis } from "./__fixtures__/transport.js";
 
 const roots: string[] = [];
-const sha = (value: number) => value.toString(16).padStart(40, "0");
+const genesis = fixtureGenesis();
+const sha = (value: number) => value === 1 ? genesis.commitSha : value.toString(16).padStart(40, "0");
+const number = (head: string) => head === genesis.commitSha ? 1 : parseInt(head, 16);
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
 function fixture() {
   const commonDir = mkdtempSync(join(tmpdir(), "harness-history-")); roots.push(commonDir);
   const reads: string[] = [];
-  return { commonDir, reads, anchor: { validationVersion: "coordination-history/1" as const, genesisSha: sha(1), repository: "owner/repo", repositoryId: "42", controlRef: "refs/heads/control" },
-    readValidatedCommit: (head: string) => { reads.push(head); const n = parseInt(head, 16); return { parents: n === 1 ? [] : [sha(n - 1)], treeSha: sha(n + 1_000) }; },
-    isAncestor: (a: string, b: string) => parseInt(a, 16) <= parseInt(b, 16),
+  return { commonDir, reads, anchor: { validationVersion: "coordination-history/2" as const, genesis, endpointHash: "a".repeat(64), repository: "owner/repo", repositoryId: "42", controlRef: "refs/heads/control" },
+    readValidatedCommit: (head: string) => { reads.push(head); const n = number(head); return { parents: n === 1 ? [] : [sha(n - 1)], treeSha: n === 1 ? genesis.treeSha : sha(n + 1_000) }; },
+    isAncestor: (a: string, b: string) => number(a) <= number(b),
   };
 }
 it("resumes bounded cold verification, then only checks new commits; checkpoints never grant a lease", () => {

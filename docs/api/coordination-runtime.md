@@ -11,7 +11,10 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
 - `coordination/authorization.ts` connects those reservations to the Store and
   credential-bound transport. A successful push without exact history readback
   remains unknown. Recovery fetches validated remote history without replaying a
-  push, and can record historical success without restoring ownership or lease time.
+  push. It can record historical success only with durable positive evidence of
+  that attempt's ref update, without restoring ownership or lease time. Same-SHA
+  state alone cannot promote an unknown attempt; complete up-to-date/no-op output
+  is rejected and remains rejected across process recovery.
 - `coordination/handoff_record.ts` defines the strict transfer attachment without a
   new lifecycle state. An unaccepted handoff blocks ordinary writes, renew and
   rebind. A verified merge can still terminate that exact frozen generation; the
@@ -29,6 +32,13 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
   handlers for a bounded qualification ticket. It does not require a pre-existing
   write PASS, create credentials, enable production or grant permission beyond the
   ticket. Multi-client run manifests and the complete CLI runner are still pending.
+- `coordination/synthetic.ts` precomputes strict empty-tree descriptors without
+  writing objects. The approved catalog binds control anchors and exact publication
+  rights separately from read-only ancestors. `store.bootstrap` and
+  `publication.runApprovedSourceFixture` share private object helpers and the same
+  candidate/attempt receipts; neither accepts arbitrary CLI refs or object bytes.
+  History v2 binds the complete approved genesis descriptor and endpoint. Ordinary
+  CAS never bootstraps, and no other empty control commit is valid.
 - `coordination/authority.ts` binds lifecycle proposals and Store dispatch to the
   same observed actor, installation, repository and control epoch. Acquire/rebind
   use the actual local branch and HEAD; knowing another owner's expected tuple is
