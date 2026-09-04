@@ -21,7 +21,23 @@
     "expiresAt": { "type": ["string", "null"], "format": "date-time" },
     "lastObservedHead": { "type": "string", "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" },
     "lifecycleState": { "enum": ["Admitted", "Prepared", "Active", "Draft", "Ready", "MergeArmed", "Integrated", "Closing", "Closed", "Abandoned"] },
-    "renewal": { "type": "object", "additionalProperties": false, "required": ["transactionId", "proposedExpiresAt", "reservedAt"], "properties": { "transactionId": { "type": "string", "minLength": 1 }, "proposedExpiresAt": { "type": "string", "format": "date-time" }, "reservedAt": { "type": "string", "format": "date-time" }, "observedBeforeExpiryAt": { "type": "string", "format": "date-time" } } },
+    "renewal": { "type": "object", "additionalProperties": false, "required": ["transactionId", "proposedExpiresAt", "reservedAt"], "properties": { "transactionId": { "type": "string", "minLength": 1 }, "proposedExpiresAt": { "type": "string", "format": "date-time" }, "reservedAt": { "type": "string", "format": "date-time" } } },
+    "renewalConfirmation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["transactionId", "reservationControlSha", "reservationRecordHash", "oldExpiresAt", "proposedExpiresAt", "serverDate", "roundTripMs", "elapsedMs", "observedUpperBoundAt", "proofHash"],
+      "properties": {
+        "transactionId": { "type": "string", "minLength": 1 },
+        "reservationControlSha": { "type": "string", "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" },
+        "reservationRecordHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "oldExpiresAt": { "type": "string", "format": "date-time" },
+        "proposedExpiresAt": { "type": "string", "format": "date-time" },
+        "serverDate": { "type": "string", "minLength": 1 },
+        "roundTripMs": { "type": "number", "minimum": 0 },
+        "elapsedMs": { "type": "number", "minimum": 0 },
+        "observedUpperBoundAt": { "type": "string", "format": "date-time" },
+        "proofHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
     "closeOwnerGeneration": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
     "transactionId": { "type": "string", "minLength": 1 },
     "recordHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
@@ -30,7 +46,7 @@
   "allOf": [
     {
       "if": { "properties": { "lifecycleState": { "enum": ["Integrated", "Closing", "Closed", "Abandoned"] } } },
-      "then": { "required": ["closeOwnerGeneration"], "properties": { "expiresAt": { "type": "null" } }, "not": { "required": ["renewal"] } },
+      "then": { "required": ["closeOwnerGeneration"], "properties": { "expiresAt": { "type": "null" } }, "not": { "anyOf": [{ "required": ["renewal"] }, { "required": ["renewalConfirmation"] }] } },
       "else": { "properties": { "expiresAt": { "type": "string", "format": "date-time" } }, "not": { "required": ["closeOwnerGeneration"] } }
     }
   ]

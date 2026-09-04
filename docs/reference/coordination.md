@@ -25,5 +25,10 @@ Unknown intermediate records, divergent history, or an unapproved anchor block u
 
 `CoordinationClock` supplies conservative Date/RTT/monotonic bounds with explicit
 clock limits. It rejects stale or malformed samples and clock discontinuities;
-local wall time is only an anomaly detector. This primitive is not yet wired into
-all lifecycle transitions and does not constitute LIVE lease qualification.
+local wall time is only an anomaly detector. Acquire/rebind and renewal handlers
+now require these bounds; pending renewal retains the old expiry and grants no
+write permission. Renewal stores a timely readback proof before confirming its
+new expiry without changing generation. A confirmation may finish after the old
+expiry only with that prior proof, before the proposed expiry, and against the
+same exact reservation. Provider clock/CLI assembly and the full handoff protocol
+are still pending; LOCAL handler tests do not constitute LIVE lease qualification.

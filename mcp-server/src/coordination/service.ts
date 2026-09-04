@@ -3,11 +3,14 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { readJson, safePath } from "../v2/fs.js";
 import { runGitCommand } from "../repository/git.js";
-import { type CoordinationConfig, type CoordinationExpected, type CoordinationLifecycle, type CoordinationRecord } from "./types.js";
-import { assertExpected, createCoordinationRecord, recordWithoutHash } from "./record.js";
+import { type CoordinationConfig, type CoordinationExpected, type CoordinationRecord } from "./types.js";
+import { assertExpected, createCoordinationRecord, expectedRecord, recordWithoutHash } from "./record.js";
 import { GitCoordinationStore } from "./store.js";
+import { CoordinationClock } from "./clock.js";
+import { confirmRenewal, nextLease, observeRenewal, rebindLease, requireWriteLease, reserveRenewal } from "./leases.js";
 export { assertExpected, createCoordinationRecord } from "./record.js";
 export { GitCoordinationStore } from "./store.js";
+export { confirmRenewal, nextLease, observeRenewal, rebindLease, reserveRenewal } from "./leases.js";
 
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 
@@ -56,31 +59,11 @@ export function requireEnabledCoordination(root: string): CoordinationConfig {
   fail("CREDENTIAL_TRANSPORT_HELPER_REQUIRED");
 }
 
-/** A pending renewal never grants time; confirmation needs independent server-time evidence before the old expiry. */
-export function reserveRenewal(record: CoordinationRecord, expected: CoordinationExpected, proposedExpiresAt: string, transactionId = randomUUID()): CoordinationRecord {
-  assertExpected(record, expected);
-  if (!record.expiresAt || record.lifecycleState === "Integrated" || record.renewal || Date.parse(proposedExpiresAt) <= Date.parse(record.expiresAt)) fail("COORDINATION_RENEWAL_INVALID");
-  return createCoordinationRecord({ ...recordWithoutHash(record), transactionId, renewal: { transactionId, proposedExpiresAt, reservedAt: new Date().toISOString() } });
-}
-
-export function confirmRenewal(record: CoordinationRecord, expected: CoordinationExpected, observedBeforeExpiryAt: string): CoordinationRecord {
-  assertExpected(record, expected);
-  const renewal = record.renewal;
-  if (!renewal || !record.expiresAt || Date.parse(observedBeforeExpiryAt) >= Date.parse(record.expiresAt)) fail("COORDINATION_RENEWAL_TIME_UNPROVEN");
-  const next = recordWithoutHash(record); delete (next as Partial<CoordinationRecord>).renewal;
-  return createCoordinationRecord({ ...next, expiresAt: renewal.proposedExpiresAt, transactionId: renewal.transactionId });
-}
-
 export function terminalClaim(record: CoordinationRecord, expected: CoordinationExpected, integratedHead: string, transactionId = randomUUID()): CoordinationRecord {
   assertExpected(record, expected);
   if (!SHA.test(integratedHead) || record.lifecycleState === "Integrated" || record.lifecycleState === "Closing" || record.lifecycleState === "Closed" || record.lifecycleState === "Abandoned") fail("COORDINATION_TERMINAL_CLAIM_INVALID");
-  return createCoordinationRecord({ ...recordWithoutHash(record), lastObservedHead: integratedHead, lifecycleState: "Integrated", expiresAt: null, closeOwnerGeneration: record.generation, transactionId });
-}
-
-export function rebindLease(record: CoordinationRecord, expected: CoordinationExpected, sessionRef: string | undefined, head: string, transactionId = randomUUID()): CoordinationRecord {
-  assertExpected(record, expected);
-  if (!record.expiresAt || !SHA.test(head) || record.lifecycleState === "Integrated") fail("COORDINATION_REBIND_INVALID");
-  return createCoordinationRecord({ ...recordWithoutHash(record), sessionRef, lastObservedHead: head, transactionId });
+  const next = recordWithoutHash(record); delete next.renewal; delete next.renewalConfirmation;
+  return createCoordinationRecord({ ...next, lastObservedHead: integratedHead, lifecycleState: "Integrated", expiresAt: null, closeOwnerGeneration: record.generation, transactionId });
 }
 
 export interface ZeroLossTransferEvidence {
@@ -109,29 +92,30 @@ export function observeZeroLossTransfer(sourceRoot: string, endpoint: string, so
   return { sourceHead, remoteHead, targetRetrievedHead, trackedClean: true, untracked: [], ignored: [], uniqueCommits: 0, unpushedCommits: 0 };
 }
 
-export function transferLease(record: CoordinationRecord, expected: CoordinationExpected, target: { owner: string; machine: string; sessionRef?: string }, evidence: ZeroLossTransferEvidence, transactionId = randomUUID()): CoordinationRecord {
-  assertExpected(record, expected);
+export function transferLease(record: CoordinationRecord, expected: CoordinationExpected, target: { owner: string; machine: string; sessionRef?: string }, evidence: ZeroLossTransferEvidence, clock: CoordinationClock, transactionId = randomUUID()): CoordinationRecord {
+  requireWriteLease(record, expected, clock);
   if (!record.expiresAt || !target.owner || !target.machine || record.lifecycleState === "Integrated" || evidence.sourceHead !== record.lastObservedHead || evidence.remoteHead !== record.lastObservedHead || evidence.targetRetrievedHead !== record.lastObservedHead || !evidence.trackedClean || evidence.untracked.length || evidence.ignored.length || evidence.uniqueCommits !== 0 || evidence.unpushedCommits !== 0) fail("COORDINATION_TRANSFER_EVIDENCE_INSUFFICIENT");
-  return createCoordinationRecord({ ...recordWithoutHash(record), owner: target.owner, machine: target.machine, sessionRef: target.sessionRef, generation: record.generation + 1, createdAt: new Date().toISOString(), transactionId });
+  const next = recordWithoutHash(record); delete next.renewalConfirmation;
+  return createCoordinationRecord({ ...next, owner: target.owner, machine: target.machine, sessionRef: target.sessionRef, generation: record.generation + 1, createdAt: new Date(Math.floor(Math.max(Date.parse(record.createdAt), clock.bounds().lowerMs))).toISOString(), transactionId });
 }
 
 /** Shared lifecycle composition: CLI and isolated qualification fixtures use these exact CAS paths. */
 export class CoordinationLifecycleService {
-  constructor(private readonly store: GitCoordinationStore) {}
+  constructor(private readonly store: GitCoordinationStore, private readonly refreshClock: () => CoordinationClock) {}
   acquire(input: Parameters<typeof nextLease>[0]): CoordinationRecord {
     const current = this.store.read(input.workItem);
     if (current.record) fail("COORDINATION_ALREADY_ACQUIRED");
-    const next = nextLease({ ...input, prior: null });
+    const next = nextLease(input, this.refreshClock());
     return this.confirm(this.store.compareAndSwap({ workItem: input.workItem, expectedControlSha: current.controlSha, expected: {}, next }));
   }
   rebind(workItem: string, expected: CoordinationExpected, sessionRef: string | undefined, head: string): CoordinationRecord {
     const current = this.store.read(workItem); if (!current.record) fail("COORDINATION_RECORD_ABSENT");
-    const next = rebindLease(current.record, expected, sessionRef, head);
+    const next = rebindLease(current.record, expected, sessionRef, head, this.refreshClock());
     return this.confirm(this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next }));
   }
   transfer(workItem: string, expected: CoordinationExpected, target: { owner: string; machine: string; sessionRef?: string }, evidence: ZeroLossTransferEvidence): CoordinationRecord {
     const current = this.store.read(workItem); if (!current.record) fail("COORDINATION_RECORD_ABSENT");
-    const next = transferLease(current.record, expected, target, evidence);
+    const next = transferLease(current.record, expected, target, evidence, this.refreshClock());
     return this.confirm(this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next }));
   }
   terminalClaim(workItem: string, expected: CoordinationExpected, integratedHead: string): CoordinationRecord {
@@ -139,12 +123,20 @@ export class CoordinationLifecycleService {
     const next = terminalClaim(current.record, expected, integratedHead);
     return this.confirm(this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next }));
   }
+  renew(workItem: string, expected: CoordinationExpected, ttlMs: number): CoordinationRecord {
+    const current = this.store.read(workItem); if (!current.record) fail("COORDINATION_RECORD_ABSENT");
+    const pending = reserveRenewal(current.record, expected, ttlMs, this.refreshClock());
+    const reserved = this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next: pending });
+    if (reserved.disposition !== "current") fail("COORDINATION_TRANSACTION_SUPERSEDED");
+    const observed = this.store.read(workItem);
+    if (!observed.record || !observed.controlSha || observed.record.recordHash !== pending.recordHash) fail("COORDINATION_CAS_CONFLICT");
+    const proof = observeRenewal(observed.record, observed.controlSha, this.refreshClock());
+    const next = confirmRenewal(observed.record, expectedRecord(observed.record), proof, this.refreshClock());
+    return this.confirm(this.store.compareAndSwap({ workItem, expectedControlSha: observed.controlSha, expected: expectedRecord(observed.record), next }));
+  }
   private confirm(applied: ReturnType<GitCoordinationStore["compareAndSwap"]>): CoordinationRecord {
     if (applied.disposition !== "current" || !applied.current.record) fail("COORDINATION_TRANSACTION_SUPERSEDED");
+    if (applied.current.record.expiresAt !== null) requireWriteLease(applied.current.record, expectedRecord(applied.current.record), this.refreshClock());
     return applied.current.record;
   }
-}
-
-export function nextLease(args: { prior: CoordinationRecord | null; repository: string; repositoryId: string; workItem: string; branch: string; sourceRepositoryId: string; owner: string; machine: string; sessionRef?: string; controlEpochDigest: string; head: string; expiresAt: string; lifecycleState?: CoordinationLifecycle; transactionId?: string }): CoordinationRecord {
-  return createCoordinationRecord({ repository: args.repository, repositoryId: args.repositoryId, workItem: args.workItem, branch: args.branch, sourceRepositoryId: args.sourceRepositoryId, owner: args.owner, machine: args.machine, sessionRef: args.sessionRef, generation: (args.prior?.generation ?? 0) + 1, controlEpochDigest: args.controlEpochDigest, createdAt: new Date().toISOString(), expiresAt: args.expiresAt, lastObservedHead: args.head, lifecycleState: args.lifecycleState ?? "Admitted", transactionId: args.transactionId ?? randomUUID() });
 }

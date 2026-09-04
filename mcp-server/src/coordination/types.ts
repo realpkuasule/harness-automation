@@ -2,6 +2,19 @@ export const COORDINATION_SCHEMA_VERSION = "github-coordination/1.0" as const;
 
 export type CoordinationLifecycle = "Admitted" | "Prepared" | "Active" | "Draft" | "Ready" | "MergeArmed" | "Integrated" | "Closing" | "Closed" | "Abandoned";
 
+export interface RenewalProof {
+  transactionId: string;
+  reservationControlSha: string;
+  reservationRecordHash: string;
+  oldExpiresAt: string;
+  proposedExpiresAt: string;
+  serverDate: string;
+  roundTripMs: number;
+  elapsedMs: number;
+  observedUpperBoundAt: string;
+  proofHash: string;
+}
+
 export interface CoordinationRecord {
   schemaVersion: typeof COORDINATION_SCHEMA_VERSION;
   repository: string;
@@ -18,7 +31,8 @@ export interface CoordinationRecord {
   expiresAt: string | null;
   lastObservedHead: string;
   lifecycleState: CoordinationLifecycle;
-  renewal?: { transactionId: string; proposedExpiresAt: string; reservedAt: string; observedBeforeExpiryAt?: string };
+  renewal?: { transactionId: string; proposedExpiresAt: string; reservedAt: string };
+  renewalConfirmation?: RenewalProof;
   closeOwnerGeneration?: number;
   transactionId: string;
   recordHash: string;

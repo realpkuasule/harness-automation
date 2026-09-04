@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { hashObject } from "../v2/fs.js";
-import { COORDINATION_SCHEMA_VERSION, type CoordinationExpected, type CoordinationRecord } from "./types.js";
+import { COORDINATION_SCHEMA_VERSION, type CoordinationExpected, type CoordinationRecord, type RenewalProof } from "./types.js";
 
 const text = z.string().min(1).max(512).refine((value) => !/[\x00-\x1f\x7f]/u.test(value));
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -8,6 +8,21 @@ const sha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
 const generation = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const repository = z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u);
 const timestamp = z.string().datetime();
+const renewalProofSchema = z.object({
+  transactionId: text, reservationControlSha: sha, reservationRecordHash: digest,
+  oldExpiresAt: timestamp, proposedExpiresAt: timestamp, serverDate: text,
+  roundTripMs: z.number().finite().nonnegative(), elapsedMs: z.number().finite().nonnegative(),
+  observedUpperBoundAt: timestamp, proofHash: digest,
+}).strict();
+export function validRenewalProof(input: unknown): input is RenewalProof {
+  const parsed = renewalProofSchema.safeParse(input); if (!parsed.success) return false;
+  const { proofHash, ...proof } = parsed.data;
+  const date = Date.parse(proof.serverDate);
+  return Number.isFinite(date) && new Date(date).toUTCString() === proof.serverDate &&
+    Date.parse(proof.observedUpperBoundAt) >= date + 1_000 + proof.roundTripMs + proof.elapsedMs &&
+    Date.parse(proof.observedUpperBoundAt) < Date.parse(proof.oldExpiresAt) &&
+    Date.parse(proof.proposedExpiresAt) > Date.parse(proof.oldExpiresAt) && proofHash === hashObject(proof);
+}
 export const coordinationRecordSchema = z.object({
   schemaVersion: z.literal(COORDINATION_SCHEMA_VERSION), repository, repositoryId: text,
   workItem: z.string().regex(/^github:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9][0-9]*$/u),
@@ -16,7 +31,8 @@ export const coordinationRecordSchema = z.object({
   sourceRepositoryId: text, owner: text, machine: text, sessionRef: text.optional(), generation,
   controlEpochDigest: digest, createdAt: timestamp, expiresAt: timestamp.nullable(), lastObservedHead: sha,
   lifecycleState: z.enum(["Admitted", "Prepared", "Active", "Draft", "Ready", "MergeArmed", "Integrated", "Closing", "Closed", "Abandoned"]),
-  renewal: z.object({ transactionId: text, proposedExpiresAt: timestamp, reservedAt: timestamp, observedBeforeExpiryAt: timestamp.optional() }).strict().optional(),
+  renewal: z.object({ transactionId: text, proposedExpiresAt: timestamp, reservedAt: timestamp }).strict().optional(),
+  renewalConfirmation: renewalProofSchema.optional(),
   closeOwnerGeneration: generation.optional(), transactionId: text, recordHash: digest,
 }).strict();
 
@@ -35,6 +51,7 @@ export function validRecord(input: unknown): input is CoordinationRecord {
     (!record.renewal || record.expiresAt !== null && record.renewal.transactionId === record.transactionId &&
       Date.parse(record.renewal.reservedAt) >= Date.parse(record.createdAt) && Date.parse(record.renewal.reservedAt) < Date.parse(record.expiresAt) &&
       Date.parse(record.renewal.proposedExpiresAt) > Date.parse(record.expiresAt)) &&
+    (!record.renewalConfirmation || validRenewalProof(record.renewalConfirmation) && record.renewalConfirmation.proposedExpiresAt === record.expiresAt) &&
     record.recordHash === hashObject(recordWithoutHash(record));
 }
 export function createCoordinationRecord(input: Omit<CoordinationRecord, "schemaVersion" | "recordHash">): CoordinationRecord {
