@@ -195,7 +195,7 @@
       "required": ["schemaVersion", "suites"],
       "properties": {
         "schemaVersion": {
-          "enum": ["1.0", "1.1"]
+          "enum": ["1.0", "1.1", "1.2"]
         },
         "suites": {
           "type": "array",
@@ -345,6 +345,16 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 255
+            },
+            "expectedReport": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["testId", "assertionId", "category"],
+              "properties": {
+                "testId": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+                "assertionId": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+                "category": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
+              }
             }
           }
         }
