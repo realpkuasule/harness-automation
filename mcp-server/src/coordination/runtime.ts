@@ -11,6 +11,7 @@ import { validateCoordinationHistory } from "./history.js";
 import { CoordinationLifecycleService, loadCoordinationConfig } from "./service.js";
 import { GitCoordinationStore } from "./store.js";
 import { GitHubCoordinationTransport } from "./transport.js";
+import { observeQualificationEpoch, qualificationOperationAuthority } from "./authority.js";
 
 /** Non-secret observation; all identity comes from the actual checkout, approved host binding and running artifact. */
 export function observeCoordinationBinding(projectRoot: string, remote: string, repositoryId: string, credentialId: string): HumanScopeBinding {
@@ -19,9 +20,10 @@ export function observeCoordinationBinding(projectRoot: string, remote: string, 
   const registered = loadCredentialHostBinding(commonDir, { repository, repositoryId, endpointHash: endpoint.hash });
   const credential = registered.credentials.find((ref) => ref.id === credentialId && ref.purpose === "git-transport");
   if (!credential) throw new Error("CREDENTIAL_REF_UNREGISTERED");
+  const configHash = hashObject(loadCoordinationConfig(projectDir));
   return { commonDir, repository, repositoryId, endpointHash: endpoint.hash, credentialBindingHash: registered.bindingHash,
     credentialRef: credential.id, credentialPurpose: "git-transport", actor: credential.identity, hostId: registered.hostId,
-    configHash: hashObject(loadCoordinationConfig(projectDir)), ...currentHarnessArtifact() };
+    configHash, controlEpoch: observeQualificationEpoch(projectDir, configHash), ...currentHarnessArtifact() };
 }
 
 /** No production-enabled flag or injected Provider: the bounded ticket alone authorizes the first qualification write. */
@@ -38,7 +40,8 @@ export function createQualificationRuntime(projectRoot: string, approvalRef: str
   const api = registered.credentials.filter((ref) => ref.purpose === "github-api" && ref.identity === binding.actor);
   if (api.length !== 1) throw new Error("COORDINATION_API_CREDENTIAL_REQUIRED");
   const provider = new GitHubCoordinationReader(context.projectDir, remote, binding.repositoryId, api[0].id);
-  const guards = qualificationGuards(context.commonDir, approvalRef, observeBinding, () => provider.serverClock(), held);
+  const authority = qualificationOperationAuthority(context.projectDir, binding, observeBinding, () => provider.serverClock());
+  const guards = qualificationGuards(context.commonDir, approvalRef, observeBinding, () => provider.serverClock(), held, authority.assertCandidate);
   const transport = new GitHubCoordinationTransport(context.projectDir, remote, binding.repositoryId, binding.credentialRef, guards.authorizeWrite);
   const store = new GitCoordinationStore(controlRef, transport, guards.beforePush, true, (head, readValidatedCommit, isAncestor) => {
     const history = loadHumanAuthorization(context.commonDir, approvalRef);
@@ -49,5 +52,5 @@ export function createQualificationRuntime(projectRoot: string, approvalRef: str
       genesisSha: bootstrap.head, repository: binding.repository, repositoryId: binding.repositoryId, controlRef }, head, readValidatedCommit, isAncestor });
     if (checked.status !== "verified") throw new Error("COORDINATION_HISTORY_VALIDATION_PENDING");
   }, guards.beforeCommit);
-  return { context, binding, store, provider, lifecycle: new CoordinationLifecycleService(store, () => provider.serverClock(), provider) };
+  return { context, binding, store, provider, lifecycle: new CoordinationLifecycleService(store, () => provider.serverClock(), provider, authority.prepare) };
 }

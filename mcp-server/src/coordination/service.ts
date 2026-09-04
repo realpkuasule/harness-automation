@@ -9,6 +9,8 @@ import { GitCoordinationStore } from "./store.js";
 import { CoordinationClock } from "./clock.js";
 import { confirmRenewal, nextLease, observeRenewal, rebindLease, requireWriteLease, reserveRenewal } from "./leases.js";
 import type { GitHubCoordinationReader } from "./github.js";
+import type { CoordinationOperation, OperationAuthority } from "./authority.js";
+import type { CoordinationObservation } from "./store.js";
 export { assertExpected, createCoordinationRecord } from "./record.js";
 export { GitCoordinationStore } from "./store.js";
 export { confirmRenewal, nextLease, observeRenewal, rebindLease, reserveRenewal } from "./leases.js";
@@ -95,22 +97,18 @@ export function transferLease(record: CoordinationRecord, expected: Coordination
 
 /** Shared lifecycle composition: CLI and isolated qualification fixtures use these exact CAS paths. */
 export class CoordinationLifecycleService {
-  constructor(private readonly store: GitCoordinationStore, private readonly refreshClock: () => CoordinationClock, private readonly provider?: GitHubCoordinationReader) {}
+  constructor(private readonly store: GitCoordinationStore, private readonly refreshClock: () => CoordinationClock,
+    private readonly provider?: GitHubCoordinationReader, private readonly authority?: OperationAuthority) {}
   acquire(input: Parameters<typeof nextLease>[0]): CoordinationRecord {
     const current = this.store.read(input.workItem);
     if (current.record) fail("COORDINATION_ALREADY_ACQUIRED");
     const next = nextLease(input, this.refreshClock());
-    return this.confirm(this.store.compareAndSwap({ workItem: input.workItem, expectedControlSha: current.controlSha, expected: {}, next }));
+    return this.confirm(this.apply("acquire", current, next));
   }
   rebind(workItem: string, expected: CoordinationExpected, sessionRef: string | undefined, head: string): CoordinationRecord {
     const current = this.store.read(workItem); if (!current.record) fail("COORDINATION_RECORD_ABSENT");
     const next = rebindLease(current.record, expected, sessionRef, head, this.refreshClock());
-    return this.confirm(this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next }));
-  }
-  transfer(workItem: string, expected: CoordinationExpected, target: { owner: string; machine: string; sessionRef?: string }, evidence: ZeroLossTransferEvidence): CoordinationRecord {
-    const current = this.store.read(workItem); if (!current.record) fail("COORDINATION_RECORD_ABSENT");
-    const next = transferLease(current.record, expected, target, evidence, this.refreshClock());
-    return this.confirm(this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next }));
+    return this.confirm(this.apply("rebind", current, next));
   }
   terminalClaim(workItem: string, expected: CoordinationExpected, number: number, baseRef: string): CoordinationRecord {
     if (!this.provider) fail("COORDINATION_MERGE_OBSERVER_REQUIRED");
@@ -123,18 +121,24 @@ export class CoordinationLifecycleService {
     delete content.handoff;
     const next = createCoordinationRecord({ ...content, integration, lifecycleState: "Integrated", expiresAt: null,
       closeOwnerGeneration: current.record.generation, transactionId: randomUUID() });
-    return this.confirm(this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next }));
+    return this.confirm(this.apply("terminal-claim", current, next));
   }
   renew(workItem: string, expected: CoordinationExpected, ttlMs: number): CoordinationRecord {
     const current = this.store.read(workItem); if (!current.record) fail("COORDINATION_RECORD_ABSENT");
     const pending = reserveRenewal(current.record, expected, ttlMs, this.refreshClock());
-    const reserved = this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next: pending });
+    const reserved = this.apply("renew-reserve", current, pending);
     if (reserved.disposition !== "current") fail("COORDINATION_TRANSACTION_SUPERSEDED");
     const observed = this.store.read(workItem);
     if (!observed.record || !observed.controlSha || observed.record.recordHash !== pending.recordHash) fail("COORDINATION_CAS_CONFLICT");
     const proof = observeRenewal(observed.record, observed.controlSha, this.refreshClock());
     const next = confirmRenewal(observed.record, expectedRecord(observed.record), proof, this.refreshClock());
-    return this.confirm(this.store.compareAndSwap({ workItem, expectedControlSha: observed.controlSha, expected: expectedRecord(observed.record), next }));
+    return this.confirm(this.apply("renew-confirm", observed, next));
+  }
+  private apply(operation: CoordinationOperation, current: CoordinationObservation, next: CoordinationRecord) {
+    if (!this.authority) fail("COORDINATION_OPERATION_AUTHORITY_REQUIRED");
+    this.authority(operation, current, next);
+    return this.store.compareAndSwap({ workItem: next.workItem, expectedControlSha: current.controlSha,
+      expected: current.record ? expectedRecord(current.record) : {}, next });
   }
   private confirm(applied: ReturnType<GitCoordinationStore["compareAndSwap"]>): CoordinationRecord {
     if (applied.disposition !== "current" || !applied.current.record) fail("COORDINATION_TRANSACTION_SUPERSEDED");

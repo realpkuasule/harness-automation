@@ -459,6 +459,42 @@ CLI 只传操作意图、精确预期值、工作区选择和 approvalRef，不�
    错误映射/替换目录/旧句柄/迁移中断均不误认或删锁。本节仅收敛实现接口，不执行任何
    锁恢复或生产操作。
 
+### 5.4 原生身份、epoch 与 source 仓库边界
+
+1. 原生 runtime 从已验证的 host binding、实际 Broker 身份/仓库观察及当前批准输入
+   装配操作 authority，不从 LifecycleService 参数推导权限。LifecycleService 在
+   构造候选前调用共享的操作绑定校验；Store 的候选/dispatch 前置路径复用该校验并
+   绑定本次操作，不能因为原始 store 可调用就绕过。缺少原生操作 authority 不放行；
+   primitive 注入和纯转换单测不冒充生产身份验证，也不成为 CLI 的 bypass 模式。
+2. acquire 的 repository/repositoryId、owner、machine、controlEpochDigest 必须
+   匹配真实运行时。renew/rebind 同时校验当前远端记录与 expected 的身份、代际和
+   epoch；知道另一写者的 expected 值不构成其授权。source/branch/Head 和 rebind
+   目标工作区来自实际本机 Git 及已验证绑定的观察，不能由 CLI JSON 自证；远端 source
+   身份/Head 另经 Broker 核验。transfer/takeover 按既定操作区分源与目标权限，不能
+   机械要求旧 owner 和新 owner 都等于当前 actor。候选/网络额度预留仍走同一既有链。
+3. controlEpochDigest 由唯一、版本化的 canonical descriptor 计算：固定的 epoch
+   schema、协调 protocol/mode、实际 policy 文件摘要或显式 `none`、coordination
+   配置 digest。policy 有效性/摘要与批准快照一致才可使用；配置 digest 只是其中一个
+   输入，禁止将 HumanScopeBinding.configHash 直接当 epoch。descriptor 不包含
+   actor、host/安装 ID、common-dir、credentialRef/bindingHash 或一次性运行票 ID，
+   保证同一已采用控制语义可跨机器得到同一 epoch；上述身份仍分别严格验证。
+4. 隔离 qualification approval 绑定真实观察到的 descriptor/epoch；policy 缺失时
+   明确绑定 `none`，不为首次有限试写要求初始化 v2，也不伪造全零策略 hash。policy
+   出现、消失或内容变化均须重新观察并匹配批准，不能静默继续。生产 descriptor 从
+   已验证 adoption 的配置/策略快照读取并与当前事实重算核对；运行期不临时生成采用
+   权限。epoch 改变不以普通 renew/rebind 自动覆盖旧记录，仍遵循已批准的转换/恢复门。
+5. 当前 credential host binding 和 Git transport 仅绑定单一仓库。handoff 的
+   sourceRepositoryId 与 base/control 仓库不同而无受信 source 路由时，在 freeze
+   前返回 `COORDINATION_SOURCE_REPOSITORY_BINDING_REQUIRED`；若已经冻结则保留
+   冻结并报告缺口。不能猜测同一 PAT 有权、暗用全局 gh/SSH、借 base endpoint 代替
+   source 或临时重写绑定。本轮不因此扩展多仓库凭据注册/权限；base PR API 已有的
+   fork head.repo.id 只读 merge 验证保持可用，不等同于 source fetch/交接授权。
+
+本节只收敛已定身份与授权合同，不新增权限系统或执行任何登记/生产启用。必要负面对照
+包括原生 acquire 冒用 owner/machine/repo/epoch、拿别人的 expected renew/rebind、
+伪造本机 Head、直接 store 绕过、policy/配置漂移、未绑定 fork source 的 freeze 零写入，
+并保留合法跨机器同 epoch 与 fork PR 只读 merge 的正向覆盖。
+
 ## 6. 可调用入口及资格门
 
 提供 `harness-automation coordination status`，以及对应 acquire、renew、rebind、

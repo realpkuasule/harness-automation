@@ -7,13 +7,14 @@ import type { CoordinationCandidate, CoordinationCommitIntent, CoordinationWrite
 import type { CoordinationWriteIntent } from "./transport.js";
 
 /** Fixed qualification composition, not production enablement. Observers are supplied by the native runner. */
-export function qualificationGuards(commonDir: string, approvalRef: string, observeBinding: () => HumanScopeBinding, refreshClock: () => CoordinationClock, held?: MutationLock) {
+export function qualificationGuards(commonDir: string, approvalRef: string, observeBinding: () => HumanScopeBinding, refreshClock: () => CoordinationClock,
+  held?: MutationLock, assertCandidate?: (intent: CoordinationCommitIntent) => void) {
   // Explicit borrowing only: the enclosing handoff owns and releases this exact handle.
   const reserveCandidate = held ? reserveCandidateQuotaLocked.bind(null, held) : reserveCandidateQuota;
   const recordCandidate = held ? recordCandidateResultLocked.bind(null, held) : recordCandidateResult;
   const reserveAttempt = held ? reserveWriteAttemptLocked.bind(null, held) : reserveWriteAttempt;
   const recordOutcome = held ? recordWriteOutcomeLocked.bind(null, held) : recordWriteOutcome;
-  let active: { candidate: CoordinationCandidate; attempted: boolean; attemptId?: string } | undefined;
+  let active: { candidate: CoordinationCandidate; intent: CoordinationCommitIntent; attempted: boolean; attemptId?: string } | undefined;
   function authorization() {
     const state = loadHumanAuthorization(commonDir, approvalRef);
     if (state.approval.scope.kind !== "qualification-run") throw new Error("COORDINATION_QUALIFICATION_SCOPE_REQUIRED");
@@ -22,6 +23,7 @@ export function qualificationGuards(commonDir: string, approvalRef: string, obse
   return {
     beforeCommit(intent: CoordinationCommitIntent) {
       authorization();
+      assertCandidate?.(intent);
       const reserved = reserveCandidate(commonDir, approvalRef, observeBinding(), intent, refreshClock());
       return (head: string | null) => recordCandidate(commonDir, approvalRef, {
         candidateId: reserved.candidateId, status: head === null ? "unknown" : "created", head,
@@ -35,7 +37,8 @@ export function qualificationGuards(commonDir: string, approvalRef: string, obse
         item.transactionId === candidate.record.transactionId && item.parentSha === candidate.expectedControlSha && item.treeSha === candidate.treeSha &&
         item.recordHash === candidate.record.recordHash && item.objectDirectory === candidate.objectDirectory);
       if (!reserved) throw new Error("HUMAN_CANDIDATE_UNPROVEN");
-      active = { candidate, attempted: false };
+      assertCandidate?.(reserved);
+      active = { candidate, intent: reserved, attempted: false };
       return (result: CoordinationWriteResult) => {
         const finished = active; active = undefined;
         if (!finished?.attemptId) return; // A pre-dispatch gate is not a network outcome.
@@ -50,11 +53,13 @@ export function qualificationGuards(commonDir: string, approvalRef: string, obse
         if (intent[field] !== observed[field]) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
       }
       if (intent.ref !== candidate.controlRef || intent.head !== candidate.controlSha || intent.expected !== candidate.expectedControlSha) throw new Error("HUMAN_WRITE_SCOPE_MISMATCH");
+      assertCandidate?.(active.intent);
       // One callback invocation can authorize one dispatch. A restart recovers receipts, never this closure.
       active.attempted = true;
       const attempt = reserveAttempt(commonDir, approvalRef, observed, { transactionId: candidate.record.transactionId,
         operation: intent.expected === null ? "create" : "cas", ref: intent.ref, head: intent.head, expected: intent.expected }, refreshClock());
       active.attemptId = attempt.attemptId;
+      assertCandidate?.(active.intent);
     },
   };
 }

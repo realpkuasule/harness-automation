@@ -12,6 +12,8 @@ const roots: string[] = [];
 const digest = "a".repeat(64); const head = "b".repeat(40); const ref = "refs/heads/synthetic-qualification";
 const binding = { commonDir: "/fixture-not-registered", repository: "owner/repo", repositoryId: "42", endpointHash: digest, credentialBindingHash: digest,
   credentialRef: "keychain:git", credentialPurpose: "git-transport" as const, actor: "octo", hostId: "741ba5a8-40e2-4848-b5a4-082f4f2145a9", configHash: digest,
+  controlEpoch: { schemaVersion: "coordination-epoch/1" as const, protocol: "github-coordination/1.0" as const, mode: "isolated-qualification" as const,
+    coordinationConfigDigest: digest, policy: { kind: "none" as const } },
   implementation: { kind: "source" as const, head, tree: head, artifactDigest: digest }, runnerHash: digest };
 const scope: HumanScope = { kind: "qualification-run", binding, expiresAt: "2026-09-04T05:00:00.000Z", cleanupExpiresAt: "2026-09-04T06:00:00.000Z",
   runId: "bounded-run", refs: [ref], operations: ["create", "cas"], maxCommits: 2, maxWriteAttempts: 2, maxCleanupAttempts: 1 };
@@ -125,7 +127,8 @@ describe("fixed-purpose human authorization receipts", () => {
   });
 
   it("binds takeover to one exact transaction and leaves adopted-config runtime outside the expired enable ticket", () => {
-    const takeover: HumanScope = { kind: "takeover", binding, expiresAt: scope.expiresAt, workItem: "github:owner/repo#1", controlRef: ref, expectedControlSha: head,
+    const productionBinding = { ...binding, controlEpoch: { ...binding.controlEpoch, mode: "production" as const } };
+    const takeover: HumanScope = { kind: "takeover", binding: productionBinding, expiresAt: scope.expiresAt, workItem: "github:owner/repo#1", controlRef: ref, expectedControlSha: head,
       expected: { recordHash: digest, generation: 1, owner: "old", machine: "old-host", lastObservedHead: head, controlEpochDigest: digest },
       targetOwner: binding.actor, targetHostId: binding.hostId, newEpochDigest: digest, assetRiskHash: digest, transactionId: "takeover-1", maxWriteAttempts: 2 };
     const first = fixture(takeover); const approvalRef = first.register();
@@ -135,7 +138,7 @@ describe("fixed-purpose human authorization receipts", () => {
     const attempt = reserveWriteAttempt(first.root, approvalRef, first.binding, { ...request, operation: "cas", expected: head, transactionId: "takeover-1" }, clock());
     recordWriteOutcome(first.root, approvalRef, { attemptId: attempt.attemptId, status: "applied", evidenceHash: digest });
     expect(() => reserveWriteAttempt(first.root, approvalRef, first.binding, { ...attempt, attemptId: undefined }, clock())).toThrow("HUMAN_WRITE_BUDGET_EXHAUSTED");
-    const enable: HumanScope = { kind: "production-enable", binding, expiresAt: scope.expiresAt, configBeforeHash: null, configAfterHash: digest, controlRef: ref,
+    const enable: HumanScope = { kind: "production-enable", binding: productionBinding, expiresAt: scope.expiresAt, configBeforeHash: null, configAfterHash: digest, controlRef: ref,
       genesisSha: head, genesisTree: head, qualificationEvidenceHash: digest, maxBootstrapAttempts: 1 };
     const second = fixture(enable); const enabledRef = second.register();
     expect(() => reserveWriteAttempt(second.root, enabledRef, second.binding, request, clock("Fri, 04 Sep 2026 05:00:00 GMT"))).toThrow("COORDINATION_LEASE_WINDOW_EXHAUSTED");

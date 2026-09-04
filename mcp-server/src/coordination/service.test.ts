@@ -52,7 +52,7 @@ describe("GitCoordinationStore", { timeout: 20_000 }, () => {
   });
 
   it("uses one real lifecycle handler for acquire and rebind CAS", () => {
-    const { store } = fixture(); const lifecycle = new CoordinationLifecycleService(store, sampleClock); const input = { repository: "owner/repo", repositoryId: "R_1", workItem: "github:owner/repo#9", branch: "codex/test", sourceRepositoryId: "R_1", owner: "octo", machine: "machine-a", controlEpochDigest: "a".repeat(64), head: "b".repeat(40), ttlMs: 86_400_000, transactionId: "lifecycle" };
+    const { store } = fixture(); const lifecycle = new CoordinationLifecycleService(store, sampleClock, undefined, () => {}); const input = { repository: "owner/repo", repositoryId: "R_1", workItem: "github:owner/repo#9", branch: "codex/test", sourceRepositoryId: "R_1", owner: "octo", machine: "machine-a", controlEpochDigest: "a".repeat(64), head: "b".repeat(40), ttlMs: 86_400_000, transactionId: "lifecycle" };
     const acquired = lifecycle.acquire(input); const expected = expectedRecord(acquired);
     const rebound = lifecycle.rebind(acquired.workItem, expected, "opaque", acquired.lastObservedHead);
     expect(rebound.sessionRef).toBe("opaque");
@@ -81,7 +81,7 @@ describe("GitCoordinationStore", { timeout: 20_000 }, () => {
   it("persists both renewal phases and the timely proof without incrementing the generation", () => {
     const { store } = fixture(); const first = lease();
     store.compareAndSwap({ workItem: first.workItem, expectedControlSha: null, expected: {}, next: first });
-    const lifecycle = new CoordinationLifecycleService(store, sampleClock);
+    const lifecycle = new CoordinationLifecycleService(store, sampleClock, undefined, () => {}); // LOCAL primitive fixture, not native authority.
     const renewed = lifecycle.renew(first.workItem, expectedRecord(first), 172_800_000);
     expect(renewed.generation).toBe(first.generation); expect(renewed.renewal).toBeUndefined();
     expect(renewed.renewalConfirmation?.oldExpiresAt).toBe(first.expiresAt);
@@ -94,7 +94,7 @@ describe("GitCoordinationStore", { timeout: 20_000 }, () => {
     let date = "Fri, 04 Sep 2026 04:00:00 GMT";
     const original = store.compareAndSwap.bind(store);
     const writes = vi.spyOn(store, "compareAndSwap").mockImplementation((args) => { const result = original(args); if (args.next.renewal) date = "Sat, 05 Sep 2026 04:00:00 GMT"; return result; });
-    const lifecycle = new CoordinationLifecycleService(store, () => sampleClock(date));
+    const lifecycle = new CoordinationLifecycleService(store, () => sampleClock(date), undefined, () => {});
     expect(() => lifecycle.renew(first.workItem, expectedRecord(first), 172_800_000)).toThrow("COORDINATION_LEASE_WINDOW_EXHAUSTED");
     expect(writes).toHaveBeenCalledTimes(1);
     const pending = store.read(first.workItem).record!;

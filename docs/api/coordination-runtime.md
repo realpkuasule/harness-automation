@@ -29,6 +29,14 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
   handlers for a bounded qualification ticket. It does not require a pre-existing
   write PASS, create credentials, enable production or grant permission beyond the
   ticket. Multi-client run manifests and the complete CLI runner are still pending.
+- `coordination/authority.ts` binds lifecycle proposals and Store dispatch to the
+  same observed actor, installation, repository and control epoch. Acquire/rebind
+  use the actual local branch and HEAD; knowing another owner's expected tuple is
+  not authority. Direct Store calls cannot manufacture an authorized operation.
+  The versioned epoch binds protocol, mode, coordination config and the actual
+  policy-file digest (or explicit absence), excluding machine-specific fields.
+  Qualification approves that isolated snapshot; it does not adopt production
+  policy or make `configHash` alone a control epoch.
 - `repository/artifact.ts` separates source and installed-package identity. Source
   qualification requires the actual clean Harness checkout's HEAD/tree. Installed
   packages verify `dist/runtime-manifest.json` against current runtime bytes; build

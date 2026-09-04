@@ -8,6 +8,7 @@ import { appendLkgRecord, appendReceiptEvent, readLkgChain, readReceiptChain } f
 import { validSemanticApprovalPacket, type SemanticApprovalPacket } from "./service.js";
 import type { CoordinationClock } from "../coordination/clock.js";
 import { harnessArtifactSchema } from "../repository/artifact.js";
+import { controlEpochSchema } from "../coordination/authority.js";
 
 const DOMAIN = "approval-human";
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -21,6 +22,7 @@ const bindingSchema = z.object({
   repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u), repositoryId: text,
   endpointHash: digest, credentialBindingHash: digest, credentialRef: text, credentialPurpose: z.literal("git-transport"),
   actor: text, hostId: z.string().uuid(), configHash: digest,
+  controlEpoch: controlEpochSchema,
   implementation: harnessArtifactSchema, runnerHash: digest,
 }).strict();
 const fields = { binding: bindingSchema, expiresAt: timestamp };
@@ -80,6 +82,8 @@ export interface HumanAuthorization {
 }
 
 function checkScope(scope: HumanScope): void {
+  if (scope.binding.controlEpoch.coordinationConfigDigest !== scope.binding.configHash ||
+      (scope.kind === "qualification-run") !== (scope.binding.controlEpoch.mode === "isolated-qualification")) throw new Error("HUMAN_SCOPE_INVALID");
   if (scope.kind === "qualification-run" && (new Set(scope.refs).size !== scope.refs.length || new Set(scope.operations).size !== scope.operations.length ||
       scope.maxWriteAttempts < 1 || scope.maxCommits < 1 || Date.parse(scope.cleanupExpiresAt) < Date.parse(scope.expiresAt))) throw new Error("HUMAN_SCOPE_INVALID");
   if (scope.kind === "takeover" && (!scope.workItem.startsWith(`github:${scope.binding.repository}#`) ||

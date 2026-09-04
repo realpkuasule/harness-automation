@@ -15,6 +15,7 @@ import { CoordinationLifecycleService, GitCoordinationStore } from "./service.js
 import { createCoordinationRecord, expectedRecord, validRecord } from "./record.js";
 import { localTransport } from "./__fixtures__/transport.js";
 import { validateCoordinationHistory } from "./history.js";
+import { controlEpochDigest } from "./authority.js";
 
 const nativeHost = vi.hoisted(() => ({ home: "" }));
 vi.mock("node:os", async (original) => ({ ...await original<typeof import("node:os")>(), homedir: () => {
@@ -74,7 +75,7 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
         if (result.status !== "verified") throw new Error("COORDINATION_HISTORY_VALIDATION_PENDING");
       }, () => () => {});
     store.compareAndSwap({ workItem: record.workItem, expectedControlSha: null, expected: {}, next: record });
-    const lifecycle = new CoordinationLifecycleService(store, () => provider.serverClock(), provider);
+    const lifecycle = new CoordinationLifecycleService(store, () => provider.serverClock(), provider, () => {}); // LOCAL store fixture; actual PR observer remains native.
     const terminal = lifecycle.terminalClaim(record.workItem, expectedRecord(record), 9, "main");
     expect(terminal).toMatchObject({ expiresAt: null, lifecycleState: "Integrated", generation: 1, closeOwnerGeneration: 1, lastObservedHead: record.lastObservedHead,
       integration: { integratedSourceHead: record.lastObservedHead, integratedCommit: "c".repeat(40), headRepositoryId: "43", baseRepositoryId: "42" } });
@@ -141,6 +142,9 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
 
   it.each([false, true])("runs a first bounded native qualification write without production enablement (borrowed lock: %s)", (borrowed) => {
     const f = fixture(); const { trace } = nativeGitFixture(f); const controlRef = "refs/heads/qualification-native";
+    git(f.root, "checkout", "-b", f.record.branch);
+    git(f.root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "LOCAL source");
+    const sourceHead = git(f.root, "rev-parse", "HEAD");
     const binding = observeCoordinationBinding(f.root, "origin", "42", "git"); const now = Date.now();
     const scope: HumanScope = { kind: "qualification-run", binding, runId: "native-fixture", refs: [controlRef], operations: ["create", "cas"],
       maxCommits: 1, maxWriteAttempts: 1, maxCleanupAttempts: 1, expiresAt: new Date(now + 3600_000).toISOString(), cleanupExpiresAt: new Date(now + 7200_000).toISOString() };
@@ -155,9 +159,18 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
       try {
         const runtime = createQualificationRuntime(f.root, approvalRef, controlRef, held);
         if (held) expect(() => acquireMutationLock(context)).toThrow("WORKSPACE_LOCKED");
-        return runtime.lifecycle.acquire({ repository: binding.repository, repositoryId: binding.repositoryId, workItem: f.record.workItem,
-          branch: f.record.branch, sourceRepositoryId: binding.repositoryId, owner: binding.actor, machine: binding.hostId, controlEpochDigest: "d".repeat(64),
-          head: f.record.lastObservedHead, ttlMs: 60_000, transactionId: "native-first-acquire" });
+        const input = { repository: binding.repository, repositoryId: binding.repositoryId, workItem: f.record.workItem,
+          branch: f.record.branch, sourceRepositoryId: binding.repositoryId, owner: binding.actor, machine: binding.hostId, controlEpochDigest: controlEpochDigest(binding.controlEpoch),
+          head: sourceHead, ttlMs: 60_000, transactionId: "native-first-acquire" };
+        const unapproved = createCoordinationRecord({ ...f.record, sourceRepositoryId: binding.repositoryId, lastObservedHead: sourceHead,
+          controlEpochDigest: input.controlEpochDigest, createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 60_000).toISOString() });
+        expect(() => runtime.store.compareAndSwap({ workItem: unapproved.workItem, expectedControlSha: null, expected: {}, next: unapproved })).toThrow("COORDINATION_OPERATION_AUTHORITY_REQUIRED");
+        for (const patch of [{ owner: "another" }, { machine: "other-host" }, { repositoryId: "99" }, { controlEpochDigest: "f".repeat(64) },
+          { repository: "other/repo", workItem: "github:other/repo#86" }, { head: "b".repeat(40) }, { branch: "different" }]) {
+          expect(() => runtime.lifecycle.acquire({ ...input, ...patch })).toThrow();
+        }
+        expect(loadHumanAuthorization(f.commonDir, approvalRef).candidates).toHaveLength(0);
+        return runtime.lifecycle.acquire(input);
       } finally { if (held) releaseMutationLock(held); }
     })();
     if (held) expect(() => createQualificationRuntime(f.root, approvalRef, controlRef, held)).toThrow("MUTATION_LOCK_NOT_HELD");
@@ -167,6 +180,9 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
     const before = readFileSync(trace, "utf8"); expect(before).not.toContain("synthetic-provider-canary");
     expect(before.trim().split("\n").filter((line) => JSON.parse(line).argv.includes("push"))).toHaveLength(1);
     mkdirSync(join(f.root, ".harness"), { recursive: true });
+    writeFileSync(join(f.root, ".harness/policy.yaml"), "{}");
+    expect(() => createQualificationRuntime(f.root, approvalRef, controlRef)).toThrow("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
+    rmSync(join(f.root, ".harness/policy.yaml"));
     writeFileSync(join(f.root, ".harness/coordination.json"), JSON.stringify({ schemaVersion: "coordination-config/1.0", enabled: false, repository: binding.repository, repositoryId: binding.repositoryId, remote: "origin", controlRef }));
     expect(() => createQualificationRuntime(f.root, approvalRef, controlRef)).toThrow("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
     expect(readFileSync(trace, "utf8")).toBe(before);

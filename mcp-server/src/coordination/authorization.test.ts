@@ -21,7 +21,9 @@ function fixture() {
   const binding = { commonDir: root, repository: "owner/repo", repositoryId: "R_1", endpointHash: digest, credentialBindingHash: digest,
     credentialRef: "git", credentialPurpose: "git-transport" as const, actor: "octo", hostId: "741ba5a8-40e2-4848-b5a4-082f4f2145a9",
     configHash: digest, implementation: { kind: "source" as const, head: sha, tree: sha, artifactDigest: digest }, runnerHash: digest };
-  const scope: HumanScope = { kind: "qualification-run", binding, runId: "fixture", refs: [controlRef], operations: ["create", "cas"],
+  const bound = { ...binding, controlEpoch: { schemaVersion: "coordination-epoch/1" as const, protocol: "github-coordination/1.0" as const,
+    mode: "isolated-qualification" as const, coordinationConfigDigest: digest, policy: { kind: "none" as const } } };
+  const scope: HumanScope = { kind: "qualification-run", binding: bound, runId: "fixture", refs: [controlRef], operations: ["create", "cas"],
     maxCommits: 2, maxWriteAttempts: 2, maxCleanupAttempts: 1, expiresAt: "2026-09-04T05:00:00.000Z", cleanupExpiresAt: "2026-09-04T06:00:00.000Z" };
   const inputHash = hashObject(scope); const planHash = hashObject({ inputHash });
   const packet = createSemanticApprovalPacket({ planHash, inputHash, producerIdentity: "isolated-fixture",
@@ -29,7 +31,7 @@ function fixture() {
     actions: [{ id: scope.kind, kind: "permission-change", protected: true, summary: "LOCAL fixture only", before: null, after: inputHash, reversible: true, recovery: "Retain unknown objects" }] });
   const approvalRef = recordHumanApproval(root, { packet, scope, approvedBy: "fixture-human", approvedAt: "2026-09-04T03:00:00.000Z", source: { kind: "explicit-human", messageHash: digest } }, planHash);
   const clock = () => { const value = new CoordinationClock(() => ({ monotonicMs: 0, wallMs: 0 })); value.observe("Fri, 04 Sep 2026 04:00:00 GMT", value.start()); return value; };
-  let observed = binding; const guards = qualificationGuards(root, approvalRef, () => observed, clock);
+  let observed = bound; const guards = qualificationGuards(root, approvalRef, () => observed, clock);
   const transport = localTransport(root, remote); let pushes = 0; let genesis = ""; let candidate: CoordinationCandidate | undefined;
   const store = new GitCoordinationStore(controlRef, { ...transport, push(directory, head, ref, expected) {
     guards.authorizeWrite({ ...binding, ref, head, expected }); pushes++;
@@ -40,7 +42,7 @@ function fixture() {
     sourceRepositoryId: binding.repositoryId, owner: binding.actor, machine: binding.hostId, generation: 1, controlEpochDigest: digest,
     createdAt: "2026-09-04T04:00:00.000Z", expiresAt: "2026-09-04T04:01:00.000Z", lastObservedHead: sha, lifecycleState: "Admitted", transactionId: "tx-1" });
   return { root, approvalRef, binding, store, record, guards, transport, controlRef, candidate: () => candidate!, pushes: () => pushes,
-    drift: () => { observed = { ...binding, configHash: "d".repeat(64) }; },
+    drift: () => { observed = { ...bound, configHash: "d".repeat(64) }; },
     state: () => loadHumanAuthorization(root, approvalRef),
     acquire: () => store.compareAndSwap({ workItem: record.workItem, expectedControlSha: null, expected: {}, next: record }) };
 }
