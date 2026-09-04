@@ -17,6 +17,13 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
   rebind. A verified merge can still terminate that exact frozen generation; the
   pending attachment is superseded, with its evidence retained in Git history.
   Record shape and hashes alone are not native transfer or drain evidence.
+- Recovery, worktree Apply and coordination now share one `apply.lock` acquisition
+  implementation. Its opaque in-process handle cannot be imported from a path or
+  JSON. Explicit `...Locked` quota/receipt calls borrow it without reacquiring it;
+  ordinary nested acquisition still fails. Async owners await their operation before
+  release. A checkout rename relocates only the same lock/common-dir identities and
+  invalidates the old handle. Unknown owners, stale locks and failed releases remain
+  recovery gates, not automatic cleanup candidates.
 - `coordination/runtime.ts` assembles the actual native host binding, Keychain
   resolver, credential Broker, HTTPS Git transport, GitHub server clock and lifecycle
   handlers for a bounded qualification ticket. It does not require a pre-existing

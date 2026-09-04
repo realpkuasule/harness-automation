@@ -76,7 +76,7 @@ import {
 } from "./config.js";
 import { resolveRepositoryContext, runGit, runGitCommand, runGitToFile } from "../repository/git.js";
 import { createSemanticApprovalPacket, reviewSemanticApprovalWithHistory, type ApprovalActionKind } from "../approval/service.js";
-import { inspectRecoveryState, requireMutationAllowed } from "../recovery/service.js";
+import { acquireMutationLock, inspectRecoveryState, releaseMutationLock, relocateMutationLock, requireMutationAllowed, type MutationLock } from "../recovery/service.js";
 import {
   appendLkgRecord,
   appendReceiptEvent,
@@ -2905,13 +2905,11 @@ export function reviewAndApplyWorkspacePlan(args: {
   return { decisionPath, decision, receipt };
 }
 
-function acquireLock(commonDir: string): string {
-  return acquireNamedLock(commonDir, "apply.lock");
+function acquireLock(commonDir: string): MutationLock {
+  return acquireMutationLock({ projectDir: commonDir, commonDir, repository: true });
 }
 
-function releaseLock(lock: string): void {
-  if (existsSync(lock)) rmdirSync(lock);
-}
+const releaseLock = releaseMutationLock;
 
 const workspaceReceiptOperations = new Set<WorkspaceReceipt["operation"]>([
   "configure", "migrate", "allocate", "adopt", "close", "rebind", "renew", "recover",
@@ -3409,14 +3407,6 @@ function applyWorkspaceAdoptionPlan(
   }
 }
 
-function migratedPath(sourceRoot: string, targetRoot: string, sourcePath: string): string {
-  const suffix = relative(sourceRoot, sourcePath);
-  if (suffix === "" || suffix.startsWith("..") || isAbsolute(suffix)) {
-    throw new Error(`WORKTREE_MIGRATION_PATH_INVALID: ${sourcePath}`);
-  }
-  return join(targetRoot, suffix);
-}
-
 function assertMigrationPostconditions(
   status: WorkspaceStatus,
   operation: Extract<WorkspacePlan["operation"], { kind: "migrate" }>,
@@ -3593,7 +3583,8 @@ export function applyWorkspaceMigration(args: {
       assertCurrentHash(hostBindingFile(plan.commonDir), operation.preflight.hostBindingHash);
       renameSync(root, topology.managementCheckout);
       moved = true;
-      lock = migratedPath(root, topology.managementCheckout, lock);
+      lock = relocateMutationLock(lock, { from: root, to: topology.managementCheckout,
+        context: { projectDir: topology.managementCheckout, commonDir: targetCommonDir, repository: true } });
       receipt.migration!.recoveryState = "after-move";
       receipt.steps.push({ id: "move-management-checkout", status: "applied", detail: `${root} -> ${topology.managementCheckout}` });
       checkpoint();
@@ -4746,7 +4737,7 @@ function reviewWorkspaceLocked(args: {
     atomicWrite(receiptPath, prettyJson(receipt));
     return receipt;
   } finally {
-    releaseLock(lock);
+    if (existsSync(lock)) rmdirSync(lock); // review.lock is not mutation authority.
   }
 }
 

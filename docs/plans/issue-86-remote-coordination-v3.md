@@ -405,6 +405,60 @@ CLI 只传操作意图、精确预期值、工作区选择和 approvalRef，不�
    unknown outcome 只读恢复原候选及合法历史，不自动解冻、重发或清理；不持源本机
    锁等待目标端。这些接口只定义实现边界，不批准真实跨机交接、凭据登记或生产启用。
 
+### 5.3 同锁组合与非重入持有句柄
+
+为避免 handoff 持 apply.lock 时，Store 的 beforeCommit/beforePush 经 human quota
+再次 acquire 而自锁，采用显式锁内调用，不增加锁或全局自动重入：
+
+1. apply.lock 只有一个底层 acquire/assert/release 实现，可放在 recovery 的窄模块
+   并由 service 再导出。保留原 common-dir 路径、repository=false 路径和跨进程
+   原子 mkdir 排他语义；持锁者再次普通 acquire 仍报 WORKSPACE_LOCKED，不能按
+   PID、路径、环境变量或异步上下文自动跳过。review.lock 不属于此组合，不改其用途。
+2. `acquireMutationLock(context): MutationLockHandle` 返回运行时 opaque 对象。
+   模块私有 WeakMap 保存对象身份、canonical 锁域、PID、随机 owner nonce、目录
+   身份和 active 状态；TypeScript brand 本身不算校验。nonce 可放在同一锁目录的
+   小型 owner 标记中，仅用于识别这次锁，不是另一份事务账本；历史空锁不得自动认领。
+   不提供从路径/JSON/nonce 导入或重建句柄的接口，跨进程复制和伪造对象一律无效。
+3. `assertMutationLockHeld(handle, context)` 在每个锁内入口以及异步网络写 dispatch
+   前校验私有注册、进程、active 状态、canonical 域、非 symlink 的目录身份与 owner
+   标记。错误域、已释放/被替换的锁、丢失标记或旧句柄均失败关闭，不能转为重新 acquire
+   后继续旧操作。此为受管进程防误用，不宣称抵抗同权限恶意改目录或内存。
+4. human 保留原无句柄入口供独立调用，并将业务体共享给显式
+   `reserveCandidateQuotaLocked(handle, ...args)`、`recordCandidateResultLocked`、
+   `reserveWriteAttemptLocked`、`recordWriteOutcomeLocked`；必要的授权回执/LKG
+   tail repair 同样在此锁域内。独立入口 acquire 后调用同一业务体并 release；Locked
+   入口只 assert，不 acquire/release。Store 回调闭包捕获本次句柄，不接受 CLI 提供的
+   锁或 `alreadyLocked` 布尔值；锁持有不替代候选/attempt 的耐久预留及授权检查。
+5. recovery/v2/credentials 既有同步 acquire→try/finally→release 调用形态不变，
+   返回值由字符串改为不透明句柄，必要时只机械调整内部类型。worktree 的 apply.lock
+   私有 wrapper 委托同一实现；其 review.lock 继续使用专用 named-lock release。
+   不为兼容路径字符串而建立“查到此路径当前有人持锁就借用”的桥接；这不改变 v2 的
+   CLI、计划、回执或旧 worktree binding schema。旧版本留下的锁仍按已有恢复门处理。
+   migration 的获批 `renameSync(root, newRoot)` 另用窄
+   `relocateMutationLock(handle, exactMove): MutationLockHandle` 替代字符串拼路径：
+   从旧活句柄保留的身份出发，验证批准计划的精确 from→to 相对映射、移动前后为同一
+   common-dir/锁目录身份及 owner nonce、旧路径已消失、无 symlink 或其他借用操作
+   在途；不能在 rename 后要求旧路径仍存在。成功返回新句柄并使旧句柄/旧域借用失效，
+   全程不释放/重建磁盘锁。common-dir 未随 root 移动则不重定位；copy/delete、身份
+   变化或中断不能当 rename，保留现场并沿原 migration 回执恢复。新路径不是持有证明。
+6. 异步交接使用 `withMutationLock(context, async (held) => ...)` 或等价的显式
+   await try/finally，必须 await 回调及其全部受管子进程/并发 promise 收敛后才释放；
+   不能沿用同步 finally 包裹返回 Promise 的写法。内部只借用句柄、不负责释放，也不
+   把它缓存到另一项顶层操作。取消/异常沿既有执行器结束本轮子进程；仍有活动写者时
+   保留锁并报恢复门，不能靠 finally 宣称已排空。网络结果未知但执行已结束时按 §4
+   保留 pending/unknown 和冻结事实；后续操作不能因本机锁已释放而绕过该门。
+7. 只有获取者在最外层 release；先停止接受新借用，再验证仍为本次目录/owner，仅
+   删除自己的标记并非递归移除锁目录。释放失败、所有权漂移或异常残留保留现场并报告，
+   不删除继任者的锁；成功释放后旧句柄永久失效。重复释放同一已关闭句柄至多 no-op，
+   不能按其旧路径删除新锁；未知对象直接拒绝。进程崩溃留下锁，不按 PID 死亡或 TTL
+   自动抢锁，沿用现有恢复机制；清理错误也不能吞掉原操作失败。
+8. 必需负面对照：外层锁内 quota/receipt 成功且仅一次 acquire；普通嵌套 acquire
+   拒绝；并行另一进程拒绝；伪造/跨域/跨进程/释放后句柄拒绝；旧句柄不删继任锁；
+   await 暂停期间锁不提前释放；异常/取消正确保留未收敛状态；既有 v2/worktree
+   同步路径及 review.lock 回归不变；migration 同 inode 重定位后仍排他且可准确释放，
+   错误映射/替换目录/旧句柄/迁移中断均不误认或删锁。本节仅收敛实现接口，不执行任何
+   锁恢复或生产操作。
+
 ## 6. 可调用入口及资格门
 
 提供 `harness-automation coordination status`，以及对应 acquire、renew、rebind、

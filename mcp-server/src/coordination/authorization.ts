@@ -1,11 +1,18 @@
 import { hashObject } from "../v2/fs.js";
-import { loadHumanAuthorization, recordCandidateResult, recordWriteOutcome, reserveCandidateQuota, reserveWriteAttempt, type HumanScopeBinding } from "../approval/human.js";
+import { loadHumanAuthorization, recordCandidateResult, recordCandidateResultLocked, recordWriteOutcome, recordWriteOutcomeLocked,
+  reserveCandidateQuota, reserveCandidateQuotaLocked, reserveWriteAttempt, reserveWriteAttemptLocked, type HumanScopeBinding } from "../approval/human.js";
+import type { MutationLock } from "../recovery/service.js";
 import type { CoordinationClock } from "./clock.js";
 import type { CoordinationCandidate, CoordinationCommitIntent, CoordinationWriteResult, GitCoordinationStore } from "./store.js";
 import type { CoordinationWriteIntent } from "./transport.js";
 
 /** Fixed qualification composition, not production enablement. Observers are supplied by the native runner. */
-export function qualificationGuards(commonDir: string, approvalRef: string, observeBinding: () => HumanScopeBinding, refreshClock: () => CoordinationClock) {
+export function qualificationGuards(commonDir: string, approvalRef: string, observeBinding: () => HumanScopeBinding, refreshClock: () => CoordinationClock, held?: MutationLock) {
+  // Explicit borrowing only: the enclosing handoff owns and releases this exact handle.
+  const reserveCandidate = held ? reserveCandidateQuotaLocked.bind(null, held) : reserveCandidateQuota;
+  const recordCandidate = held ? recordCandidateResultLocked.bind(null, held) : recordCandidateResult;
+  const reserveAttempt = held ? reserveWriteAttemptLocked.bind(null, held) : reserveWriteAttempt;
+  const recordOutcome = held ? recordWriteOutcomeLocked.bind(null, held) : recordWriteOutcome;
   let active: { candidate: CoordinationCandidate; attempted: boolean; attemptId?: string } | undefined;
   function authorization() {
     const state = loadHumanAuthorization(commonDir, approvalRef);
@@ -15,8 +22,8 @@ export function qualificationGuards(commonDir: string, approvalRef: string, obse
   return {
     beforeCommit(intent: CoordinationCommitIntent) {
       authorization();
-      const reserved = reserveCandidateQuota(commonDir, approvalRef, observeBinding(), intent, refreshClock());
-      return (head: string | null) => recordCandidateResult(commonDir, approvalRef, {
+      const reserved = reserveCandidate(commonDir, approvalRef, observeBinding(), intent, refreshClock());
+      return (head: string | null) => recordCandidate(commonDir, approvalRef, {
         candidateId: reserved.candidateId, status: head === null ? "unknown" : "created", head,
         evidenceHash: hashObject({ candidateId: reserved.candidateId, intent, head }),
       });
@@ -33,7 +40,7 @@ export function qualificationGuards(commonDir: string, approvalRef: string, obse
         const finished = active; active = undefined;
         if (!finished?.attemptId) return; // A pre-dispatch gate is not a network outcome.
         const status = result.applied ? "applied" : result.error === "COORDINATION_CAS_CONFLICT" && result.pushed?.status === 1 && !result.pushed.error ? "rejected" : "unknown";
-        recordWriteOutcome(commonDir, approvalRef, { attemptId: finished.attemptId, status, evidenceHash: hashObject(result) });
+        recordOutcome(commonDir, approvalRef, { attemptId: finished.attemptId, status, evidenceHash: hashObject(result) });
       };
     },
     authorizeWrite(intent: CoordinationWriteIntent) {
@@ -45,7 +52,7 @@ export function qualificationGuards(commonDir: string, approvalRef: string, obse
       if (intent.ref !== candidate.controlRef || intent.head !== candidate.controlSha || intent.expected !== candidate.expectedControlSha) throw new Error("HUMAN_WRITE_SCOPE_MISMATCH");
       // One callback invocation can authorize one dispatch. A restart recovers receipts, never this closure.
       active.attempted = true;
-      const attempt = reserveWriteAttempt(commonDir, approvalRef, observed, { transactionId: candidate.record.transactionId,
+      const attempt = reserveAttempt(commonDir, approvalRef, observed, { transactionId: candidate.record.transactionId,
         operation: intent.expected === null ? "create" : "cas", ref: intent.ref, head: intent.head, expected: intent.expected }, refreshClock());
       active.attemptId = attempt.attemptId;
     },

@@ -1,6 +1,7 @@
 import { loadHumanAuthorization, type HumanScopeBinding } from "../approval/human.js";
 import { loadCredentialHostBinding } from "../credentials/host_binding.js";
 import { currentHarnessArtifact } from "../repository/artifact.js";
+import { assertMutationLock, type MutationLock } from "../recovery/service.js";
 import { resolveRepositoryContext } from "../repository/git.js";
 import { githubEndpointRepository, remotePushEndpoint } from "../repository/remote.js";
 import { hashObject } from "../v2/fs.js";
@@ -24,8 +25,9 @@ export function observeCoordinationBinding(projectRoot: string, remote: string, 
 }
 
 /** No production-enabled flag or injected Provider: the bounded ticket alone authorizes the first qualification write. */
-export function createQualificationRuntime(projectRoot: string, approvalRef: string, controlRef: string) {
+export function createQualificationRuntime(projectRoot: string, approvalRef: string, controlRef: string, held?: MutationLock) {
   const context = resolveRepositoryContext(projectRoot); const state = loadHumanAuthorization(context.commonDir, approvalRef);
+  if (held) assertMutationLock(context, held);
   const scope = state.approval.scope;
   if (scope.kind !== "qualification-run" || !scope.refs.includes(controlRef)) throw new Error("COORDINATION_QUALIFICATION_SCOPE_REQUIRED");
   const remote = loadCoordinationConfig(context.projectDir)?.remote ?? "origin";
@@ -36,7 +38,7 @@ export function createQualificationRuntime(projectRoot: string, approvalRef: str
   const api = registered.credentials.filter((ref) => ref.purpose === "github-api" && ref.identity === binding.actor);
   if (api.length !== 1) throw new Error("COORDINATION_API_CREDENTIAL_REQUIRED");
   const provider = new GitHubCoordinationReader(context.projectDir, remote, binding.repositoryId, api[0].id);
-  const guards = qualificationGuards(context.commonDir, approvalRef, observeBinding, () => provider.serverClock());
+  const guards = qualificationGuards(context.commonDir, approvalRef, observeBinding, () => provider.serverClock(), held);
   const transport = new GitHubCoordinationTransport(context.projectDir, remote, binding.repositoryId, binding.credentialRef, guards.authorizeWrite);
   const store = new GitCoordinationStore(controlRef, transport, guards.beforePush, true, (head, readValidatedCommit, isAncestor) => {
     const history = loadHumanAuthorization(context.commonDir, approvalRef);

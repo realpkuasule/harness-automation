@@ -1,5 +1,6 @@
-import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmdirSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, unlinkSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   durableWriteOnce,
   fileHash,
@@ -128,26 +129,89 @@ function invalidFinding(
   };
 }
 
-/** This is the same lock path used by the worktree lifecycle. */
-export function acquireMutationLock(context: RecoveryContext): string {
-  const directory = context.repository === false
-    ? safePath(context.projectDir, ".harness/locks")
-    : safePath(context.commonDir, "harness/worktree-delivery");
-  mkdirSync(directory, { recursive: true });
-  const lock = join(directory, "apply.lock");
+declare const mutationLockBrand: unique symbol;
+export type MutationLock = Readonly<{ [mutationLockBrand]: true }>;
+const directoryIdentity = (path: string) => {
+  const stat = lstatSync(path);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || realpathSync(path) !== path) throw new Error("MUTATION_LOCK_LOST");
+  return { dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs };
+};
+type LockState = { path: string; root: string; rootIdentity: ReturnType<typeof directoryIdentity>;
+  identity: ReturnType<typeof directoryIdentity>; pid: number; nonce: string };
+const heldLocks = new WeakMap<MutationLock, LockState>();
+function mutationLockPath(context: RecoveryContext): string {
+  return context.repository === false
+    ? safePath(realpathSync(context.projectDir), ".harness/locks/apply.lock")
+    : safePath(realpathSync(context.commonDir), "harness/worktree-delivery/apply.lock");
+}
+function heldLock(lock: MutationLock) {
+  const held = heldLocks.get(lock);
+  if (!held || held.pid !== process.pid) throw new Error("MUTATION_LOCK_NOT_HELD");
+  return held;
+}
+function checkLockIdentity(held: ReturnType<typeof heldLock>, path = held.path): void {
   try {
-    mkdirSync(lock);
+    const owner = lstatSync(join(path, "owner"));
+    if (hashObject(directoryIdentity(path)) !== hashObject(held.identity) || !owner.isFile() || owner.isSymbolicLink() ||
+        owner.size > 256 || readFileSync(join(path, "owner"), "utf8") !== held.nonce) throw new Error("MUTATION_LOCK_LOST");
+  } catch { throw new Error("MUTATION_LOCK_LOST"); }
+}
+/** Only the actual in-process holder can authorize a lock-internal operation. Never infer reentrancy from a path. */
+export function assertMutationLock(context: RecoveryContext, lock: MutationLock): void {
+  const held = heldLock(lock);
+  if (held.path !== mutationLockPath(context)) throw new Error("MUTATION_LOCK_CONTEXT_MISMATCH");
+  if (hashObject(directoryIdentity(held.root)) !== hashObject(held.rootIdentity)) throw new Error("MUTATION_LOCK_LOST");
+  checkLockIdentity(held);
+}
+/** This is the same lock path used by the worktree lifecycle. */
+export function acquireMutationLock(context: RecoveryContext): MutationLock {
+  const path = mutationLockPath(context);
+  mkdirSync(join(path, ".."), { recursive: true });
+  try {
+    mkdirSync(path, { mode: 0o700 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error(`WORKSPACE_LOCKED: ${lock}`);
+      throw new Error(`WORKSPACE_LOCKED: ${path}`);
     }
     throw error;
   }
+  const root = realpathSync(context.repository === false ? context.projectDir : context.commonDir);
+  const lock = Object.freeze({}) as MutationLock; const nonce = randomUUID();
+  const state = { path, root, rootIdentity: directoryIdentity(root), identity: directoryIdentity(path), pid: process.pid, nonce };
+  // A crash leaves this same lock for explicit recovery; no PID/TTL-based automatic reclamation.
+  durableWriteOnce(join(path, "owner"), nonce);
+  heldLocks.set(lock, state);
   return lock;
 }
 
-export function releaseMutationLock(lock: string): void {
-  if (existsSync(lock)) rmdirSync(lock);
+/** Existing checkout migration may move the held directory, but cannot substitute a new lock. */
+export function relocateMutationLock(lock: MutationLock, move: { from: string; to: string; context: RecoveryContext }): MutationLock {
+  const held = heldLock(lock); const { context } = move; const path = mutationLockPath(context);
+  const relativeRoot = relative(move.from, held.root); const root = realpathSync(context.repository === false ? context.projectDir : context.commonDir);
+  if (!isAbsolute(move.from) || !isAbsolute(move.to) || relativeRoot.startsWith("..") || isAbsolute(relativeRoot) ||
+      root !== resolve(move.to, relativeRoot) || path !== resolve(move.to, relative(move.from, held.path)) ||
+      lstatSync(move.from, { throwIfNoEntry: false }) || lstatSync(held.path, { throwIfNoEntry: false }) ||
+      hashObject(directoryIdentity(root)) !== hashObject(held.rootIdentity)) throw new Error("MUTATION_LOCK_RELOCATION_INVALID");
+  checkLockIdentity(held, path);
+  const relocated = Object.freeze({}) as MutationLock;
+  heldLocks.set(relocated, { ...held, path, root }); heldLocks.delete(lock); return relocated;
+}
+export function releaseMutationLock(lock: MutationLock): void {
+  const held = heldLock(lock); checkLockIdentity(held);
+  if (readdirSync(held.path).some((entry) => entry !== "owner")) throw new Error("MUTATION_LOCK_RELEASE_BLOCKED");
+  unlinkSync(join(held.path, "owner")); heldLocks.delete(lock); rmdirSync(held.path);
+}
+/** The callback must await all its managed writers; an unresolved callback keeps the lock held. */
+export async function withMutationLock<T>(context: RecoveryContext, operation: (lock: MutationLock) => T | Promise<T>): Promise<T> {
+  const lock = acquireMutationLock(context);
+  let result: T;
+  try { result = await operation(lock); }
+  catch (error) {
+    try { releaseMutationLock(lock); }
+    catch (releaseError) { throw new AggregateError([error, releaseError], "MUTATION_AND_RELEASE_FAILED"); }
+    throw error;
+  }
+  releaseMutationLock(lock); return result;
 }
 
 function withoutJournalHash(journal: FileApplyJournal): Omit<FileApplyJournal, "journalHash"> {

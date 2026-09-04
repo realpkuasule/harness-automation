@@ -5,6 +5,7 @@ import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { planCredentialHostBinding, applyCredentialHostBinding } from "../credentials/host_binding.js";
 import { hashObject, sha256 } from "../v2/fs.js";
+import { acquireMutationLock, releaseMutationLock } from "../recovery/service.js";
 import { createSemanticApprovalPacket } from "../approval/service.js";
 import { loadHumanAuthorization, recordHumanApproval, type HumanScope } from "../approval/human.js";
 import { createQualificationRuntime, observeCoordinationBinding } from "./runtime.js";
@@ -138,7 +139,7 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
     for (const line of traceBefore.trim().split("\n")) expect(JSON.parse(line)).toMatchObject({ global: "/dev/null", redirects: "false", hooks: "/dev/null" });
   });
 
-  it("runs a first bounded qualification write through the native composition without enabling production", () => {
+  it.each([false, true])("runs a first bounded native qualification write without production enablement (borrowed lock: %s)", (borrowed) => {
     const f = fixture(); const { trace } = nativeGitFixture(f); const controlRef = "refs/heads/qualification-native";
     const binding = observeCoordinationBinding(f.root, "origin", "42", "git"); const now = Date.now();
     const scope: HumanScope = { kind: "qualification-run", binding, runId: "native-fixture", refs: [controlRef], operations: ["create", "cas"],
@@ -148,10 +149,18 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
       binding: { planHash, inputDigest: inputHash, contextDigest: inputHash, observedHash: inputHash, policyDigest: inputHash },
       actions: [{ id: scope.kind, kind: "permission-change", protected: true, summary: "LOCAL native-command test", before: null, after: inputHash, reversible: true, recovery: "Retain unknown objects" }] });
     const approvalRef = recordHumanApproval(f.commonDir, { scope, packet, approvedBy: "fixture-human", approvedAt: new Date(now).toISOString(), source: { kind: "explicit-human", messageHash: inputHash } }, planHash);
-    const runtime = createQualificationRuntime(f.root, approvalRef, controlRef);
-    const acquired = runtime.lifecycle.acquire({ repository: binding.repository, repositoryId: binding.repositoryId, workItem: f.record.workItem,
-      branch: f.record.branch, sourceRepositoryId: binding.repositoryId, owner: binding.actor, machine: binding.hostId, controlEpochDigest: "d".repeat(64),
-      head: f.record.lastObservedHead, ttlMs: 60_000, transactionId: "native-first-acquire" });
+    const context = { projectDir: f.root, commonDir: f.commonDir, repository: true };
+    const held = borrowed ? acquireMutationLock(context) : undefined;
+    const acquired = (() => {
+      try {
+        const runtime = createQualificationRuntime(f.root, approvalRef, controlRef, held);
+        if (held) expect(() => acquireMutationLock(context)).toThrow("WORKSPACE_LOCKED");
+        return runtime.lifecycle.acquire({ repository: binding.repository, repositoryId: binding.repositoryId, workItem: f.record.workItem,
+          branch: f.record.branch, sourceRepositoryId: binding.repositoryId, owner: binding.actor, machine: binding.hostId, controlEpochDigest: "d".repeat(64),
+          head: f.record.lastObservedHead, ttlMs: 60_000, transactionId: "native-first-acquire" });
+      } finally { if (held) releaseMutationLock(held); }
+    })();
+    if (held) expect(() => createQualificationRuntime(f.root, approvalRef, controlRef, held)).toThrow("MUTATION_LOCK_NOT_HELD");
     expect(acquired.generation).toBe(1); expect(acquired.machine).toBe(binding.hostId);
     const receipt = loadHumanAuthorization(f.commonDir, approvalRef);
     expect(receipt.candidates).toHaveLength(1); expect(receipt.attempts).toHaveLength(1); expect(receipt.attempts[0].outcome?.status).toBe("applied");

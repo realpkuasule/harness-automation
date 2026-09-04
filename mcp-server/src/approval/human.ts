@@ -3,7 +3,7 @@ import { realpathSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { hashObject } from "../v2/fs.js";
-import { acquireMutationLock, releaseMutationLock } from "../recovery/service.js";
+import { acquireMutationLock, assertMutationLock, releaseMutationLock, type MutationLock } from "../recovery/service.js";
 import { appendLkgRecord, appendReceiptEvent, readLkgChain, readReceiptChain } from "../receipt/service.js";
 import { validSemanticApprovalPacket, type SemanticApprovalPacket } from "./service.js";
 import type { CoordinationClock } from "../coordination/clock.js";
@@ -146,9 +146,9 @@ function append(commonDir: string, packet: SemanticApprovalPacket, snapshot: Hum
   const event = appendReceiptEvent({ ...key, snapshot });
   appendLkgRecord({ ...key, appliedReceiptEventHash: event.eventHash, planHash: packet.planHash, observedHash: event.snapshotHash });
 }
-function locked<T>(commonDir: string, operation: () => T): T {
+function locked<T>(commonDir: string, operation: (lock: MutationLock) => T): T {
   const lock = acquireMutationLock({ projectDir: commonDir, commonDir, repository: true });
-  try { return operation(); } finally { releaseMutationLock(lock); }
+  try { return operation(lock); } finally { releaseMutationLock(lock); }
 }
 
 /** Invoked by the explicit approval command; a Reviewer verdict or caller-created JSON is not an approvalRef. */
@@ -175,27 +175,32 @@ function checkCandidateQuota(scope: HumanScope, attempts: HumanAuthorization["at
 /** Must precede commit-tree, including candidates that lose a CAS or never get dispatched. */
 export function reserveCandidateQuota(commonDir: string, approvalRef: string, observed: HumanScopeBinding,
   intent: Omit<Candidate, "candidateId" | "reservedAt">, clock: CoordinationClock): Candidate {
-  return locked(commonDir, () => {
-    const state = history(commonDir, approvalRef, true);
-    if (state.revoked || hashObject(bindingSchema.parse(observed)) !== hashObject(state.approval.scope.binding)) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
-    checkCandidateQuota(state.approval.scope, state.attempts, state.candidates);
-    const bounds = clock.requireBefore(state.approval.scope.expiresAt);
-    const candidate = candidateSchema.parse({ ...intent, candidateId: randomUUID(), reservedAt: new Date(Math.floor(bounds.lowerMs)).toISOString() });
-    append(commonDir, state.approval.packet, { kind: "candidate-reserved", candidate });
-    clock.requireBefore(state.approval.scope.expiresAt); return candidate;
-  });
+  return locked(commonDir, (lock) => reserveCandidateQuotaLocked(lock, commonDir, approvalRef, observed, intent, clock));
+}
+export function reserveCandidateQuotaLocked(lock: MutationLock, commonDir: string, approvalRef: string, observed: HumanScopeBinding,
+  intent: Omit<Candidate, "candidateId" | "reservedAt">, clock: CoordinationClock): Candidate {
+  assertMutationLock({ projectDir: commonDir, commonDir, repository: true }, lock);
+  const state = history(commonDir, approvalRef, true);
+  if (state.revoked || hashObject(bindingSchema.parse(observed)) !== hashObject(state.approval.scope.binding)) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
+  checkCandidateQuota(state.approval.scope, state.attempts, state.candidates);
+  const bounds = clock.requireBefore(state.approval.scope.expiresAt);
+  const candidate = candidateSchema.parse({ ...intent, candidateId: randomUUID(), reservedAt: new Date(Math.floor(bounds.lowerMs)).toISOString() });
+  append(commonDir, state.approval.packet, { kind: "candidate-reserved", candidate });
+  clock.requireBefore(state.approval.scope.expiresAt); return candidate;
 }
 
 export function recordCandidateResult(commonDir: string, approvalRef: string, input: CandidateResult): void {
+  locked(commonDir, (lock) => recordCandidateResultLocked(lock, commonDir, approvalRef, input));
+}
+export function recordCandidateResultLocked(lock: MutationLock, commonDir: string, approvalRef: string, input: CandidateResult): void {
+  assertMutationLock({ projectDir: commonDir, commonDir, repository: true }, lock);
   const result = candidateResultSchema.parse(input);
   if ((result.status === "created") !== (result.head !== null)) throw new Error("HUMAN_CANDIDATE_RESULT_INVALID");
-  locked(commonDir, () => {
-    const state = history(commonDir, approvalRef, true); const candidate = state.candidates.find((value) => value.candidateId === result.candidateId);
-    if (!candidate) throw new Error("HUMAN_CANDIDATE_UNKNOWN");
-    if (candidate.result && hashObject(candidate.result) === hashObject(result)) return;
-    if (candidate.result && candidate.result.status !== "unknown") throw new Error("HUMAN_CANDIDATE_RESULT_FINAL");
-    append(commonDir, state.approval.packet, { kind: "candidate-result", result });
-  });
+  const state = history(commonDir, approvalRef, true); const candidate = state.candidates.find((value) => value.candidateId === result.candidateId);
+  if (!candidate) throw new Error("HUMAN_CANDIDATE_UNKNOWN");
+  if (candidate.result && hashObject(candidate.result) === hashObject(result)) return;
+  if (candidate.result && candidate.result.status !== "unknown") throw new Error("HUMAN_CANDIDATE_RESULT_FINAL");
+  append(commonDir, state.approval.packet, { kind: "candidate-result", result });
 }
 
 function checkAttempt(scope: HumanScope, attempts: HumanAuthorization["attempts"], candidates: HumanAuthorization["candidates"], request: Attempt): void {
@@ -226,30 +231,35 @@ function checkAttempt(scope: HumanScope, attempts: HumanAuthorization["attempts"
 /** Each return permits one dispatch only; retries reserve a new ID, and crashes never refund a reservation. */
 export function reserveWriteAttempt(commonDir: string, approvalRef: string, observed: HumanScopeBinding,
   request: Omit<Attempt, "attemptId" | "reservedAt" | "candidateId"> & { attemptId?: string; candidateId?: string | null }, clock: CoordinationClock): Attempt {
-  return locked(commonDir, () => {
-    const state = history(commonDir, approvalRef, true);
-    if (state.revoked || hashObject(bindingSchema.parse(observed)) !== hashObject(state.approval.scope.binding)) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
-    const expiresAt = request.operation === "cleanup" && state.approval.scope.kind === "qualification-run" ? state.approval.scope.cleanupExpiresAt : state.approval.scope.expiresAt;
-    const bounds = clock.requireBefore(expiresAt);
-    const candidateId = request.candidateId ?? (request.operation === "cleanup" ? null : state.candidates.find((candidate) => candidate.result?.head === request.head && candidate.transactionId === request.transactionId)?.candidateId ?? null);
-    const attempt = attemptSchema.parse({ ...request, candidateId, attemptId: request.attemptId ?? randomUUID(), reservedAt: new Date(Math.floor(bounds.lowerMs)).toISOString() });
-    if (state.attempts.some((value) => value.attemptId === attempt.attemptId)) throw new Error("HUMAN_WRITE_ATTEMPT_ALREADY_RESERVED");
-    checkAttempt(state.approval.scope, state.attempts, state.candidates, attempt);
-    append(commonDir, state.approval.packet, { kind: "reserved", attempt });
-    clock.requireBefore(expiresAt); return attempt;
-  });
+  return locked(commonDir, (lock) => reserveWriteAttemptLocked(lock, commonDir, approvalRef, observed, request, clock));
+}
+export function reserveWriteAttemptLocked(lock: MutationLock, commonDir: string, approvalRef: string, observed: HumanScopeBinding,
+  request: Omit<Attempt, "attemptId" | "reservedAt" | "candidateId"> & { attemptId?: string; candidateId?: string | null }, clock: CoordinationClock): Attempt {
+  assertMutationLock({ projectDir: commonDir, commonDir, repository: true }, lock);
+  const state = history(commonDir, approvalRef, true);
+  if (state.revoked || hashObject(bindingSchema.parse(observed)) !== hashObject(state.approval.scope.binding)) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
+  const expiresAt = request.operation === "cleanup" && state.approval.scope.kind === "qualification-run" ? state.approval.scope.cleanupExpiresAt : state.approval.scope.expiresAt;
+  const bounds = clock.requireBefore(expiresAt);
+  const candidateId = request.candidateId ?? (request.operation === "cleanup" ? null : state.candidates.find((candidate) => candidate.result?.head === request.head && candidate.transactionId === request.transactionId)?.candidateId ?? null);
+  const attempt = attemptSchema.parse({ ...request, candidateId, attemptId: request.attemptId ?? randomUUID(), reservedAt: new Date(Math.floor(bounds.lowerMs)).toISOString() });
+  if (state.attempts.some((value) => value.attemptId === attempt.attemptId)) throw new Error("HUMAN_WRITE_ATTEMPT_ALREADY_RESERVED");
+  checkAttempt(state.approval.scope, state.attempts, state.candidates, attempt);
+  append(commonDir, state.approval.packet, { kind: "reserved", attempt });
+  clock.requireBefore(expiresAt); return attempt;
 }
 
 /** Evidence comes from the fixed operation/readback path; CLI never accepts a caller's Applied boolean. */
 export function recordWriteOutcome(commonDir: string, approvalRef: string, input: Outcome): void {
+  locked(commonDir, (lock) => recordWriteOutcomeLocked(lock, commonDir, approvalRef, input));
+}
+export function recordWriteOutcomeLocked(lock: MutationLock, commonDir: string, approvalRef: string, input: Outcome): void {
+  assertMutationLock({ projectDir: commonDir, commonDir, repository: true }, lock);
   const outcome = outcomeSchema.parse(input);
-  locked(commonDir, () => {
-    const state = history(commonDir, approvalRef, true); const attempt = state.attempts.find((value) => value.attemptId === outcome.attemptId);
-    if (!attempt) throw new Error("HUMAN_WRITE_ATTEMPT_UNKNOWN");
-    if (attempt.outcome && hashObject(attempt.outcome) === hashObject(outcome)) return;
-    if (attempt.outcome && attempt.outcome.status !== "unknown") throw new Error("HUMAN_WRITE_OUTCOME_FINAL");
-    append(commonDir, state.approval.packet, { kind: "outcome", outcome });
-  });
+  const state = history(commonDir, approvalRef, true); const attempt = state.attempts.find((value) => value.attemptId === outcome.attemptId);
+  if (!attempt) throw new Error("HUMAN_WRITE_ATTEMPT_UNKNOWN");
+  if (attempt.outcome && hashObject(attempt.outcome) === hashObject(outcome)) return;
+  if (attempt.outcome && attempt.outcome.status !== "unknown") throw new Error("HUMAN_WRITE_OUTCOME_FINAL");
+  append(commonDir, state.approval.packet, { kind: "outcome", outcome });
 }
 
 export function revokeHumanAuthorization(commonDir: string, approvalRef: string, reason: string): void {
