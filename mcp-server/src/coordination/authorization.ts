@@ -1,7 +1,7 @@
 import { hashObject } from "../v2/fs.js";
-import { assertHumanCandidateScope, loadHumanAuthorization, recordCandidateResult, recordCandidateResultLocked, recordWriteOutcome, recordWriteOutcomeLocked,
-  reserveCandidateQuota, reserveCandidateQuotaLocked, reserveWriteAttempt, reserveWriteAttemptLocked, type HumanScopeBinding } from "../approval/human.js";
-import type { MutationLock } from "../recovery/service.js";
+import { assertHumanCandidateScope, assertHumanWritesOpen, loadHumanAuthorization, recordCandidateResult, recordCandidateResultLocked, recordWriteOutcome, recordWriteOutcomeLocked,
+  reserveCandidateQuota, reserveCandidateQuotaLocked, reserveWriteAttemptLocked, type HumanScopeBinding } from "../approval/human.js";
+import { acquireMutationLock, assertMutationLock, releaseMutationLock, type MutationLock } from "../recovery/service.js";
 import type { CoordinationClock } from "./clock.js";
 import type { CoordinationCandidate, CoordinationCommitIntent, CoordinationTransport, CoordinationWriteResult, GitCoordinationStore } from "./store.js";
 import type { CoordinationWriteIntent } from "./transport.js";
@@ -14,9 +14,8 @@ export function humanCoordinationGuards(commonDir: string, approvalRef: string, 
   // Explicit borrowing only: the enclosing handoff owns and releases this exact handle.
   const reserveCandidate = held ? reserveCandidateQuotaLocked.bind(null, held) : reserveCandidateQuota;
   const recordCandidate = held ? recordCandidateResultLocked.bind(null, held) : recordCandidateResult;
-  const reserveAttempt = held ? reserveWriteAttemptLocked.bind(null, held) : reserveWriteAttempt;
-  const recordOutcome = held ? recordWriteOutcomeLocked.bind(null, held) : recordWriteOutcome;
-  let active: { candidate: SyntheticCandidate; attempted: boolean; attemptId?: string } | undefined;
+  const context = { projectDir: commonDir, commonDir, repository: true };
+  let active: { candidate: SyntheticCandidate; lock: MutationLock; attempted: boolean; attemptId?: string } | undefined;
   function authorization() {
     const state = loadHumanAuthorization(commonDir, approvalRef);
     if (state.approval.scope.kind !== scopeKind) throw new Error("COORDINATION_HUMAN_SCOPE_REQUIRED");
@@ -24,20 +23,36 @@ export function humanCoordinationGuards(commonDir: string, approvalRef: string, 
   }
   function prepareWrite(candidate: SyntheticCandidate) {
     if (active) throw new Error("COORDINATION_WRITE_ALREADY_PREPARED");
-    const state = authorization(); const intent = candidate.intent;
-    const reserved = state.candidates.find((item) => item.result?.status === "created" && item.result.head === candidate.head &&
-      item.transactionId === intent.transactionId && item.parentSha === intent.parentSha && item.treeSha === intent.treeSha &&
-      hashObject(item.subject) === hashObject(intent.subject) && item.commitMetadataHash === intent.commitMetadataHash && item.objectDirectory === intent.objectDirectory);
-    if (!reserved) throw new Error("HUMAN_CANDIDATE_UNPROVEN");
-    assertCandidate?.(reserved); active = { candidate, attempted: false };
-    return (result: CoordinationWriteResult | SyntheticWriteResult) => {
-      const finished = active; if (result.applied || result.error) active = undefined;
-      if (!finished?.attemptId) return; // A pre-dispatch gate is not a network outcome.
-      const pushed = result.pushed ? coordinationPushOutcome(result.pushed, finished.candidate.head, finished.candidate.ref) : "unknown";
-      const status = result.applied && pushed === "updated" ? "applied" : pushed === "rejected" || pushed === "not-performed" ? "rejected" : "unknown";
-      const push = result.pushed ? { status: result.pushed.status, stdout: result.pushed.stdout, error: result.pushed.error } : undefined;
-      recordOutcome(commonDir, approvalRef, { attemptId: finished.attemptId, status, push, evidenceHash: hashObject(result) });
-    };
+    const lock = held ?? acquireMutationLock(context);
+    try {
+      assertMutationLock(context, lock);
+      const state = authorization(); const intent = candidate.intent;
+      assertHumanWritesOpen(commonDir, state);
+      const reserved = state.candidates.find((item) => item.result?.status === "created" && item.result.head === candidate.head &&
+        item.transactionId === intent.transactionId && item.parentSha === intent.parentSha && item.treeSha === intent.treeSha &&
+        hashObject(item.subject) === hashObject(intent.subject) && item.commitMetadataHash === intent.commitMetadataHash && item.objectDirectory === intent.objectDirectory);
+      if (!reserved) throw new Error("HUMAN_CANDIDATE_UNPROVEN");
+      assertCandidate?.(reserved); active = { candidate, lock, attempted: false };
+      const prepared = active;
+      const record = (result: CoordinationWriteResult | SyntheticWriteResult) => {
+        if (active !== prepared) throw new Error("COORDINATION_WRITE_NOT_PREPARED");
+        if (!prepared.attemptId) return; // A pre-dispatch gate is not a network outcome.
+        const pushed = result.pushed ? coordinationPushOutcome(result.pushed, candidate.head, candidate.ref) : "unknown";
+        const status = result.applied && pushed === "updated" ? "applied" : pushed === "rejected" || pushed === "not-performed" ? "rejected" : "unknown";
+        const push = result.pushed ? { status: result.pushed.status, stdout: result.pushed.stdout, error: result.pushed.error } : undefined;
+        recordWriteOutcomeLocked(lock, commonDir, approvalRef, { attemptId: prepared.attemptId, status, push, evidenceHash: hashObject(result) });
+      };
+      return Object.assign(record, { finish() {
+        if (active !== prepared) return;
+        active = undefined; if (!held) releaseMutationLock(lock);
+      } });
+    } catch (error) {
+      if (!held) {
+        try { releaseMutationLock(lock); }
+        catch (releaseError) { throw new AggregateError([error, releaseError], "COORDINATION_PREPARE_AND_RELEASE_FAILED"); }
+      }
+      throw error;
+    }
   }
   return {
     beforeCommit(intent: CoordinationCommitIntent) {
@@ -60,6 +75,7 @@ export function humanCoordinationGuards(commonDir: string, approvalRef: string, 
     beforeSyntheticPush: prepareWrite,
     authorizeWrite(intent: CoordinationWriteIntent) {
       if (!active || active.attempted) throw new Error("COORDINATION_WRITE_NOT_PREPARED");
+      assertMutationLock(context, active.lock);
       const candidate = active.candidate; const observed = observeBinding();
       for (const field of ["repository", "repositoryId", "endpointHash", "credentialBindingHash", "credentialRef", "actor", "hostId"] as const) {
         if (intent[field] !== observed[field]) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
@@ -68,7 +84,7 @@ export function humanCoordinationGuards(commonDir: string, approvalRef: string, 
       assertCandidate?.(candidate.intent);
       // One callback invocation can authorize one dispatch. A restart recovers receipts, never this closure.
       active.attempted = true;
-      const attempt = reserveAttempt(commonDir, approvalRef, observed, { transactionId: candidate.intent.transactionId,
+      const attempt = reserveWriteAttemptLocked(active.lock, commonDir, approvalRef, observed, { transactionId: candidate.intent.transactionId,
         operation: intent.expected === null ? "create" : "cas", ref: intent.ref, head: intent.head, expected: intent.expected }, refreshClock());
       active.attemptId = attempt.attemptId;
       assertCandidate?.(candidate.intent);

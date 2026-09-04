@@ -1,4 +1,4 @@
-import { assertHumanCandidateScope, loadHumanAuthorization, type HumanScopeBinding } from "../approval/human.js";
+import { assertHumanCandidateScope, assertHumanWritesOpen, loadHumanAuthorization, type HumanScopeBinding } from "../approval/human.js";
 import { loadCredentialHostBinding } from "../credentials/host_binding.js";
 import { currentHarnessArtifact } from "../repository/artifact.js";
 import { assertMutationLock, type MutationLock } from "../recovery/service.js";
@@ -62,6 +62,7 @@ export function createQualificationRuntime(projectRoot: string, approvalRef: str
   const handoff = handoffObservers(context, held, transport, observeBinding, () => provider.serverClock());
   const writer: ManagedWriteContext = { context, store, refreshClock: () => provider.serverClock(), observeAuthority: (record) => {
     const current = loadHumanAuthorization(context.commonDir, approvalRef); const observed = observeBinding();
+    assertHumanWritesOpen(context.commonDir, current);
     if (current.revoked || hashObject(observed) !== hashObject(current.approval.scope.binding)) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
     if (current.approval.scope.kind !== "qualification-run" || !current.approval.scope.refs.includes(`refs/heads/${record.branch}`)) throw new Error("COORDINATION_SOURCE_WRITE_SCOPE_REQUIRED");
     if (current.attempts.some((attempt) => !attempt.outcome || attempt.outcome.status === "unknown") ||

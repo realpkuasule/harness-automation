@@ -1,4 +1,4 @@
-import { loadHumanAuthorization, type HumanScope, type HumanScopeBinding } from "../approval/human.js";
+import { assertHumanWritesOpen, loadHumanAuthorization, type HumanScope, type HumanScopeBinding } from "../approval/human.js";
 import { assertMutationLock, type MutationLock } from "../recovery/service.js";
 import { inspectGit, observeWorkspaceAssets } from "../repository/assets.js";
 import { resolveRepositoryContext, type RepositoryContext } from "../repository/git.js";
@@ -54,6 +54,7 @@ export function prepareTakeover(context: RepositoryContext, held: MutationLock, 
   function validate(): Extract<HumanScope, { kind: "takeover" }> {
     assertMutationLock(context, held);
     const state = loadHumanAuthorization(context.commonDir, approvalRef); const scope = state.approval.scope; const binding = observeBinding();
+    assertHumanWritesOpen(context.commonDir, state);
     if (state.revoked || hashObject(scope) !== hashObject(approved) || hashObject(binding) !== hashObject(approved.binding)) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
     if (current.controlSha !== approved.expectedControlSha) throw new Error("COORDINATION_CAS_CONFLICT");
     assertExpected(previous, approved.expected);

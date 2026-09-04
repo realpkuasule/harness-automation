@@ -54,7 +54,7 @@ function fixture(maxCommits = 8, sharedRemote?: string) {
     return guards.beforeCommit(intent);
   };
   const store = new GitCoordinationStore(controlRef, transport, guards.beforePush, genesis, localHistory(root, controlRef, genesis), beforeCommit);
-  return { root, remote, genesis, source, next, synthetic, store, local, transport, approvalRef, observations,
+  return { root, remote, genesis, source, next, synthetic, store, local, transport, approvalRef, observations, guards,
     state: () => loadHumanAuthorization(root, approvalRef), pushes: () => pushes,
     bootstrap: () => store.bootstrap(synthetic.publications[0], guards.beforeSyntheticPush),
     sourceFixture: (id: string) => runApprovedSourceFixture(transport, synthetic, id, beforeCommit, guards.beforeSyntheticPush),
@@ -109,6 +109,19 @@ it("uses durable positive push evidence to finish failed readback after expiry w
   const attempt = f.state().attempts[0]; expect(attempt.outcome).toMatchObject({ status: "unknown", push: { status: 0, error: null } });
   f.expire(); expect(recoverHumanSyntheticWrite(f.root, f.approvalRef, attempt.attemptId, f.store, f.transport).status).toBe("applied");
   expect(f.state().attempts[0].outcome?.status).toBe("applied"); expect(f.pushes()).toBe(1); expect(f.state().candidates).toHaveLength(1);
+});
+
+it("preserves both readback and finalization errors for synthetic publication", () => {
+  const f = fixture(); const before = f.guards.beforeSyntheticPush;
+  vi.spyOn(f.store, "recoverBootstrap").mockImplementation(() => { throw new Error("READBACK_FAILED"); });
+  vi.spyOn(f.guards, "beforeSyntheticPush").mockImplementation((candidate) => {
+    const recorder = before(candidate); const finish = recorder.finish;
+    recorder.finish = () => { finish(); throw new Error("RELEASE_REPORT_FAILED"); }; return recorder;
+  });
+  let failure: unknown; try { f.bootstrap(); } catch (error) { failure = error; }
+  expect(failure).toBeInstanceOf(AggregateError);
+  expect((failure as AggregateError).errors.map((error: Error) => error.message)).toEqual(["READBACK_FAILED", "RELEASE_REPORT_FAILED"]);
+  expect(f.state().attempts[0].outcome?.status).toBe("unknown");
 });
 
 it("does not count a same-SHA up-to-date race loser as an applied bootstrap", () => {

@@ -2,7 +2,7 @@ import { rmSync } from "node:fs";
 import type { GitCommandResult } from "../repository/git.js";
 import { objectDirectory, objectGit, validateSyntheticObject } from "./objects.js";
 import { approvedSyntheticPublication, syntheticObjectSchema, validateSourceFixtureGraph, type SyntheticObjectPlan, type SyntheticPublication, type SyntheticScope } from "./synthetic.js";
-import type { CoordinationCommitGuard, CoordinationCommitIntent, CoordinationTransport } from "./store.js";
+import type { CoordinationCommitGuard, CoordinationCommitIntent, CoordinationTransport, WriteRecorder } from "./store.js";
 import { requireCoordinationPush } from "./push_result.js";
 
 export interface SyntheticCandidate {
@@ -10,7 +10,7 @@ export interface SyntheticCandidate {
 }
 export interface SyntheticApplied { candidate: SyntheticCandidate; observedHead: string; }
 export interface SyntheticWriteResult { candidate: SyntheticCandidate; pushed?: GitCommandResult; applied?: SyntheticApplied; error?: string; }
-export type SyntheticPushGuard = (candidate: SyntheticCandidate) => (result: SyntheticWriteResult) => void;
+export type SyntheticPushGuard = (candidate: SyntheticCandidate) => WriteRecorder<SyntheticWriteResult>;
 
 /** Only precomputed empty-tree objects. Authority and quota are checked before materialization and each dispatch. */
 export function publishSyntheticObject(transport: CoordinationTransport, input: SyntheticObjectPlan, publication: SyntheticPublication,
@@ -32,19 +32,27 @@ export function publishSyntheticObject(transport: CoordinationTransport, input: 
     } catch (error) { recordCreation(null); throw error; }
     recordCreation(plan.commitSha);
     const candidate: SyntheticCandidate = { ref: publication.ref, head: plan.commitSha, expected: publication.expected, intent };
-    const recordWrite = beforePush(candidate); let pushed: GitCommandResult | undefined; let applied: SyntheticApplied;
+    const recordWrite = beforePush(candidate);
+    let failure: { error: unknown } | undefined;
     try {
-      pushed = transport.push(directory, plan.commitSha, publication.ref, publication.expected);
-      requireCoordinationPush(pushed, plan.commitSha, publication.ref);
-      recordWrite({ candidate, pushed });
-      applied = readback(candidate);
-    } catch (error) {
-      const code = error instanceof Error ? error.message : "COORDINATION_WRITE_OUTCOME_UNKNOWN";
-      recordWrite({ candidate, pushed, error: code });
-      if (code === "COORDINATION_CAS_CONFLICT" || code === "COORDINATION_CAS_NOT_PERFORMED") retain = false;
-      throw error;
+      let pushed: GitCommandResult | undefined; let applied: SyntheticApplied;
+      try {
+        pushed = transport.push(directory, plan.commitSha, publication.ref, publication.expected);
+        requireCoordinationPush(pushed, plan.commitSha, publication.ref);
+        recordWrite({ candidate, pushed });
+        applied = readback(candidate);
+      } catch (error) {
+        const code = error instanceof Error ? error.message : "COORDINATION_WRITE_OUTCOME_UNKNOWN";
+        recordWrite({ candidate, pushed, error: code });
+        if (code === "COORDINATION_CAS_CONFLICT" || code === "COORDINATION_CAS_NOT_PERFORMED") retain = false;
+        throw error;
+      }
+      recordWrite({ candidate, pushed, applied }); retain = false; return applied;
+    } catch (error) { failure = { error }; throw error; }
+    finally {
+      try { recordWrite.finish?.(); }
+      catch (error) { if (failure) throw new AggregateError([failure.error, error], "COORDINATION_WRITE_AND_RELEASE_FAILED"); throw error; }
     }
-    recordWrite({ candidate, pushed, applied }); retain = false; return applied;
   } finally { if (!retain) rmSync(directory, { recursive: true, force: true }); }
 }
 

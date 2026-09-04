@@ -7,9 +7,10 @@ import { hashObject } from "../v2/fs.js";
 import { CoordinationClock } from "../coordination/clock.js";
 import { controlEpochDigest } from "../coordination/authority.js";
 import { prepareSyntheticObject } from "../coordination/synthetic.js";
+import { prepareQualificationManifest, saveQualificationManifest, scopeForClient } from "../coordination/manifest.js";
 import { listReceiptTransactions } from "../receipt/service.js";
 import { createSemanticApprovalPacket } from "./service.js";
-import { loadHumanAuthorization, recordCandidateResult, recordHumanApproval, recordWriteOutcome, reserveCandidateQuota, reserveWriteAttempt, revokeHumanAuthorization, type HumanScope, type HumanScopeBinding } from "./human.js";
+import { closeQualificationWrites, loadHumanAuthorization, recordCandidateResult, recordHumanApproval, recordWriteOutcome, reserveCandidateQuota, reserveWriteAttempt, revokeHumanAuthorization, type HumanScope, type HumanScopeBinding } from "./human.js";
 
 const roots: string[] = [];
 const digest = "a".repeat(64); const head = "b".repeat(40); const ref = "refs/heads/synthetic-qualification";
@@ -62,6 +63,33 @@ function created(root: string, approvalRef: string, observed: HumanScopeBinding,
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
 
 describe("fixed-purpose human authorization receipts", () => {
+  it("closes existing and unissued child allocations without preventing late result facts or refunding quotas", () => {
+    const initial = fixture(); const genesis = prepareSyntheticObject("control-genesis", { runId: scope.runId, objectId: "genesis", seconds: 1788480000 });
+    const source = prepareSyntheticObject("source-fixture", { ...genesis.metadata, objectId: "source" }); const sourceRef = "refs/heads/fixture";
+    const allocation = { allocationId: "existing", workItem: "github:owner/repo#1", controlRef: ref, sourceRef, genesisSha: genesis.commitSha, maxCommits: 2, maxWriteAttempts: 2 };
+    const definition = { ...scope, binding: initial.binding, refs: [ref, sourceRef], maxCommits: 6, maxWriteAttempts: 6,
+      takeoverAllocations: [allocation, { ...allocation, allocationId: "unissued" }],
+      synthetic: { objects: [genesis, source], controls: [{ fixtureId: "genesis", ref }], publications: [
+        { fixtureId: "genesis", transactionId: "bootstrap", ref, expected: null }, { fixtureId: "source", transactionId: "source-create", ref: sourceRef, expected: null },
+      ] } };
+    const manifest = prepareQualificationManifest({ schemaVersion: "qualification-run-manifest/1", runId: scope.runId, repository: binding.repository, repositoryId: binding.repositoryId,
+      endpointHash: digest, refs: definition.refs, synthetic: definition.synthetic, clients: [{ clientId: "local", scope: definition }], cleanupClientId: "local", requiredCases: ["dg01-human-budget"],
+      maxCommits: 6, maxWriteAttempts: 6, maxCleanupAttempts: 1, expiresAt: scope.expiresAt, cleanupExpiresAt: scope.cleanupExpiresAt });
+    saveQualificationManifest(initial.root, manifest);
+    const parent = fixture(scopeForClient(manifest, "local"), initial.root); const parentRef = parent.register();
+    const childScope = { ...takeoverScope(parent.binding), qualification: { parentApprovalRef: parentRef, runId: scope.runId, allocationId: "existing", genesisSha: genesis.commitSha } };
+    const child = fixture(childScope, parent.root); const childRef = child.register(); created(parent.root, childRef, parent.binding, "takeover-1");
+    const attempt = reserveWriteAttempt(parent.root, childRef, parent.binding, { ...request, operation: "cas", expected: head, transactionId: "takeover-1" }, clock());
+    closeQualificationWrites(parent.root, parentRef);
+    recordWriteOutcome(parent.root, childRef, { attemptId: attempt.attemptId, status: "unknown", evidenceHash: digest });
+    expect(() => fixture({ ...childScope, qualification: { ...childScope.qualification, allocationId: "unissued" } }, parent.root).register()).toThrow("HUMAN_QUALIFICATION_WRITES_CLOSED");
+    expect(() => created(parent.root, childRef, parent.binding, "takeover-1")).toThrow("HUMAN_QUALIFICATION_WRITES_CLOSED");
+    expect(() => reserveWriteAttempt(parent.root, childRef, parent.binding, { ...request, operation: "cas", expected: head, transactionId: "takeover-1" }, clock())).toThrow("HUMAN_QUALIFICATION_WRITES_CLOSED");
+    recordWriteOutcome(parent.root, childRef, { attemptId: attempt.attemptId, status: "applied", evidenceHash: digest });
+    expect(loadHumanAuthorization(parent.root, childRef).attempts[0].outcome?.status).toBe("applied");
+    expect(loadHumanAuthorization(parent.root, parentRef)).toMatchObject({ writesClosed: true, revoked: false, attempts: [], candidates: [] });
+  });
+
   it("binds synthetic candidates and dispatch to exact approved bytes, transaction, ref and old SHA", () => {
     const plan = prepareSyntheticObject("source-fixture", { runId: scope.runId, objectId: "source", seconds: 1788480000 });
     const publication = { fixtureId: "source", transactionId: "fixture-create", ref, expected: null };

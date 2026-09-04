@@ -747,6 +747,98 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
    ref 或 payload 拒绝；两端 bootstrap 竞争/中断只读恢复不重复计数、不改变 verdict；
    正常 acquire 不隐式 bootstrap，源 fixture 不被当成 control genesis 或业务 record。
 
+#### 6.1.2 多客户端 qualification manifest 与证据闭环
+
+1. 使用一个不可变 `qualification-run-manifest/1` 输入，字段限于 runId、精确
+   repo ID/endpoint、实际 Harness artifact/runner hashes、复用的 synthetic catalog、
+   control/source refs 与 genesis、固定 required case IDs、clients、总预算/时间和
+   唯一 cleanupClientId。每端 clientId 绑定其真实安装 ID、actor、canonical common-dir
+   及完整 HumanScopeBinding、有限 refs/操作/窗口、父票总额度、takeover allocations
+   和允许 publication IDs；catalog 中对象存在不等于每端都有发布权。相同控制 ref
+   的各端必须认可同一 genesis；普通 bootstrap/source publication 指定唯一发布端，
+   同 SHA 多发布者只可作为清单显式声明的有限负面对照。不得在运行中追加客户端或资源。
+   该例外使用严格的 `sameShaPublicationNegativeControl` 对象，固定绑定
+   `caseId: dg01-cas`、同一 catalog fixtureId、exact ref/expected（SHA 或 absent）
+   以及恰好两个已列客户端及各自不同的 publication transactionId；candidate SHA
+   从同一完整 descriptor 推导，不另接受任意对象。两个客户端的真实安装 ID/common-dir
+   组合须不同，其既有 `synthetic.publications` 必须逐项匹配上述元组；transactionId
+   标识各自尝试，不写入共享 commit 字节。每端在此对照中最多一次 publication
+   dispatch，各自实际物化对象仍各占 candidate 额度；这些上限全部计入各端父票和
+   全局静态预算。只对该精确元组豁免唯一发布端，不能使用泛化的 `allowShared`，
+   也不新增 ref、客户端、操作、额度或清理者。缺少此对象的重复发布权、重复
+   transactionId、对象漂移或额外尝试均拒绝。固定 runner 须让两端先完成原有
+   expected-ref 检查，再在受控调度下实际观察一次正向 update 和另一端的 Git `=`；
+   第二端仅在前置读取时失败不能替代 §6.1.1 的 no-op 负面对照。不允许以任意命令/
+   回调实现该调度；当前 manifest/本机 collector 只验证范围与已有事实，未执行的
+   runner 对照仍是证据缺口。
+2. 哈希依赖保持单向：实际 artifact/runner 与纯 synthetic descriptors → manifest
+   → 各端 scope/approval → receipts → 汇总结果。manifest 保存各端不含 manifest 回指
+   和 approvalRef 的 scope definition/projection；计算其 digest 后，各端现有
+   qualification scope 增加 `{ manifestHash, clientId }`，除该关联外必须精确等于
+   对应 definition，不能只校验宽泛子集。最终 approvalRef 只出现在下游回执/报告，
+   不回填 manifest。runner 不内嵌最终 manifest/批准 hash；运行输入/报告位于既有
+   运行期状态区，不成为自身执行 artifact 的输入，不借此排除任何实际可执行代码。
+   manifest 是既有审批计划的不可变输入/快照，不另建可变 budget/state 文件。
+3. 总 commits/普通 attempts 等于各端**父票总上限**之和，再与 manifest 全局上限
+   比较；已包含的 takeover allocations 不重复相加。每端普通额度仍先扣除自己的
+   全部分额，bootstrap/fixture/输家/失败按实际候选生成和 dispatch 分别计数；重复
+   使用同 SHA 不免额。只有 cleanupClientId 可有非零 cleanup 额度，其他端为零；
+   子票不能新增清理权。各端批准本身仍须既有明确人类授权，manifest 不代替批准，
+   也不是跨机器共享计数器；遗漏客户端、混入另一 run 或超出静态总额均拒绝。
+4. 在现有 approval-human 父票链追加一个最小 `qualification-writes-closed` 事件，
+   绑定 runId/manifestHash/clientId，表示该父票及其子分额的**普通写窗口永久关闭**。
+   同锁下登记；此后禁止新 child 登记、新普通 candidate/attempt 及其 dispatch，但
+   允许已有候选/结果事实回写、只读恢复和原票尚有效的受限 cleanup。它不是 revoke，
+   不产生新生命周期/租约，也不抹去已预留或 unknown 尝试；revoke 的原规则不变。
+   重复 close 返回既有事件，不重开、不退款。关闭后仍需实际 runner 等待本端受管
+   子进程收敛并读取父子完整链；仅写关闭事件不等于 drained，无结果/未知尝试继续保留。
+   **关闭与 dispatch 必须由同锁串行化。** beforePush 没有 borrowed 句柄时取得
+   原 common-dir apply.lock，并持有至 prepare、实际 dispatch、readback、最终
+   outcome 全部收敛；已有 held 时仅借用。attempt/outcome 使用本次写句柄的 Locked
+   入口，不能只在 reserveAttempt 内短暂持锁，也不能仅靠再检查一次 closed 状态。
+   已预留 candidate 的结果可在关闭后记事实，但后续 beforePush/dispatch 必须拒绝。
+   release 由 Store/publication 外层 try/finally 的显式终结器保证，只有 owned 锁
+   才释放；`recordWrite({candidate,pushed})` 的正向 update 持久化是**中间回调**，
+   不能在此提前释放。beforePush 尚未返回终结器就抛错时自行清理 owned 锁；未产生
+   attemptId 的前置失败、readback/outcome 抛错也必须走终结器，borrowed 锁仍由原
+   获取者负责。普通 close 遇到持锁写者只能按既有有界锁行为等待/报告忙，不越过它
+   宣称窗口已关闭；未收敛子进程/写结果仍按 §5.3 保留恢复边界，不新建重入锁框架。
+5. 每端 export 是现有 receipt/LKG 的**只读投影**：包含 manifest/client/批准关联、
+   原生关闭事件、父票及全部已登记 child 的完整验证输入与最终链 heads、candidate/
+   attempt/outcome 和持久化 push 结果、实际运行环境与 case 证据。collector 必须验证
+   所有 manifest 客户端、分额占用和链完整性，包括未完成 LKG tail；没有输出的端
+   不是零尝试。读取来源必须来自本机固定 loader 或实际受控原生子进程；跨机器须有
+   真实实现的受信宿主执行/读取通道绑定目标安装身份与所执行 artifact。导入 JSON、
+   hash chain 或 `verified=true` 只能自报内容，不能自证来源；来源不明不得自动通过。
+   不新造签名平台/后台，也不把相同主机的两个 common-dir 说成两台机器。
+6. 聚合与清理分别验证事实。每个竞争 case 按真实 candidate/expected SHA、受信
+   原生 push 结果及当前 Git 完整对象/历史确认赢家；同 SHA 的 `=` 仍是 no-op，
+   rejected 永不升级，缺少本次 update 证据的 synthetic `state-observed` 仍 unknown。
+   唯一清理端必须确认所有端已关闭普通写窗口、全部相关执行已收敛、无未决 candidate/
+   attempt，再用自己的 Broker 读取 actual ref。当前 SHA 必须属于任一已验证客户端
+   的已知本轮候选及获批图；不能只认清理端自己的最后一次 Applied。未知 SHA、来源
+   不明、未决写入、图外资产或读回漂移均保留。删除仍在清理端原批准时间/预算及本机
+   锁下按 exact SHA 条件执行并核验 absent；关闭普通写窗口不授予删除权或延长窗口。
+7. 最小接口为 `prepareQualificationManifest(input)`（纯校验/哈希）、
+   `scopeForClient(manifest, clientId)`（生成待明确批准的现有 scope）、
+   `closeQualificationWrites(commonDir, approvalRef)`（上述同链事件）、
+   `collectClientEvidence(verifiedLocalContext, approvalRef)`（真实本机读取）、
+   `evaluateQualificationRun(manifest, verifiedClientEvidence)`（派生报告）以及
+   `planQualificationCleanup(manifest, verifiedClientEvidence, brokerObservation)`。
+   最后一个仅产生现有 cleanup attempt 所需的精确候选与证据，不建立另一批准库；
+   verified context/evidence 仅由固定来源 loader/runner 在进程内产生，CLI 不接收
+   可伪造的布尔证明。复用现有原生用例与 synthetic catalog，case ID 选择固定 runner
+   行为，不允许 manifest 提供任意 shell、脚本路径或 Provider。
+8. **下一小批次只落实 manifest、每端范围校验、关闭事件、本机真实收集/聚合接口
+   和负面对照**：哈希无环、额度不重计、重复分额/错端拒绝、关闭后普通写禁止但结果/
+   cleanup 可用、reserve→dispatch 间另一进程不能插入 close、中间 update 回调后锁
+   仍持有、所有异常路径正确释放 owned 而不释放 borrowed、跨端已知赢家可验证、
+   遗漏/伪造/未决/同 SHA no-op 不通过。实际 runner
+   的完整用例调度、跨机器受信通道以及 production adoption 必须分别提供实现与运行
+   证据；接口存在不等于完成。本地独立进程只能报 LOCAL/同机多客户端；#86/#82 的
+   最终跨机器验收目标保持不变。宿主通道尚未实现属于实施缺口，不包装成用户凭据
+   blocker，也不据此缩减完整 v3 目标。本节不执行真实网络写入、登记凭据或发布。
+
 ## 7. 施工顺序与最小证据
 
 1. 先给协议/时间/错误合同与 CLI 负面用例加测试，再实现窄域；随后补 Broker 的真实
@@ -758,19 +850,27 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
 4. 最后在获批隔离 scope 内对 exact candidate 做 LIVE 行为资格验证；零跳过、零吞错。
    尚有条件缺失则保留 Draft，不关闭 #86、不解开 Wave4/生产 Prepare 门。
 
-| 证据组 | 正向及必需负面对照 |
-|---|---|
-| 身份/范围 | 正确 actor/repository/credentialRef 成功；同 hostname/路径但不同安装 UUID 不混同，普通读取不生成 ID；wrong ID、fork/source 映射错、endpoint rewrite、多 pushurl、secret 泄露和隐式凭据继承被拒 |
-| CAS/唯一主写 | 两个进程首次 acquire 只有一个赢家；stale expected SHA/generation/owner/Head/epoch/recordHash 逐项拒绝；其他 Work Item 的记录不丢失 |
-| 对象/历史 | 无 checkout；未知路径/模式、symlink、截断与读取失败不当 absent；拒绝源码祖先、断链和中间未知版本；冷缓存可分段恢复，超过单批预算的合法长链可完成，检查点不授予写权限 |
-| 时间/renew | 有效窗口 renew 不增代；到期边界、秒级 Date、往返延迟、陈旧/缺失/倒退样本、本机时间跳变、休眠和超时不能延长授权 |
-| 迟到 renew/跨进程 | 旧到期后 reservation 才落远端、发起进程退出、新进程读取时无同代写权；及时证明后的确认可恢复，但与 takeover/terminal 竞争必须拒绝旧确认，未确认拟延长期限永不授权 |
-| 缓存/恢复 | 删缓存不删远端事实；CAS 后崩溃按 exact candidate/合法历史恢复原事务，ref 推进或新代取代不重复转换；同 transactionId 内容漂移、unknown outcome、401/403/5xx、复读旧 SHA 不报告成功 |
-| transfer/takeover | 目标端实际取回 exact Head 后单 CAS 换代并保留原 expiresAt；冻结期间写/renew/rebind、伪造 source facts/target 身份、迟到 accept 授权均拒绝；dirty/untracked/ignored/unique/unpushed/离线/资产批准漂移逐项阻断，旧代不重新授权 |
-| drain/接入 | 同锁在途写者未结束不发布 source proof；获锁后的排队写者拒绝 frozen 状态；缓存 admission 不越过新 freeze；未接入入口/缺宿主停稳证据不报告完整 drained，不嵌套获取既有 Apply 锁 |
-| terminal | 有效 exact merge 可在租约过期后终结；新代/epoch/身份漂移拒绝；claim 无 TTL 无写权，不产生 cleanup token、不删 Branch/Worktree |
-| CLI/安全面 | 正常入口真实进入用例；无配置/资格/启用授权零 mutation；未知字段/伪造审批/伪造 merge 证据拒绝；safe-mode 只读恢复观察仍可用 |
-| 人工授权/预算 | 正确隔离授权可首次试写但不能生产启用；错用途/ref/actor/repo/endpoint/hash、过期/超预算拒绝；并发尝试不超支；unknown 只读恢复不重放/重复计数，新写重试仍逐次计数；enable Apply 票据到期不单独撤销已采用配置 |
+下列 11 个固定 case ID 与既有验收矩阵逐行对应，是固定 runner 的用例组枚举，
+不是新增验收项；每组必须保留该行全部子断言。有限单次 manifest 可选择子集，但
+列入 ID 不等于执行或通过，子集结果不能宣称完整 DG-01。§6.1.1 的同 SHA no-op
+及跨进程 verdict 不升级分别归入 `dg01-cas` 和 `dg01-recovery`，不另建用例类别。
+ID 不编码 backend/机器数；证据另记真实环境、进程和安装身份。本机 collector 只能
+报告 LOCAL/同机事实；完整资格仍须实际 runner、受信跨机器通道及合同要求的 GitHub
+LIVE 证据，不把可在 LOCAL 完成的故障注入一律搬到远端，也不以 LOCAL 替代 LIVE。
+
+| 固定 case ID | 证据组 | 正向及必需负面对照 |
+|---|---|---|
+| `dg01-identity-scope` | 身份/范围 | 正确 actor/repository/credentialRef 成功；同 hostname/路径但不同安装 UUID 不混同，普通读取不生成 ID；wrong ID、fork/source 映射错、endpoint rewrite、多 pushurl、secret 泄露和隐式凭据继承被拒 |
+| `dg01-cas` | CAS/唯一主写 | 两个进程首次 acquire 只有一个赢家；stale expected SHA/generation/owner/Head/epoch/recordHash 逐项拒绝；其他 Work Item 的记录不丢失 |
+| `dg01-objects-history` | 对象/历史 | 无 checkout；未知路径/模式、symlink、截断与读取失败不当 absent；拒绝源码祖先、断链和中间未知版本；冷缓存可分段恢复，超过单批预算的合法长链可完成，检查点不授予写权限 |
+| `dg01-time-renew` | 时间/renew | 有效窗口 renew 不增代；到期边界、秒级 Date、往返延迟、陈旧/缺失/倒退样本、本机时间跳变、休眠和超时不能延长授权 |
+| `dg01-late-renew` | 迟到 renew/跨进程 | 旧到期后 reservation 才落远端、发起进程退出、新进程读取时无同代写权；及时证明后的确认可恢复，但与 takeover/terminal 竞争必须拒绝旧确认，未确认拟延长期限永不授权 |
+| `dg01-recovery` | 缓存/恢复 | 删缓存不删远端事实；CAS 后崩溃按 exact candidate/合法历史恢复原事务，ref 推进或新代取代不重复转换；同 transactionId 内容漂移、unknown outcome、401/403/5xx、复读旧 SHA 不报告成功 |
+| `dg01-handoff` | transfer/takeover | 目标端实际取回 exact Head 后单 CAS 换代并保留原 expiresAt；冻结期间写/renew/rebind、伪造 source facts/target 身份、迟到 accept 授权均拒绝；dirty/untracked/ignored/unique/unpushed/离线/资产批准漂移逐项阻断，旧代不重新授权 |
+| `dg01-drain` | drain/接入 | 同锁在途写者未结束不发布 source proof；获锁后的排队写者拒绝 frozen 状态；缓存 admission 不越过新 freeze；未接入入口/缺宿主停稳证据不报告完整 drained，不嵌套获取既有 Apply 锁 |
+| `dg01-terminal` | terminal | 有效 exact merge 可在租约过期后终结；新代/epoch/身份漂移拒绝；claim 无 TTL 无写权，不产生 cleanup token、不删 Branch/Worktree |
+| `dg01-cli-gates` | CLI/安全面 | 正常入口真实进入用例；无配置/资格/启用授权零 mutation；未知字段/伪造审批/伪造 merge 证据拒绝；safe-mode 只读恢复观察仍可用 |
+| `dg01-human-budget` | 人工授权/预算 | 正确隔离授权可首次试写但不能生产启用；错用途/ref/actor/repo/endpoint/hash、过期/超预算拒绝；并发尝试不超支；unknown 只读恢复不重放/重复计数，新写重试仍逐次计数；enable Apply 票据到期不单独撤销已采用配置 |
 
 运行受影响测试、TypeScript 检查、lint，以及源码入口 `check --mode commit` 和 `drift`；
 每项保存 exact HEAD、argv、退出状态及证据 hash。执行构建或完整 wrapper 前检查其命令链。

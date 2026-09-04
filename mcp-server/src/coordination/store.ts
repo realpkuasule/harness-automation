@@ -28,6 +28,7 @@ export interface CoordinationCandidate {
 export interface CoordinationObservation { controlSha: string | null; record: CoordinationRecord | null; }
 export interface CoordinationApplied { candidate: CoordinationCandidate; current: CoordinationObservation; disposition: "current" | "superseded"; }
 export interface CoordinationWriteResult { candidate: CoordinationCandidate; pushed?: GitCommandResult; applied?: CoordinationApplied; error?: string; }
+export type WriteRecorder<T> = ((result: T) => void) & { finish?: () => void };
 export interface CoordinationCommitIntent {
   transactionId: string; parentSha: string | null; treeSha: string; subject: CoordinationCommitSubject;
   objectDirectory: string; commitMetadataHash: string;
@@ -43,7 +44,7 @@ export class GitCoordinationStore {
     private readonly controlRef: string,
     private readonly transport: CoordinationTransport,
     // The use-case must persist this candidate in the existing receipt chain before any push.
-    private readonly beforePush: (candidate: CoordinationCandidate) => void | ((result: CoordinationWriteResult) => void),
+    private readonly beforePush: (candidate: CoordinationCandidate) => void | WriteRecorder<CoordinationWriteResult>,
     private readonly genesis?: SyntheticObjectPlan,
     private readonly historyCheck?: HistoryCheck,
     private readonly beforeCommit?: CoordinationCommitGuard,
@@ -146,21 +147,28 @@ export class GitCoordinationStore {
       if (written.size !== current.entries.size + (current.record ? 0 : 1) || [...current.entries].some(([path, value]) => path !== pathFor(args.workItem) && written.get(path)?.blob !== value.blob)) throw new Error("COORDINATION_TREE_PRESERVATION_FAILED");
       const candidate = { controlRef: this.controlRef, expectedControlSha: current.controlSha, controlSha, treeSha, record: args.next, objectDirectory: directory };
       const recordWrite = this.beforePush(candidate);
-      let pushed: GitCommandResult | undefined; let applied: CoordinationApplied;
+      let failure: { error: unknown } | undefined;
       try {
-        pushed = this.transport.push(directory, controlSha, this.controlRef, current.controlSha);
-        requireCoordinationPush(pushed, controlSha, this.controlRef);
-        recordWrite?.({ candidate, pushed }); // Persist actual update evidence before readback can fail or the process can stop.
-        applied = this.recover(candidate);
-      } catch (error) {
-        const code = error instanceof Error ? error.message : "COORDINATION_WRITE_OUTCOME_UNKNOWN";
-        recordWrite?.({ candidate, pushed, error: code });
-        if (code === "COORDINATION_CAS_CONFLICT" || code === "COORDINATION_CAS_NOT_PERFORMED") retain = false;
-        throw error;
+        let pushed: GitCommandResult | undefined; let applied: CoordinationApplied;
+        try {
+          pushed = this.transport.push(directory, controlSha, this.controlRef, current.controlSha);
+          requireCoordinationPush(pushed, controlSha, this.controlRef);
+          recordWrite?.({ candidate, pushed }); // Intermediate evidence; the write lock still covers readback.
+          applied = this.recover(candidate);
+        } catch (error) {
+          const code = error instanceof Error ? error.message : "COORDINATION_WRITE_OUTCOME_UNKNOWN";
+          recordWrite?.({ candidate, pushed, error: code });
+          if (code === "COORDINATION_CAS_CONFLICT" || code === "COORDINATION_CAS_NOT_PERFORMED") retain = false;
+          throw error;
+        }
+        recordWrite?.({ candidate, pushed, applied });
+        retain = false;
+        return applied;
+      } catch (error) { failure = { error }; throw error; }
+      finally {
+        try { recordWrite?.finish?.(); }
+        catch (error) { if (failure) throw new AggregateError([failure.error, error], "COORDINATION_WRITE_AND_RELEASE_FAILED"); throw error; }
       }
-      recordWrite?.({ candidate, pushed, applied });
-      retain = false;
-      return applied;
     } finally { if (!retain) rmSync(directory, { recursive: true, force: true }); }
   }
   /** Recovery proves history, never replays a write or restores a lease from a transaction ID alone. */
