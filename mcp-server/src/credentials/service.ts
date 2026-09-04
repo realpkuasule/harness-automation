@@ -120,6 +120,7 @@ export function runWithCredential(args: {
   repositoryId?: string;
   cwd?: string;
   preserveFailure?: boolean;
+  beforeDispatch?: () => void;
   runner?: (command: string, argv: string[], env: NodeJS.ProcessEnv) => SpawnSyncReturns<string>;
   testAdapter?: CredentialTestAdapter;
   now?: Date;
@@ -149,6 +150,8 @@ export function runWithCredential(args: {
     const evidence = args.testAdapter ? args.testAdapter.probe(args.ref, env) : fixedProbe(args.ref, env, args.requiredCapability);
     validateCredential(args.ref, args.purpose, evidence, args.requiredCapability, args.now ?? new Date());
     if (args.repositoryId !== undefined && evidence.repositoryId !== args.repositoryId) throw new Error("CREDENTIAL_REPOSITORY_ID_MISMATCH");
+    args.beforeDispatch?.();
+    validateRef(args.ref, args.purpose, args.now ?? new Date());
     const result = (args.runner ?? ((command, argv, childEnv) => spawnSync(command, argv, { cwd: args.cwd, env: childEnv, encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 })))(args.command, args.argv, env);
     if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") throw new Error("ENVIRONMENT_BLOCKED: CREDENTIAL_COMMAND_UNAVAILABLE");
     if (!args.preserveFailure && (result.error || result.status !== 0)) throw new Error(`CREDENTIAL_COMMAND_FAILED: ${result.stderr || result.stdout || result.error || "unknown error"}`);

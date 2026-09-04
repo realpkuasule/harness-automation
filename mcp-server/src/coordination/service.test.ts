@@ -15,7 +15,7 @@ function fixture(): { root: string; remote: string; store: GitCoordinationStore 
   const remote = join(root, "remote.git"); git(root, "init", "--bare", remote);
   const local = join(root, "local"); git(root, "clone", "--quiet", remote, local); git(local, "config", "user.email", "test@example.test"); git(local, "config", "user.name", "Test");
   const controlRef = "refs/heads/harness-automation/coordination/v3"; let genesis = "";
-  return { root: local, remote, store: new GitCoordinationStore(controlRef, localTransport(local, remote), (candidate) => { if (!candidate.expectedControlSha) genesis = candidate.controlSha; }, true, localHistory(local, controlRef, () => genesis)) };
+  return { root: local, remote, store: new GitCoordinationStore(controlRef, localTransport(local, remote), (candidate) => { if (!candidate.expectedControlSha) genesis = candidate.controlSha; }, true, localHistory(local, controlRef, () => genesis), () => () => {}) };
 }
 function sampleClock(date = "Fri, 04 Sep 2026 04:00:00 GMT") { const clock = new CoordinationClock(() => ({ monotonicMs: 0, wallMs: 0 })); clock.observe(date, clock.start()); return clock; }
 function lease(workItem = "github:owner/repo#1") { return nextLease({ repository: "owner/repo", repositoryId: "R_1", workItem, branch: "codex/test", sourceRepositoryId: "R_1", owner: "octo", machine: "machine-a", controlEpochDigest: "a".repeat(64), head: "b".repeat(40), ttlMs: 86_400_000, transactionId: `tx-${workItem}` }, sampleClock()); }

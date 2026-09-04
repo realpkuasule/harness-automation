@@ -89,6 +89,16 @@ describe("credentials", () => {
     expect(JSON.stringify(result)).not.toContain(secret); expect(JSON.stringify(result)).not.toContain(encoded);
   });
 
+  it("checks write authority after identity probes and immediately before dispatch", () => {
+    const order: string[] = [];
+    const invoke = () => runWithCredential({ ref, purpose: "github-api", resolver: { resolve: () => { order.push("resolve"); return { ref, secret: "synthetic" }; } },
+      command: "unused", argv: [], requiredCapability: "metadata:read",
+      testAdapter: { probe: () => { order.push("identity"); return { identity: "octo", repository: "owner/repo", capabilities: ["metadata:read"], status: 200 }; } },
+      beforeDispatch: () => { order.push("authorize"); throw new Error("EXPIRED_WRITE_SCOPE"); },
+      runner: () => { order.push("dispatch"); return { status: 0, stdout: "", stderr: "" } as never; } });
+    expect(invoke).toThrow("EXPIRED_WRITE_SCOPE"); expect(order).toEqual(["resolve", "identity", "authorize"]);
+  });
+
   it("never invokes a reviewer before DG-02", () => {
     const reviewer: CredentialRef = { ...ref, purpose: "reviewer", envVar: "HARNESS_REVIEWER_TOKEN" };
     expect(() => runWithCredential({

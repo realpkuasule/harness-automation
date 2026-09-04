@@ -121,19 +121,38 @@ receipt/LKG、安全路径和共享 mutation lock，不伪装成 file/workspace 
 验证事件、绑定和未撤销状态；批准、尝试和结果均只含非秘密字段。
 
 最小接口为 `recordHumanApproval`、`loadHumanAuthorization`、
-`reserveWriteAttempt`、`recordWriteOutcome`；由 Broker 的固定操作入口使用，不让
-Store 自行构造授权。隔离授权与生产已采用配置是两条明确路径，不能设置
+`reserveCandidateQuota/recordCandidateResult`、`reserveWriteAttempt/recordWriteOutcome`；
+由受信组合根的候选构造及 Broker 固定操作入口使用，不让 Store 自行构造授权。
+隔离授权与生产已采用配置是两条明确路径，不能设置
 `skipQualification` 绕过。资格执行和 takeover 的远端写用可信时间判定 TTL；生产
 enable 批准的 TTL 约束首次配置 Apply，不因这张一次性票据后来到期就自动锁死已经
 合法采用的配置，运行期资格/凭据/策略失效仍须阻断。
 
+**commit 配额先于对象生成**：每次 `commit-tree`（含 bootstrap/source fixture/
+竞争输家）前，在批准绑定的 common-dir 共享锁下耐久预留 candidate slot，绑定
+approvalRef、事务和 parent/tree/record/提交元数据的 intent hash；额度不足不执行
+生成命令。生成后记录 exact SHA，失败或崩溃不自动返还额度；只读恢复不重新生成。
+已经生成并验证的同一对象可直接复用，不再次占 commit 配额，但重新执行生成命令
+须预留新 slot，不能等到 beforePush 才按 unique SHA 追认。slot/result 追加到同一
+approval-human receipt 链，临时 bare 目录不是配额账本，重建目录不重置额度。
+
 每次网络写请求发出前，在共享锁下耐久预留独立 attemptId，绑定 approvalRef、
 事务、操作和 exact ref/expected/candidate SHA；所有实际新尝试（含拒绝、超时）
-逐次计数，commit 数另行计数。并发不得超支；预留后崩溃且是否发送未知，保守保留
+逐次计数。上传新候选的尝试关联其 candidate slot；exact-SHA 删除不生成 commit，
+只扣写尝试/清理预算，不能把 commit slot 当网络尝试额度。
+每份授权最多一个未解决的 pending/unknown attempt；未解决时不得再预留候选或
+写尝试，超时/TTL 到期不自动清除它。并发不得超支；预留后崩溃且是否发送未知，保守保留
 已用额度，同一 attemptId 不能再次 dispatch。unknown outcome 的只读 readback/
 回执恢复不重放写、不重复消费这次额度，
 也不退款；后来若仍获准发起新写请求，必须预留新 attempt 并计入预算，不能凭同一
 transactionId 免费重试。未确认结果不能标记 Applied 或生成成功资格证据。
+
+双客户端竞争可各持一份绑定自身安装 ID、canonical common-dir、credentialBindingHash
+和有限预算的授权，共同指向同一获批测试 run/ref 与相同 expected SHA，分别构造并
+发送不同候选；每份各一个 pending 不妨碍真实并发 CAS。运行 manifest 固定全部授权
+及额度分配，bootstrap/fixture/双方候选和清理一并计入本轮总上限，不把每端各 12
+枚解释成原本总计 12 枚。指定唯一清理责任端；它须核验属于同一 run 的已知赢家。
+这证明独立客户端竞争，不声称跨机器共享本地计数器；同机不同 clone 也不冒充跨机器。
 
 同一 scope 可预留独立的精确清理额度和有限 cleanupExpiresAt，避免正常试写耗尽
 清理预算；它只能清理已证明本次拥有的 synthetic refs，并仍执行 exact-SHA 校验。
@@ -357,6 +376,47 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
 - G-07/W-07/W-08 全部适用证据通过后仍须单独批准永久 ref 的生产采用/配置；
   该审批不阻止本节命令及未启用实现开发。退出码遵循仓库 0/1/3 规则，授权/策略门
   不是 ENVIRONMENT_BLOCKED；status 能成功报告 blocked 不等于 mutation 成功。
+
+### 6.1 组合层最小落地顺序
+
+1. **先固定实际 Harness 实现指纹**。开发资格可要求真实、干净的 Harness 源码
+   checkout 并记录 head/tree；发布包使用构建时生成的运行文件 manifest，在运行时
+   重算实际文件内容 hash，连同包身份、依赖身份形成 artifactDigest。缺失/额外运行
+   文件或依赖漂移不得自动接受。使用 source/package 判别形态，Git provenance 在
+   package 中可选；不能拿目标项目 HEAD、版本号或未复核的 manifest 自报值代替。
+   资格绑定实际执行 artifactDigest；装包无需 clone Harness，字节变化也不自动继承。
+2. **配置数据与授权分离**。CoordinationConfig 补齐 genesis SHA/tree 等实例数据，
+   `enabled` 仅表示声明，qualification hash 仅作证据索引；组合根分别从既有回执
+   装配“有限资格运行”或“持续采用配置”，不能共用一个绕过 flag 或永久 stub。
+   所有配置/资格/批准摘要保持单向引用，不把自身 receipt hash 放入自身被哈希输入。
+3. **genesis 只预计算，批准后才物化**。计划冻结 object format、空/允许元数据树、
+   无 parent 的完整 commit 字节、固定作者/时间/消息；纯哈希或不带 `-w` 的
+   `hash-object -t commit --stdin` 算出 exact SHA，不执行 `commit-tree` 或创建
+   commit 对象。批准 Apply 后先按 §2.2 预留 slot，再物化并核对 exact SHA；
+   不从执行时环境重新取作者/时间。这消除“先造 commit 才能精确批准”的循环。
+4. **一次有限资格清单分配全部客户端额度**。同一 run manifest 固定参与端的
+   安装 ID/common-dir/credentialBindingHash、runtime/script hashes、临时 control/
+   source refs、TTL、额度及唯一清理责任端；各端在同一 approval-human 机制记录
+   自己的有限子范围，总和含 bootstrap/source fixture，不依赖跨机共享计数器。
+   source bootstrap 复用同一候选 slot、Broker 和写 attempt，只接受获批合成对象，
+   不从项目源码历史派生，也不是一个任意 branch 写入入口。
+5. **有限票直接装配真实资格运行**。验证人类票、凭据身份及当前 scope 后，装配
+   同一 Broker/Store/Clock/handler；不要求生产已启用或先有待证明的 write PASS。
+   候选与网络尝试分别扣额度，每票仅一个未解决 attempt；未知结果只读恢复，
+   新写重试仍计数。测试 adapter/用户 JSON 不参与生产 authority 的构造。
+6. **收敛资格与跨端清理证据**。汇总同一 run 的实际结果和双方候选/attempt 回执，
+   指定清理端须能验证另一端的已知赢家，不能只认自身最后一次 applied SHA。
+   资格保留精确测试实例 configHash；生产采用只可明确批准 control ref/genesis 等
+   合成实例到生产实例的有限映射，实际实现、协议安全参数、repo/endpoint/身份/凭据
+   的匹配仍须逐项验证。不是任意 config 漂移豁免，更不能将 primitive PASS 当完整资格。
+7. **再执行获批生产 adoption**。计划绑定生产配置前后 hash、预计算 genesis、
+   完整适用资格及上述实例映射；以 production-enable 票据执行清单内 bootstrap，
+   预留配额、exact-absent CAS/readback 后才记录配置采用成功。远端成功而本机落盘
+   失败按原事务恢复，不删除生产 ref 补偿；不以先写 `enabled=true` 冒充采用完成。
+8. **持续运行消费已采用配置**。普通 CLI 每次核对 applied adoption receipt、配置
+   与当前实现/资格/凭据，再重验实时租约、冻结和操作条件，调用实际 handler；
+   不继续消费过期的资格运行票或把一次 enable Apply 票当永久写 token。takeover
+   仍消费其专用人工批准。此顺序仅约束实现，不执行任何真实登记、授权或生产启用。
 
 ## 7. 施工顺序与最小证据
 

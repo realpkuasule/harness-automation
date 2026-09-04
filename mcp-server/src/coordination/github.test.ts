@@ -54,7 +54,7 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
       (head, readValidatedCommit, isAncestor) => {
         const result = validateCoordinationHistory({ commonDir, anchor: { validationVersion: "coordination-history/1", genesisSha: genesis, repository: "owner/repo", repositoryId: "42", controlRef }, head, readValidatedCommit, isAncestor });
         if (result.status !== "verified") throw new Error("COORDINATION_HISTORY_VALIDATION_PENDING");
-      });
+      }, () => () => {});
     store.compareAndSwap({ workItem: record.workItem, expectedControlSha: null, expected: {}, next: record });
     const lifecycle = new CoordinationLifecycleService(store, () => provider.serverClock(), provider);
     const terminal = lifecycle.terminalClaim(record.workItem, expectedRecord(record), 9, "main");

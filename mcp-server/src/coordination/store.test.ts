@@ -21,7 +21,7 @@ function fixture() {
   let genesis = "";
   const history = localHistory(root, ref, () => genesis);
   const beforePush = (candidate: CoordinationCandidate) => { candidates.push(candidate); if (!candidate.expectedControlSha) genesis = candidate.controlSha; };
-  const store = new GitCoordinationStore(ref, transport, beforePush, true, history);
+  const store = new GitCoordinationStore(ref, transport, beforePush, true, history, () => () => {});
   const record = first();
   return { root, remote, transport, candidates, store, history, beforePush, pin: (value: string) => { genesis = value; }, record, acquire: () => store.compareAndSwap({ workItem: record.workItem, expectedControlSha: null, expected: {}, next: record }) };
 }
@@ -31,7 +31,8 @@ it("requires bootstrap authority and a durable candidate before its sole remote 
   const transport = { ...f.transport, push: () => { pushes++; throw new Error("unexpected"); } };
   const args = { workItem: f.record.workItem, expectedControlSha: null, expected: {}, next: f.record };
   expect(() => new GitCoordinationStore(ref, transport, () => {}).compareAndSwap(args)).toThrow("COORDINATION_BOOTSTRAP_AUTHORIZATION_REQUIRED");
-  expect(() => new GitCoordinationStore(ref, transport, () => { throw new Error("receipt failed"); }, true, f.history).compareAndSwap(args)).toThrow("receipt failed");
+  expect(() => new GitCoordinationStore(ref, transport, () => {}, true, f.history).compareAndSwap(args)).toThrow("COORDINATION_CANDIDATE_AUTHORIZATION_REQUIRED");
+  expect(() => new GitCoordinationStore(ref, transport, (candidate) => { roots.push(candidate.objectDirectory); throw new Error("receipt failed"); }, true, f.history, () => () => {}).compareAndSwap(args)).toThrow("receipt failed");
   expect(pushes).toBe(0); expect(f.transport.readRef(ref)).toBeNull();
 });
 it("rejects unknown paths, symlinks, gitlinks, invalid blobs and fetch failures rather than claiming absence", () => {
@@ -50,7 +51,7 @@ it("rejects unknown paths, symlinks, gitlinks, invalid blobs and fetch failures 
 });
 it("preserves an unknown-outcome candidate and recovers by exact history without repeating the push", () => {
   const f = fixture(); let writes = 0; let candidate: CoordinationCandidate | undefined;
-  const uncertain = new GitCoordinationStore(ref, { ...f.transport, push(...args) { writes++; const result = f.transport.push(...args); expect(result.status).toBe(0); return { ...result, status: null, error: "connection interrupted" }; } }, (value) => { candidate = value; f.beforePush(value); }, true, f.history);
+  const uncertain = new GitCoordinationStore(ref, { ...f.transport, push(...args) { writes++; const result = f.transport.push(...args); expect(result.status).toBe(0); return { ...result, status: null, error: "connection interrupted" }; } }, (value) => { candidate = value; f.beforePush(value); }, true, f.history, () => () => {});
   expect(() => uncertain.compareAndSwap({ workItem: f.record.workItem, expectedControlSha: null, expected: {}, next: f.record })).toThrow("COORDINATION_WRITE_OUTCOME_UNKNOWN");
   expect(candidate).toBeDefined(); roots.push(candidate!.objectDirectory); expect(existsSync(candidate!.objectDirectory)).toBe(true);
   const recovered = f.store.recover(candidate!); expect(recovered.disposition).toBe("current"); expect(writes).toBe(1);
@@ -59,6 +60,27 @@ it("preserves an unknown-outcome candidate and recovers by exact history without
   expect(applied.current.record?.generation).toBe(2);
   expect(f.store.recover(candidate!).disposition).toBe("superseded"); expect(writes).toBe(1);
   expect(() => f.store.recover({ ...candidate!, treeSha: "a".repeat(40) })).toThrow("COORDINATION_RECOVERY_REQUIRED");
+});
+
+it("reserves commit quota before creating any commit and records its exact object before push", () => {
+  const f = fixture(); const order: string[] = [];
+  const commits = (directory: string) => git(directory, ["cat-file", "--batch-all-objects", "--batch-check=%(objecttype)"]).split("\n").filter((type) => type === "commit").length;
+  const args = { workItem: f.record.workItem, expectedControlSha: null, expected: {}, next: f.record };
+  let refusedDirectory = "";
+  const denied = new GitCoordinationStore(ref, f.transport, f.beforePush, true, f.history, (intent) => {
+    refusedDirectory = intent.objectDirectory; expect(commits(intent.objectDirectory)).toBe(0);
+    throw new Error("HUMAN_COMMIT_BUDGET_EXHAUSTED");
+  });
+  expect(() => denied.compareAndSwap(args)).toThrow("HUMAN_COMMIT_BUDGET_EXHAUSTED");
+  expect(existsSync(refusedDirectory)).toBe(false); expect(f.transport.readRef(ref)).toBeNull();
+  const store = new GitCoordinationStore(ref, { ...f.transport, push(...params) { order.push("push"); return f.transport.push(...params); } },
+    (candidate) => { order.push("candidate"); f.beforePush(candidate); }, true, f.history, (intent) => {
+      expect(commits(intent.objectDirectory)).toBe(0); order.push("reserve");
+      expect(intent).toMatchObject({ parentSha: null, transactionId: f.record.transactionId, recordHash: f.record.recordHash });
+      return (head) => { expect(head).not.toBeNull(); expect(commits(intent.objectDirectory)).toBe(1); expect(git(intent.objectDirectory, ["show", "-s", "--format=%T", head!])).toBe(intent.treeSha); order.push("created"); };
+    });
+  store.compareAndSwap(args);
+  expect(order).toEqual(["reserve", "created", "candidate", "push"]);
 });
 
 it("rejects a bad intermediate tree even when the latest tree returns to valid metadata", () => {

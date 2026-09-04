@@ -52,13 +52,13 @@ export class GitHubCoordinationTransport implements CoordinationTransport {
     this.binding = loadCredentialHostBinding(context.commonDir, { repository: this.repository, repositoryId, endpointHash: this.endpoint.hash });
     if (!this.binding.credentials.some((ref) => ref.id === credentialId && ref.purpose === "git-transport")) throw new Error("CREDENTIAL_REF_UNREGISTERED");
   }
-  private execute(directory: string, argv: string[]) {
+  private execute(directory: string, argv: string[], beforeDispatch?: () => void) {
     requireObjectDirectory(directory);
     if (remotePushEndpoint(this.projectDir, this.remote).hash !== this.endpoint.hash) throw new Error("CREDENTIAL_REPOSITORY_BINDING_MISMATCH");
     const ref = this.binding.credentials.find((item) => item.id === this.credentialId)!;
     return runWithCredential({ ref, purpose: "git-transport", resolver: macOSKeychainResolver(this.binding),
       command: "git", cwd: directory, argv: ["--no-replace-objects", `--git-dir=${directory}`, ...argv],
-      requiredCapability: "metadata:read", repositoryId: this.repositoryId, preserveFailure: true });
+      requiredCapability: "metadata:read", repositoryId: this.repositoryId, preserveFailure: true, beforeDispatch });
   }
   readRef(ref: string): string | null {
     requireRef(ref);
@@ -86,9 +86,10 @@ export class GitHubCoordinationTransport implements CoordinationTransport {
     if (!SHA.test(sha) || (expected !== null && !SHA.test(expected))) throw new Error("COORDINATION_CONTROL_OBJECT_INVALID");
     if (!this.authorizeWrite) throw new Error("COORDINATION_WRITE_AUTHORIZATION_REQUIRED");
     const credential = this.binding.credentials.find((item) => item.id === this.credentialId)!;
-    this.authorizeWrite({ repository: this.repository, repositoryId: this.repositoryId, endpointHash: this.endpoint.hash,
+    const intent = { repository: this.repository, repositoryId: this.repositoryId, endpointHash: this.endpoint.hash,
       credentialBindingHash: this.binding.bindingHash, credentialRef: credential.id, actor: credential.identity,
-      hostId: this.binding.hostId, ref, head: sha, expected });
-    return this.execute(directory, ["push", "--porcelain", "--no-verify", "--recurse-submodules=no", `--force-with-lease=${ref}:${expected ?? ""}`, this.endpoint.value, `${sha}:${ref}`]);
+      hostId: this.binding.hostId, ref, head: sha, expected };
+    // Identity probes can be slow: authority/time checks and reservation belong immediately before dispatch.
+    return this.execute(directory, ["push", "--porcelain", "--no-verify", "--recurse-submodules=no", `--force-with-lease=${ref}:${expected ?? ""}`, this.endpoint.value, `${sha}:${ref}`], () => this.authorizeWrite!(intent));
   }
 }
