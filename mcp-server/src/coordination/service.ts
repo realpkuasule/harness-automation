@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { hashObject, readJson, safePath } from "../v2/fs.js";
+import { atomicWrite, hashObject, readJson, safePath } from "../v2/fs.js";
 import { remotePushEndpoint } from "../repository/remote.js";
 import { runGitCommand } from "../repository/git.js";
 import { COORDINATION_SCHEMA_VERSION, type CoordinationConfig, type CoordinationExpected, type CoordinationLifecycle, type CoordinationRecord } from "./types.js";
@@ -97,6 +97,9 @@ export class GitCoordinationStore {
       git(directory, ["push", "--porcelain", lease, endpoint, `${commit}:${this.controlRef}`], this.env);
       const readback = this.read(args.workItem);
       if (!readback.record || readback.record.recordHash !== args.next.recordHash || readback.record.transactionId !== args.next.transactionId) fail("COORDINATION_READBACK_FAILED");
+      // Cache is only a readback projection; remote state always wins on the next operation.
+      const common = git(this.root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], this.env);
+      atomicWrite(safePath(common, `harness/coordination/cache/${hashObject(args.workItem)}.json`), JSON.stringify({ controlSha: readback.controlSha, record: readback.record }, null, 2));
       return readback.record;
     } finally { rmSync(directory, { recursive: true, force: true }); }
   }
@@ -129,6 +132,44 @@ export function terminalClaim(record: CoordinationRecord, expected: Coordination
   assertExpected(record, expected);
   if (!SHA.test(integratedHead) || record.lifecycleState === "Integrated" || record.lifecycleState === "Closing" || record.lifecycleState === "Closed" || record.lifecycleState === "Abandoned") fail("COORDINATION_TERMINAL_CLAIM_INVALID");
   return createCoordinationRecord({ ...recordWithoutHash(record), lastObservedHead: integratedHead, lifecycleState: "Integrated", expiresAt: null, closeOwnerGeneration: record.generation, transactionId });
+}
+
+export function rebindLease(record: CoordinationRecord, expected: CoordinationExpected, sessionRef: string | undefined, head: string, transactionId = randomUUID()): CoordinationRecord {
+  assertExpected(record, expected);
+  if (!record.expiresAt || !SHA.test(head) || record.lifecycleState === "Integrated") fail("COORDINATION_REBIND_INVALID");
+  return createCoordinationRecord({ ...recordWithoutHash(record), sessionRef, lastObservedHead: head, transactionId });
+}
+
+export interface ZeroLossTransferEvidence {
+  sourceHead: string;
+  remoteHead: string;
+  targetRetrievedHead: string;
+  trackedClean: true;
+  untracked: [];
+  ignored: [];
+  uniqueCommits: 0;
+  unpushedCommits: 0;
+}
+
+/** Collect, rather than accept, the zero-loss facts from the frozen source and target repositories. */
+export function observeZeroLossTransfer(sourceRoot: string, endpoint: string, sourceRef: string, targetRoot: string, env: NodeJS.ProcessEnv = process.env): ZeroLossTransferEvidence {
+  const sourceHead = git(sourceRoot, ["rev-parse", "HEAD"], env);
+  const remoteHead = controlRefHead(sourceRoot, endpoint, sourceRef, env);
+  if (!remoteHead || remoteHead !== sourceHead) fail("COORDINATION_TRANSFER_REMOTE_HEAD_MISMATCH");
+  const status = git(sourceRoot, ["status", "--porcelain=v1", "--ignored=matching"], env);
+  const untracked = status.split("\n").filter((line) => line.startsWith("??"));
+  const ignored = status.split("\n").filter((line) => line.startsWith("!!"));
+  const tracked = status.split("\n").filter((line) => line && !line.startsWith("??") && !line.startsWith("!!"));
+  const targetRetrievedHead = git(targetRoot, ["rev-parse", "--verify", `${sourceHead}^{commit}`], env, true) || "";
+  const unpushedCommits = Number(git(sourceRoot, ["rev-list", "--count", `${remoteHead}..HEAD`], env));
+  if (tracked.length || untracked.length || ignored.length || targetRetrievedHead !== sourceHead || unpushedCommits !== 0) fail("COORDINATION_TRANSFER_EVIDENCE_INSUFFICIENT");
+  return { sourceHead, remoteHead, targetRetrievedHead, trackedClean: true, untracked: [], ignored: [], uniqueCommits: 0, unpushedCommits: 0 };
+}
+
+export function transferLease(record: CoordinationRecord, expected: CoordinationExpected, target: { owner: string; machine: string; sessionRef?: string }, evidence: ZeroLossTransferEvidence, transactionId = randomUUID()): CoordinationRecord {
+  assertExpected(record, expected);
+  if (!record.expiresAt || !target.owner || !target.machine || record.lifecycleState === "Integrated" || evidence.sourceHead !== record.lastObservedHead || evidence.remoteHead !== record.lastObservedHead || evidence.targetRetrievedHead !== record.lastObservedHead || !evidence.trackedClean || evidence.untracked.length || evidence.ignored.length || evidence.uniqueCommits !== 0 || evidence.unpushedCommits !== 0) fail("COORDINATION_TRANSFER_EVIDENCE_INSUFFICIENT");
+  return createCoordinationRecord({ ...recordWithoutHash(record), owner: target.owner, machine: target.machine, sessionRef: target.sessionRef, generation: record.generation + 1, createdAt: new Date().toISOString(), transactionId });
 }
 
 export function nextLease(args: { prior: CoordinationRecord | null; repository: string; repositoryId: string; workItem: string; branch: string; sourceRepositoryId: string; owner: string; machine: string; sessionRef?: string; controlEpochDigest: string; head: string; expiresAt: string; lifecycleState?: CoordinationLifecycle; transactionId?: string }): CoordinationRecord {

@@ -46,12 +46,17 @@ describe("credentials", () => {
     expect(scrubbed).not.toContain('"r"');
   });
 
-  it("never treats a Git token as an askpass program or invokes a reviewer before DG-02", () => {
+  it("uses a token-scoped HTTPS transport without askpass or inherited credential helpers", () => {
     const gitRef: CredentialRef = { ...ref, purpose: "git-transport", envVar: "HARNESS_GIT_TOKEN" };
-    expect(() => runWithCredential({
+    runWithCredential({
       ref: gitRef, purpose: "git-transport", resolver: { resolve: () => ({ ref: gitRef, secret: "secret" }) },
-      command: "git", argv: ["fetch"], requiredCapability: "contents:read",
-    })).toThrow("CREDENTIAL_TRANSPORT_HELPER_REQUIRED");
+      command: "git", argv: ["ls-remote", "https://github.com/owner/repo.git"], requiredCapability: "contents:read",
+      testAdapter: { probe: () => ({ identity: "octo", repository: "owner/repo", capabilities: ["contents:read"], status: 200 }) },
+      runner: (_command, _argv, env) => { expect(env.GIT_ASKPASS).toBeUndefined(); expect(env.GIT_CONFIG_VALUE_0).toBe(""); expect(env.GIT_CONFIG_KEY_1).toContain("extraheader"); expect(env.GIT_CONFIG_VALUE_1).not.toContain("secret"); return { status: 0, stdout: "", stderr: "" } as never; },
+    });
+  });
+
+  it("never invokes a reviewer before DG-02", () => {
     const reviewer: CredentialRef = { ...ref, purpose: "reviewer", envVar: "HARNESS_REVIEWER_TOKEN" };
     expect(() => runWithCredential({
       ref: reviewer, purpose: "reviewer", resolver: { resolve: () => ({ ref: reviewer, secret: "secret" }) },

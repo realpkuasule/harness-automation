@@ -1,4 +1,5 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { Buffer } from "node:buffer";
 
 export const CREDENTIAL_PURPOSES = ["git-transport", "github-api", "github-admin", "reviewer"] as const;
 export type CredentialPurpose = typeof CREDENTIAL_PURPOSES[number];
@@ -42,10 +43,21 @@ function sameRef(left: CredentialRef, right: CredentialRef): boolean {
 }
 
 function credentialEnv(ref: CredentialRef, secret: string): NodeJS.ProcessEnv {
+  const gitTransport = ref.purpose === "git-transport"
+    ? {
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_COUNT: "2",
+        GIT_CONFIG_KEY_0: "credential.helper",
+        GIT_CONFIG_VALUE_0: "",
+        GIT_CONFIG_KEY_1: "http.https://github.com/.extraheader",
+        GIT_CONFIG_VALUE_1: `Authorization: Basic ${Buffer.from(`x-access-token:${secret}`, "utf8").toString("base64")}`,
+      }
+    : {};
   return {
     PATH: process.env.PATH,
     CI: "1",
-    ...(ref.purpose === "git-transport" ? { GIT_TERMINAL_PROMPT: "0" } : {}),
+    ...gitTransport,
     [ref.envVar]: secret,
   };
 }
@@ -59,7 +71,25 @@ function fixedProbe(ref: CredentialRef, env: NodeJS.ProcessEnv): CredentialEvide
   if (ref.purpose === "reviewer") {
     throw new Error("DG02_REVIEWER_CONFIGURATION_REQUIRED");
   }
-  if (ref.purpose === "git-transport") throw new Error("CREDENTIAL_TRANSPORT_HELPER_REQUIRED");
+  if (ref.purpose === "git-transport") {
+    const header = env.GIT_CONFIG_VALUE_1;
+    const request = (url: string) => spawnSync("curl", ["-fsS", "-i", "-H", header ?? "", url], { env, encoding: "utf8", maxBuffer: 1024 * 1024 });
+    const user = request("https://api.github.com/user");
+    if (user.error) throw new Error("ENVIRONMENT_BLOCKED: CREDENTIAL_PROBE_UNAVAILABLE");
+    const status = statusFromOutput(user.stdout ?? user.stderr ?? "");
+    if (status === 401 || status === 403) return { identity: "", repository: "", capabilities: [], status };
+    if (user.status !== 0) throw new Error("CREDENTIAL_CAPABILITY_DENIED");
+    const headerEnd = (user.stdout ?? "").search(/\r?\n\r?\n/u);
+    const identity = JSON.parse(headerEnd < 0 ? user.stdout : user.stdout.slice(headerEnd)) as { login?: string };
+    const repository = request(`https://api.github.com/repos/${ref.repository}`);
+    const repositoryStatus = statusFromOutput(repository.stdout ?? repository.stderr ?? "");
+    if (repositoryStatus === 401 || repositoryStatus === 403) return { identity: "", repository: "", capabilities: [], status: repositoryStatus };
+    if (repository.error) throw new Error("ENVIRONMENT_BLOCKED: CREDENTIAL_PROBE_UNAVAILABLE");
+    if (repository.status !== 0) throw new Error("CREDENTIAL_CAPABILITY_DENIED");
+    const repo = JSON.parse(repository.stdout ?? "{}") as { full_name?: string };
+    const scopes = (user.stdout ?? "").match(/^x-oauth-scopes:\s*(.*)$/imu)?.[1] ?? "";
+    return { identity: identity.login ?? "", repository: repo.full_name ?? "", capabilities: scopes.split(",").map((scope) => scope.trim()).filter(Boolean), status };
+  }
   const request = (argv: string[]) => spawnSync("gh", argv, { env, encoding: "utf8", maxBuffer: 1024 * 1024 });
   const user = request(["api", "-i", "user"]);
   if (user.error) throw new Error("ENVIRONMENT_BLOCKED: CREDENTIAL_PROBE_UNAVAILABLE");
