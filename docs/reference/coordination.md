@@ -96,3 +96,10 @@ does not prevent result recording or read-only recovery. This is local static
 budget allocation, not a cross-machine shared counter. Native command fixtures
 exercise the registered Broker/Git composition; real credential access, complete
 DG-01 LIVE qualification, production adoption and CLI assembly remain separate.
+
+Synthetic object planning now precomputes fixed empty-tree commit bytes and exact
+Git SHA without writing an object. Only approved synthetic source ancestry may
+appear in source-fixture plans. Candidate receipts use a strict subject discriminator
+for business records, control genesis and source fixtures; genesis is never a fake
+Work Item or record hash. Bootstrap publication and its CLI are still being wired;
+merely constructing such a plan does not authorize object creation or a ref write.

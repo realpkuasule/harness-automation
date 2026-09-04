@@ -68,7 +68,8 @@ export function qualificationOperationAuthority(projectDir: string, initial: Hum
       pending = { operation, current: structuredClone(current), proposed: structuredClone(proposed) };
     }) satisfies OperationAuthority,
     assertCandidate(intent: CoordinationCommitIntent) {
-      if (!pending || intent.recordHash !== pending.proposed.recordHash || intent.transactionId !== pending.proposed.transactionId ||
+      if (!pending || intent.subject.kind !== "coordination-record" || intent.subject.workItem !== pending.proposed.workItem ||
+          intent.subject.recordHash !== pending.proposed.recordHash || intent.transactionId !== pending.proposed.transactionId ||
           intent.parentSha !== pending.current.controlSha) throw new Error("COORDINATION_OPERATION_AUTHORITY_REQUIRED");
       validate(pending.operation, pending.current, pending.proposed);
     },

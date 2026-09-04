@@ -60,7 +60,8 @@ it("records unknown instead of Applied when a successful push lacks authenticate
   const f = fixture(); const recover = vi.spyOn(f.store, "recover").mockImplementationOnce(() => { throw new Error("READBACK_FAILED"); });
   expect(() => f.acquire()).toThrow("READBACK_FAILED"); roots.push(f.candidate().objectDirectory);
   expect(f.state().attempts[0].outcome?.status).toBe("unknown");
-  expect(() => f.guards.beforeCommit({ transactionId: "retry", parentSha: null, treeSha: sha, recordHash: digest, commitMetadataHash: digest, objectDirectory: f.root })).toThrow("HUMAN_WRITE_OUTCOME_UNRESOLVED");
+  expect(() => f.guards.beforeCommit({ transactionId: "retry", parentSha: null, treeSha: sha,
+    subject: { kind: "coordination-record", workItem: f.record.workItem, recordHash: digest }, commitMetadataHash: digest, objectDirectory: f.root })).toThrow("HUMAN_WRITE_OUTCOME_UNRESOLVED");
   recover.mockRestore();
   expect(f.store.recover(f.candidate()).disposition).toBe("current"); expect(f.pushes()).toBe(1);
   expect(f.state().attempts[0].outcome?.status).toBe("unknown");

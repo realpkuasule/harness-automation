@@ -49,7 +49,7 @@ function takeoverScope(bound: HumanScopeBinding): Extract<HumanScope, { kind: "t
     newLease: { ttlMs: 60_000, notAfter: "2026-09-04T05:30:00.000Z" } };
 }
 const request = { transactionId: "transaction-1", operation: "create" as const, ref, head, expected: null };
-const intent = { transactionId: request.transactionId, parentSha: null, treeSha: head, recordHash: digest, commitMetadataHash: digest, objectDirectory: "/unit-producer-no-objects" };
+const intent = { transactionId: request.transactionId, parentSha: null, treeSha: head, subject: { kind: "coordination-record" as const, workItem: "github:owner/repo#1", recordHash: digest }, commitMetadataHash: digest, objectDirectory: "/unit-producer-no-objects" };
 function created(root: string, approvalRef: string, observed: HumanScopeBinding, transactionId = request.transactionId) {
   // Unit-level producer metadata only; the Store tests exercise real commit creation ordering.
   const scope = loadHumanAuthorization(root, approvalRef).approval.scope;

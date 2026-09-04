@@ -35,7 +35,7 @@ export function humanCoordinationGuards(commonDir: string, approvalRef: string, 
       const state = authorization();
       const reserved = state.candidates.find((item) => item.result?.status === "created" && item.result.head === candidate.controlSha &&
         item.transactionId === candidate.record.transactionId && item.parentSha === candidate.expectedControlSha && item.treeSha === candidate.treeSha &&
-        item.recordHash === candidate.record.recordHash && item.objectDirectory === candidate.objectDirectory);
+        item.subject.kind === "coordination-record" && item.subject.workItem === candidate.record.workItem && item.subject.recordHash === candidate.record.recordHash && item.objectDirectory === candidate.objectDirectory);
       if (!reserved) throw new Error("HUMAN_CANDIDATE_UNPROVEN");
       assertCandidate?.(reserved);
       active = { candidate, intent: reserved, attempted: false };
@@ -70,9 +70,9 @@ export function recoverHumanCoordinationWrite(commonDir: string, approvalRef: st
   if (!["qualification-run", "takeover"].includes(state.approval.scope.kind)) throw new Error("COORDINATION_HUMAN_SCOPE_REQUIRED");
   const attempt = state.attempts.find((item) => item.attemptId === attemptId);
   const candidate = state.candidates.find((item) => item.candidateId === attempt?.candidateId);
-  if (!attempt || !candidate || !attempt.head || candidate.result?.status !== "created" || candidate.result.head !== attempt.head || attempt.operation === "cleanup" || attempt.outcome?.status === "rejected") throw new Error("COORDINATION_RECOVERY_REQUIRED");
+  if (!attempt || !candidate || candidate.subject.kind !== "coordination-record" || !attempt.head || candidate.result?.status !== "created" || candidate.result.head !== attempt.head || attempt.operation === "cleanup" || attempt.outcome?.status === "rejected") throw new Error("COORDINATION_RECOVERY_REQUIRED");
   const result = store.recoverRecordedCandidate({ controlSha: attempt.head, expectedControlSha: attempt.expected,
-    treeSha: candidate.treeSha, recordHash: candidate.recordHash, objectDirectory: candidate.objectDirectory });
+    treeSha: candidate.treeSha, recordHash: candidate.subject.recordHash, objectDirectory: candidate.objectDirectory });
   if (result.candidate.controlRef !== attempt.ref || result.candidate.record.repository !== state.approval.scope.binding.repository || result.candidate.record.repositoryId !== state.approval.scope.binding.repositoryId) throw new Error("COORDINATION_RECOVERY_REQUIRED");
   if (attempt.outcome?.status !== "applied") recordWriteOutcome(commonDir, approvalRef, { attemptId, status: "applied", evidenceHash: hashObject(result) });
   return result;

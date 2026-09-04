@@ -73,7 +73,8 @@ export function prepareTakeover(context: RepositoryContext, held: MutationLock, 
     expiresAt: new Date(end).toISOString(), transactionId: approved.transactionId });
   return {
     assertCandidate(intent: CoordinationCommitIntent) {
-      if (intent.parentSha !== approved.expectedControlSha || intent.recordHash !== next.recordHash || intent.transactionId !== approved.transactionId) throw new Error("COORDINATION_OPERATION_AUTHORITY_REQUIRED");
+      if (intent.subject.kind !== "coordination-record" || intent.subject.workItem !== approved.workItem ||
+          intent.parentSha !== approved.expectedControlSha || intent.subject.recordHash !== next.recordHash || intent.transactionId !== approved.transactionId) throw new Error("COORDINATION_OPERATION_AUTHORITY_REQUIRED");
       validate(); assertCoordinationIdentity(next, observeBinding()); assertCoordinationWorkspace(context.projectDir, next);
       refreshClock().requireBefore(next.expiresAt!);
     },

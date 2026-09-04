@@ -26,7 +26,8 @@ function fixture() {
   let date = "Fri, 04 Sep 2026 04:00:00 GMT"; let observed = binding;
   const clock = () => { const value = new CoordinationClock(() => ({ monotonicMs: 0, wallMs: 0 })); value.observe(date, value.start()); return value; };
   const authority = qualificationOperationAuthority(root, binding, () => observed, clock);
-  const intent = { transactionId: record.transactionId, parentSha: null, treeSha: head, recordHash: record.recordHash, objectDirectory: root, commitMetadataHash: digest };
+  const intent = { transactionId: record.transactionId, parentSha: null, treeSha: head,
+    subject: { kind: "coordination-record" as const, workItem: record.workItem, recordHash: record.recordHash }, objectDirectory: root, commitMetadataHash: digest };
   return { root, binding, record, authority, intent, expire: () => { date = "Fri, 04 Sep 2026 04:01:00 GMT"; },
     drift: () => { observed = { ...binding, credentialRef: "other" }; } };
 }

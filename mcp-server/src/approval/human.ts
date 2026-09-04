@@ -11,6 +11,7 @@ import { harnessArtifactSchema } from "../repository/artifact.js";
 import { controlEpochDigest, controlEpochSchema } from "../coordination/authority.js";
 import { takeoverRiskSchema } from "../coordination/takeover_record.js";
 import { coordinationRecordSchema } from "../coordination/record.js";
+import { coordinationCommitSubjectSchema } from "../coordination/synthetic.js";
 
 const DOMAIN = "approval-human";
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -64,7 +65,7 @@ const attemptSchema = z.object({
 }).strict();
 const candidateSchema = z.object({
   candidateId: z.string().uuid(), transactionId: text, parentSha: sha.nullable(), treeSha: sha,
-  recordHash: digest, commitMetadataHash: digest, objectDirectory: z.string().refine(isAbsolute), reservedAt: timestamp,
+  subject: coordinationCommitSubjectSchema, commitMetadataHash: digest, objectDirectory: z.string().refine(isAbsolute), reservedAt: timestamp,
 }).strict();
 const candidateResultSchema = z.object({
   candidateId: z.string().uuid(), status: z.enum(["created", "failed", "unknown"]), head: sha.nullable(), evidenceHash: digest,
@@ -238,8 +239,9 @@ function checkCandidateQuota(scope: HumanScope, attempts: HumanAuthorization["at
   const maximum = scope.kind === "qualification-run" ? ordinaryLimit(scope, "maxCommits") : scope.kind === "production-enable" ? 1 : scope.maxCommits;
   if (candidates.length >= maximum) throw new Error("HUMAN_COMMIT_BUDGET_EXHAUSTED");
 }
-function checkCandidateScope(scope: HumanScope, intent: Pick<Candidate, "transactionId" | "parentSha">): void {
-  if (scope.kind === "takeover" && (intent.transactionId !== scope.transactionId || intent.parentSha !== scope.expectedControlSha)) throw new Error("HUMAN_WRITE_SCOPE_MISMATCH");
+function checkCandidateScope(scope: HumanScope, intent: Pick<Candidate, "transactionId" | "parentSha" | "subject">): void {
+  if (intent.subject.kind !== "coordination-record") throw new Error("HUMAN_SYNTHETIC_SCOPE_REQUIRED");
+  if (scope.kind === "takeover" && (intent.transactionId !== scope.transactionId || intent.parentSha !== scope.expectedControlSha || intent.subject.workItem !== scope.workItem)) throw new Error("HUMAN_WRITE_SCOPE_MISMATCH");
 }
 
 /** Must precede commit-tree, including candidates that lose a CAS or never get dispatched. */
@@ -254,9 +256,9 @@ export function reserveCandidateQuotaLocked(lock: MutationLock, commonDir: strin
   if (state.revoked || hashObject(bindingSchema.parse(observed)) !== hashObject(state.approval.scope.binding)) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
   requireParentActive(commonDir, state.approval.scope, clock);
   checkCandidateQuota(state.approval.scope, state.attempts, state.candidates);
-  checkCandidateScope(state.approval.scope, intent);
   const bounds = clock.requireBefore(state.approval.scope.expiresAt);
   const candidate = candidateSchema.parse({ ...intent, candidateId: randomUUID(), reservedAt: new Date(Math.floor(bounds.lowerMs)).toISOString() });
+  checkCandidateScope(state.approval.scope, candidate);
   append(commonDir, state.approval.packet, { kind: "candidate-reserved", candidate });
   clock.requireBefore(state.approval.scope.expiresAt); return candidate;
 }

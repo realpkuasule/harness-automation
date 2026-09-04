@@ -7,6 +7,7 @@ import type { GitCommandResult } from "../repository/git.js";
 import { assertExpected, validRecord } from "./record.js";
 import type { CoordinationExpected, CoordinationRecord } from "./types.js";
 import type { HistoryCheck } from "./history.js";
+import type { CoordinationCommitSubject } from "./synthetic.js";
 
 export interface CoordinationTransport {
   readonly repository: string;
@@ -27,7 +28,7 @@ export interface CoordinationObservation { controlSha: string | null; record: Co
 export interface CoordinationApplied { candidate: CoordinationCandidate; current: CoordinationObservation; disposition: "current" | "superseded"; }
 export interface CoordinationWriteResult { candidate: CoordinationCandidate; pushed?: GitCommandResult; applied?: CoordinationApplied; error?: string; }
 export interface CoordinationCommitIntent {
-  transactionId: string; parentSha: string | null; treeSha: string; recordHash: string;
+  transactionId: string; parentSha: string | null; treeSha: string; subject: CoordinationCommitSubject;
   objectDirectory: string; commitMetadataHash: string;
 }
 // Called before commit-tree; the returned recorder runs before any remote dispatch.
@@ -129,7 +130,7 @@ export class GitCoordinationStore {
       if (!this.beforeCommit) throw new Error("COORDINATION_CANDIDATE_AUTHORIZATION_REQUIRED");
       const metadata = { name: "Harness Coordination", email: "coordination@harness.invalid", seconds: Math.floor(Date.now() / 1000), timezone: "+0000", message: `coordination ${args.next.transactionId}\n` };
       const recordCreation = this.beforeCommit({ transactionId: args.next.transactionId, parentSha: current.controlSha, treeSha,
-        recordHash: args.next.recordHash, objectDirectory: directory, commitMetadataHash: hashObject(metadata) });
+        subject: { kind: "coordination-record", workItem: args.workItem, recordHash: args.next.recordHash }, objectDirectory: directory, commitMetadataHash: hashObject(metadata) });
       retain = true; let controlSha: string;
       try {
         controlSha = objectGit(directory, ["-c", `user.name=${metadata.name}`, "-c", `user.email=${metadata.email}`, "commit-tree", treeSha, ...parent], metadata.message, `${metadata.seconds} ${metadata.timezone}`).trim();
