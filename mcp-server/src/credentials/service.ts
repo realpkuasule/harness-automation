@@ -118,10 +118,12 @@ export function runWithCredential(args: {
   argv: string[];
   requiredCapability: string;
   repositoryId?: string;
+  cwd?: string;
+  preserveFailure?: boolean;
   runner?: (command: string, argv: string[], env: NodeJS.ProcessEnv) => SpawnSyncReturns<string>;
   testAdapter?: CredentialTestAdapter;
   now?: Date;
-}): { status: number | null; stdout: string; stderr: string; credentialRef: string; identity: string; expiresAt: string } {
+}): { status: number | null; stdout: string; stderr: string; error: string | null; credentialRef: string; identity: string; expiresAt: string } {
   // DG-02 is checked before any test or production probe can resolve or expose a reviewer secret.
   if (args.purpose === "reviewer" || args.ref.purpose === "reviewer") {
     throw new Error("DG02_REVIEWER_CONFIGURATION_REQUIRED");
@@ -147,9 +149,10 @@ export function runWithCredential(args: {
     const evidence = args.testAdapter ? args.testAdapter.probe(args.ref, env) : fixedProbe(args.ref, env, args.requiredCapability);
     validateCredential(args.ref, args.purpose, evidence, args.requiredCapability, args.now ?? new Date());
     if (args.repositoryId !== undefined && evidence.repositoryId !== args.repositoryId) throw new Error("CREDENTIAL_REPOSITORY_ID_MISMATCH");
-    const result = (args.runner ?? ((command, argv, childEnv) => spawnSync(command, argv, { env: childEnv, encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 })))(args.command, args.argv, env);
-    if (result.error || result.status !== 0) throw new Error(`CREDENTIAL_COMMAND_FAILED: ${result.stderr || result.stdout || result.error || "unknown error"}`);
-    return { status: result.status, stdout: scrubSensitive(result.stdout ?? "", derivedSecrets), stderr: scrubSensitive(result.stderr ?? "", derivedSecrets), credentialRef: args.ref.id, identity: args.ref.identity, expiresAt: args.ref.expiresAt };
+    const result = (args.runner ?? ((command, argv, childEnv) => spawnSync(command, argv, { cwd: args.cwd, env: childEnv, encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 })))(args.command, args.argv, env);
+    if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") throw new Error("ENVIRONMENT_BLOCKED: CREDENTIAL_COMMAND_UNAVAILABLE");
+    if (!args.preserveFailure && (result.error || result.status !== 0)) throw new Error(`CREDENTIAL_COMMAND_FAILED: ${result.stderr || result.stdout || result.error || "unknown error"}`);
+    return { status: result.status, stdout: scrubSensitive(result.stdout ?? "", derivedSecrets), stderr: scrubSensitive(result.stderr ?? "", derivedSecrets), error: result.error ? scrubSensitive(result.error.message, derivedSecrets) : null, credentialRef: args.ref.id, identity: args.ref.identity, expiresAt: args.ref.expiresAt };
   } catch (error) {
     throw new Error(scrubSensitive(error instanceof Error ? error.message : String(error), derivedSecrets));
   }

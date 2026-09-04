@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hashObject, prettyJson } from "../v2/fs.js";
@@ -49,7 +49,7 @@ export class GitCoordinationStore {
         controlRef.split("/").some((part) => !part || part.startsWith(".") || part.endsWith(".lock") || part.endsWith("."))) throw new Error("COORDINATION_CONTROL_REF_INVALID");
   }
   private directory(): string {
-    const directory = mkdtempSync(join(tmpdir(), "harness-coordination-objects-"));
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "harness-coordination-objects-")));
     try { objectGit(directory, ["init", "--bare", "--quiet", "--template="]); return directory; }
     catch (error) { rmSync(directory, { recursive: true, force: true }); throw error; }
   }

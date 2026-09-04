@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { planCredentialHostBinding, applyCredentialHostBinding } from "../credentials/host_binding.js";
 import { sha256 } from "../v2/fs.js";
 import { GitHubCoordinationReader } from "./github.js";
+import { GitHubCoordinationTransport, type CoordinationWriteIntent } from "./transport.js";
 import { CoordinationLifecycleService, GitCoordinationStore } from "./service.js";
 import { createCoordinationRecord, expectedRecord, validRecord } from "./record.js";
 import { localTransport } from "./__fixtures__/transport.js";
@@ -27,7 +28,10 @@ function fixture() {
   git(root, "init", "--quiet"); const endpoint = "https://github.com/owner/repo.git"; git(root, "remote", "add", "origin", endpoint);
   const commonDir = join(root, ".git");
   const plan = planCredentialHostBinding(commonDir, { schemaVersion: "credential-host-binding/1.0", commonDir, repository: "owner/repo", repositoryId: "42", endpointHash: sha256(endpoint),
-    credentials: [{ id: "api", purpose: "github-api", repository: "owner/repo", identity: "octo", scopes: ["pull_requests:read"], expiresAt: "2099-01-01T00:00:00.000Z", envVar: "GH_TOKEN", keychainService: "synthetic", keychainAccount: "fixture" }] });
+    credentials: [
+      { id: "api", purpose: "github-api", repository: "owner/repo", identity: "octo", scopes: ["pull_requests:read"], expiresAt: "2099-01-01T00:00:00.000Z", envVar: "GH_TOKEN", keychainService: "synthetic", keychainAccount: "fixture" },
+      { id: "git", purpose: "git-transport", repository: "owner/repo", identity: "octo", scopes: ["contents:write"], expiresAt: "2099-01-01T00:00:00.000Z", envVar: "HARNESS_GIT_TOKEN", keychainService: "synthetic", keychainAccount: "git-fixture" },
+    ] });
   applyCredentialHostBinding(commonDir, plan, plan.planHash);
   const bin = join(root, "bin"); mkdirSync(bin); const calls = join(root, "calls.jsonl"); const response = join(root, "response.json");
   writeFileSync(join(bin, "security"), `#!${process.execPath}\nprocess.stdout.write('synthetic-provider-canary');\n`, { mode: 0o700 });
@@ -37,7 +41,7 @@ function fixture() {
   const pr = { id: 1234, number: 9, state: "closed", merged: true, merged_at: "2020-01-02T00:00:01.000Z", merge_commit_sha: "c".repeat(40), head: { sha: record.lastObservedHead, ref: record.branch, repo: { id: 43 } }, base: { ref: "main", repo: { id: 42, full_name: "owner/repo" } } };
   const respond = (data: unknown = { pr }) => writeFileSync(response, JSON.stringify(data)); respond();
   const provider = new GitHubCoordinationReader(root, "origin", "42", "api");
-  return { root, commonDir, plan, calls, record, pr, respond, provider };
+  return { root, commonDir, plan, calls, record, pr, respond, provider, bin, endpoint };
 }
 afterEach(() => { Object.defineProperty(process, "platform", nativePlatform); vi.unstubAllEnvs(); roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })); });
 
@@ -85,5 +89,38 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
     applyCredentialHostBinding(commonDir, updated, updated.planHash);
     expect(() => provider.observeMerge(record, 9, "main")).toThrow("CREDENTIAL_BINDING_STALE");
     expect(() => readFileSync(calls)).toThrow();
+  });
+
+  it("runs the production Git adapter with explicit credentials, exact CAS and no implicit write permission", () => {
+    const { root, bin, endpoint, plan } = fixture();
+    const remote = join(root, "remote.git"); git(root, "init", "--bare", "--quiet", "--template=", remote);
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const trace = join(root, "git-transport.jsonl");
+    writeFileSync(join(bin, "git"), `#!${process.execPath}\nconst fs=require('node:fs');const cp=require('node:child_process');let a=process.argv.slice(2);if(a.some(x=>['ls-remote','fetch','push'].includes(x))){if(!a.includes(${JSON.stringify(endpoint)})||process.env.HARNESS_GIT_TOKEN!=='synthetic-provider-canary')process.exit(2);fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({argv:a,global:process.env.GIT_CONFIG_GLOBAL,redirects:process.env.GIT_CONFIG_VALUE_2,hooks:process.env.GIT_CONFIG_VALUE_3})+'\\n');a=a.map(x=>x===${JSON.stringify(endpoint)}?${JSON.stringify(remote)}:x);}const r=cp.spawnSync(${JSON.stringify(realGit)},a,{env:process.env,stdio:['inherit','pipe','pipe']});process.stdout.write(r.stdout??'');process.stderr.write(r.stderr??'');process.exit(r.status??1);\n`, { mode: 0o700 });
+    const objectDirectory = realpathSync(mkdtempSync(join(root, "objects-")));
+    git(root, "init", "--bare", "--quiet", "--template=", objectDirectory);
+    const tree = git(objectDirectory, "hash-object", "-t", "tree", "-w", "--stdin");
+    const commit = (message: string, parent?: string) => git(objectDirectory, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit-tree", tree, ...(parent ? ["-p", parent] : []), "-m", message);
+    const head = commit("initial"); const ref = "refs/heads/coordination-fixture";
+    const readonly = new GitHubCoordinationTransport(root, "origin", "42", "git");
+    expect(readonly.readRef(ref)).toBeNull();
+    expect(() => readonly.push(objectDirectory, head, ref, null)).toThrow("COORDINATION_WRITE_AUTHORIZATION_REQUIRED");
+    expect(() => new GitHubCoordinationTransport(root, "origin", "42", "api")).toThrow("CREDENTIAL_REF_UNREGISTERED");
+    const writes: CoordinationWriteIntent[] = [];
+    const transport = new GitHubCoordinationTransport(root, "origin", "42", "git", (intent) => { expect(intent.ref).toBe(ref); writes.push(intent); });
+    expect(transport.push(objectDirectory, head, ref, null).status).toBe(0);
+    expect(transport.readRef(ref)).toBe(head);
+    const next = commit("next", head); expect(transport.push(objectDirectory, next, ref, head).status).toBe(0);
+    const stale = transport.push(objectDirectory, commit("stale", next), ref, head);
+    expect(stale.status).toBe(1); expect(stale.stdout).toContain("[rejected] (stale info)");
+    const target = realpathSync(mkdtempSync(join(root, "retrieved-"))); git(root, "init", "--bare", "--quiet", "--template=", target);
+    transport.fetch(target, next); expect(git(target, "cat-file", "-t", next)).toBe("commit");
+    expect(writes[0]).toMatchObject({ credentialBindingHash: plan.binding.bindingHash, actor: "octo", hostId: plan.binding.hostId, head, expected: null });
+    const traceBefore = readFileSync(trace, "utf8");
+    git(objectDirectory, "config", "url.https://attacker.invalid/.insteadOf", "https://github.com/");
+    expect(() => transport.fetch(objectDirectory, next)).toThrow("COORDINATION_OBJECT_DIRECTORY_INVALID");
+    expect(readFileSync(trace, "utf8")).toBe(traceBefore);
+    expect(traceBefore).not.toContain("synthetic-provider-canary");
+    for (const line of traceBefore.trim().split("\n")) expect(JSON.parse(line)).toMatchObject({ global: "/dev/null", redirects: "false", hooks: "/dev/null" });
   });
 });

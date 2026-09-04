@@ -78,6 +78,17 @@ describe("credentials", () => {
     try { runWithCredential({ ref: gitRef, purpose: "git-transport", resolver: { resolve: () => ({ ref: gitRef, secret }) }, command: "git", argv: [], requiredCapability: "contents:read", testAdapter: { probe: () => ({ identity: "octo", repository: "owner/repo", capabilities: ["contents:read"], status: 200 }) }, runner: () => ({ status: 1, stdout: "", stderr: encoded } as never) }); } catch (error) { expect(String(error)).not.toContain(encoded); }
   });
 
+  it("preserves a scrubbed nonzero or unknown result for the CAS recovery classifier", () => {
+    const gitRef: CredentialRef = { ...ref, purpose: "git-transport", envVar: "HARNESS_GIT_TOKEN" };
+    const secret = "unknown-outcome-canary"; const encoded = Buffer.from(`x-access-token:${secret}`).toString("base64");
+    const result = runWithCredential({ ref: gitRef, purpose: "git-transport", resolver: { resolve: () => ({ ref: gitRef, secret }) },
+      command: "git", argv: [], requiredCapability: "metadata:read", preserveFailure: true,
+      testAdapter: { probe: () => ({ identity: "octo", repository: "owner/repo", capabilities: ["metadata:read"], status: 200 }) },
+      runner: () => ({ status: null, stdout: secret, stderr: encoded, error: new Error(encoded) } as never) });
+    expect(result.status).toBeNull(); expect(result.error).toBe("[REDACTED]");
+    expect(JSON.stringify(result)).not.toContain(secret); expect(JSON.stringify(result)).not.toContain(encoded);
+  });
+
   it("never invokes a reviewer before DG-02", () => {
     const reviewer: CredentialRef = { ...ref, purpose: "reviewer", envVar: "HARNESS_REVIEWER_TOKEN" };
     expect(() => runWithCredential({

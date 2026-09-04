@@ -42,3 +42,12 @@ drifted ownership cannot. `lastObservedHead` stays the source commit; the separa
 `integration` evidence records the merge commit, provider observation and binding.
 This transition grants no write or cleanup authority. Synthetic native-command
 tests validate the code path, not real Keychain/GitHub access or production readiness.
+
+The fixed HTTPS Git adapter also uses the registered `git-transport` credential
+through the Broker. It accepts only isolated bare object directories, rejects
+custom Git config/alternates, disables inherited global credentials and redirects,
+and preserves scrubbed nonzero CAS results for recovery classification. No writer
+is installed by default: a separate qualification/production authority must approve
+the exact ref, candidate, expected SHA and credential binding before a push. That
+authority/CLI composition is still pending; metadata reads and descriptive scopes
+do not establish write capability or production enablement.
