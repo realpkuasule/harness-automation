@@ -56,7 +56,7 @@ export function publishSyntheticObject(transport: CoordinationTransport, input: 
   } finally { if (!retain) rmSync(directory, { recursive: true, force: true }); }
 }
 
-function validateSourceAncestry(directory: string, plans: SyntheticObjectPlan[], head: string): string[] {
+export function validateSourceAncestry(directory: string, plans: SyntheticObjectPlan[], head: string): string[] {
   const bySha = new Map(plans.map((plan) => [plan.commitSha, plan])); const history: string[] = [];
   let current: string | undefined = head;
   while (current) {

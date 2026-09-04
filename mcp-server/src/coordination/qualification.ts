@@ -4,7 +4,7 @@ import { withMutationLock } from "../recovery/service.js";
 import { resolveRepositoryContext } from "../repository/git.js";
 import { hashObject } from "../v2/fs.js";
 import { abandonClientProcess, readClientSettlement, runClientStep, settleClientProcess, startClientProcess, type ClientProcess } from "./client_process.js";
-import { collectClientEvidence, evaluateQualificationRun, readVerifiedClientEvidence, type VerifiedClientEvidence } from "./evidence.js";
+import { collectClientEvidence, evaluateQualificationRun, readVerifiedClientEvidence, type EvidenceLock, type VerifiedClientEvidence } from "./evidence.js";
 import { validateQualificationManifest, type QualificationManifest } from "./manifest.js";
 
 const targetSchema = z.object({ clientId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u), projectRoot: z.string().min(1), approvalRef: z.string().regex(/^[a-f0-9]{64}$/u) }).strict();
@@ -16,6 +16,29 @@ const settled = new WeakMap<SettledQualification, Settlement>();
 export function readSettledQualification(handle: SettledQualification) {
   const state = settled.get(handle); if (!state) throw new Error("QUALIFICATION_RUNNER_DRAIN_UNPROVEN");
   return { manifestHash: state.manifestHash, instances: state.clients.map(readClientSettlement), steps: structuredClone(state.steps), evidence: [...state.evidence] };
+}
+
+/** Settlement fixes the closed run prefix, not a permanently frozen LKG head that its own cleanup would advance. */
+export function collectSettledEvidence(handle: SettledQualification, held?: EvidenceLock): VerifiedClientEvidence[] {
+  const proof = readSettledQualification(handle);
+  return proof.evidence.map((baseline) => {
+    const before = readVerifiedClientEvidence(baseline);
+    const current = collectClientEvidence(before.projectRoot, before.approvalRef, before.clientId === held?.clientId ? held.lock : undefined);
+    const after = readVerifiedClientEvidence(current);
+    if (before.manifestHash !== after.manifestHash || before.clientId !== after.clientId || before.chains.length !== after.chains.length ||
+        hashObject(before.lkg) !== hashObject(after.lkg.slice(0, before.lkg.length))) throw new Error("QUALIFICATION_EVIDENCE_DRIFT");
+    for (const original of before.chains) {
+      const chain = after.chains.find((value) => value.approvalRef === original.approvalRef);
+      if (!chain || hashObject(original.receipts) !== hashObject(chain.receipts.slice(0, original.receipts.length))) throw new Error("QUALIFICATION_EVIDENCE_DRIFT");
+      for (const receipt of chain.receipts.slice(original.receipts.length)) {
+        const event = receipt.snapshot as { kind?: string; attempt?: { operation?: string }; outcome?: { attemptId?: string } };
+        if (event.kind === "reserved" && event.attempt?.operation === "cleanup") continue;
+        if (event.kind === "outcome" && chain.state.attempts.some((attempt) => attempt.operation === "cleanup" && attempt.attemptId === event.outcome?.attemptId)) continue;
+        throw new Error("QUALIFICATION_EVIDENCE_DRIFT");
+      }
+    }
+    return current;
+  });
 }
 
 /** Fixed finite publications only; native bindings and pristine authorizations are checked for all clients before spawning. */

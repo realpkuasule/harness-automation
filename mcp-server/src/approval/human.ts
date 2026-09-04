@@ -30,6 +30,7 @@ const attemptSchema = z.object({
   attemptId: z.string().uuid(), transactionId: text, operation: z.enum(["create", "cas", "cleanup"]),
   candidateId: z.string().uuid().nullable(),
   ref, head: sha.nullable(), expected: sha.nullable(), reservedAt: timestamp,
+  cleanupEvidenceHash: digest.optional(), cleanupManifest: qualificationScopeSchema.shape.manifest,
 }).strict();
 const candidateSchema = z.object({
   candidateId: z.string().uuid(), transactionId: text, parentSha: sha.nullable(), treeSha: sha,
@@ -162,7 +163,7 @@ function history(commonDir: string, approvalRef: string, repairTail: boolean): H
         candidate.result = event.result;
       } else if (event.kind === "reserved") {
         if (revoked || writesClosed && event.attempt.operation !== "cleanup" || attempts.some((attempt) => attempt.attemptId === event.attempt.attemptId)) throw new Error("HUMAN_HISTORY_INVALID");
-        checkAttempt(approval.scope, attempts, candidates, event.attempt); attempts.push(event.attempt);
+        checkAttempt(approval.scope, attempts, candidates, event.attempt, writesClosed); attempts.push(event.attempt);
       } else if (event.kind === "outcome") {
         const attempt = attempts.find((value) => value.attemptId === event.outcome.attemptId);
         if (!attempt || (attempt.outcome && attempt.outcome.status !== "unknown") ||
@@ -280,8 +281,10 @@ export function recordCandidateResultLocked(lock: MutationLock, commonDir: strin
   append(commonDir, state.approval.packet, { kind: "candidate-result", result });
 }
 
-function checkAttempt(scope: HumanScope, attempts: HumanAuthorization["attempts"], candidates: HumanAuthorization["candidates"], request: Attempt): void {
+function checkAttempt(scope: HumanScope, attempts: HumanAuthorization["attempts"], candidates: HumanAuthorization["candidates"], request: Attempt, writesClosed = false): void {
   const cleanup = request.operation === "cleanup";
+  if ((!cleanup || scope.kind !== "qualification-run" || !scope.manifest) &&
+      (request.cleanupEvidenceHash !== undefined || request.cleanupManifest !== undefined)) throw new Error("HUMAN_WRITE_SCOPE_MISMATCH");
   if (cleanup ? request.head !== null || request.expected === null : request.head === null || (request.operation === "create" ? request.expected !== null : request.expected === null)) throw new Error("HUMAN_WRITE_SCOPE_MISMATCH");
   const unresolved = attempts.filter((attempt) => !attempt.outcome || attempt.outcome.status === "unknown");
   // ponytail: one in-flight attempt per authorization; parallel clients use separately bounded authorizations.
@@ -301,9 +304,14 @@ function checkAttempt(scope: HumanScope, attempts: HumanAuthorization["attempts"
     const used = attempts.filter((attempt) => (attempt.operation === "cleanup") === cleanup).length;
     if (used >= (cleanup ? scope.maxCleanupAttempts : ordinaryLimit(scope, "maxWriteAttempts"))) throw new Error("HUMAN_WRITE_BUDGET_EXHAUSTED");
     if (cleanup) {
-      if (scope.manifest) throw new Error("QUALIFICATION_CLEANUP_EVIDENCE_REQUIRED");
-      const owned = attempts.filter((attempt) => attempt.ref === request.ref && attempt.outcome?.status === "applied").at(-1);
-      if (!owned || owned.head !== request.expected) throw new Error("HUMAN_CLEANUP_OWNERSHIP_UNPROVEN");
+      if (scope.manifest) {
+        if (!request.cleanupEvidenceHash || !request.cleanupManifest || hashObject(request.cleanupManifest) !== hashObject(scope.manifest) ||
+            loadQualificationManifest(scope.binding.commonDir, scope.manifest.manifestHash).cleanupClientId !== scope.manifest.clientId) throw new Error("QUALIFICATION_CLEANUP_EVIDENCE_REQUIRED");
+        if (!writesClosed) throw new Error("HUMAN_QUALIFICATION_WRITES_OPEN");
+      } else {
+        const owned = attempts.filter((attempt) => attempt.ref === request.ref && attempt.outcome?.status === "applied").at(-1);
+        if (!owned || owned.head !== request.expected) throw new Error("HUMAN_CLEANUP_OWNERSHIP_UNPROVEN");
+      }
     }
   } else if (scope.kind === "production-enable") {
     if (cleanup || request.operation !== "create" || request.ref !== scope.controlRef || request.head !== scope.genesisSha) throw new Error("HUMAN_WRITE_SCOPE_MISMATCH");
@@ -314,7 +322,7 @@ function checkAttempt(scope: HumanScope, attempts: HumanAuthorization["attempts"
   }
 }
 
-/** Each return permits one dispatch only; retries reserve a new ID, and crashes never refund a reservation. */
+/** Budget registration only, not dispatch authority. Native guards still bind each actual write; crashes never refund reservations. */
 export function reserveWriteAttempt(commonDir: string, approvalRef: string, observed: HumanScopeBinding,
   request: Omit<Attempt, "attemptId" | "reservedAt" | "candidateId"> & { attemptId?: string; candidateId?: string | null }, clock: CoordinationClock): Attempt {
   return locked(commonDir, (lock) => reserveWriteAttemptLocked(lock, commonDir, approvalRef, observed, request, clock));
@@ -339,7 +347,7 @@ export function reserveWriteAttemptLocked(lock: MutationLock, commonDir: string,
   const candidateId = request.candidateId ?? (request.operation === "cleanup" ? null : state.candidates.find((candidate) => candidate.result?.head === request.head && candidate.transactionId === request.transactionId)?.candidateId ?? null);
   const attempt = attemptSchema.parse({ ...request, candidateId, attemptId: request.attemptId ?? randomUUID(), reservedAt: new Date(Math.floor(bounds.lowerMs)).toISOString() });
   if (state.attempts.some((value) => value.attemptId === attempt.attemptId)) throw new Error("HUMAN_WRITE_ATTEMPT_ALREADY_RESERVED");
-  checkAttempt(state.approval.scope, state.attempts, state.candidates, attempt);
+  checkAttempt(state.approval.scope, state.attempts, state.candidates, attempt, state.writesClosed);
   append(commonDir, state.approval.packet, { kind: "reserved", attempt });
   clock.requireBefore(expiresAt); return attempt;
 }

@@ -14,7 +14,7 @@ import { createCoordinationRecord } from "./record.js";
 import { GitCoordinationStore } from "./store.js";
 import { prepareSyntheticObject, type SyntheticScope } from "./synthetic.js";
 import { fixtureGenesis, localHistory, localTransport } from "./__fixtures__/transport.js";
-import { coordinationPushOutcome } from "./push_result.js";
+import { coordinationDeleteOutcome, coordinationPushOutcome } from "./push_result.js";
 
 const roots: string[] = []; const digest = "a".repeat(64); const controlRef = "refs/heads/control"; const sourceRef = "refs/heads/source";
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
@@ -145,4 +145,16 @@ it("requires one complete exact-ref porcelain result, not a success exit, substr
     expect(coordinationPushOutcome(changed, head, controlRef)).toBe("unknown");
   }
   expect(coordinationPushOutcome(result, head, sourceRef)).toBe("unknown");
+});
+
+it("requires exact positive deletion porcelain rather than absence, nonempty sources, no-ops or truncated output", () => {
+  const line = `-\t:${sourceRef}\t[deleted]`; const result = { status: 0, stdout: `To fixture\n${line}\nDone\n`, error: null };
+  expect(coordinationDeleteOutcome(result, sourceRef)).toBe("deleted");
+  for (const stdout of [line, `${line}\n${line}\nDone\n`, result.stdout.replace(":refs", "a:refs"), result.stdout.replace(":refs", "(delete):refs"), result.stdout.replace("-\t", "=\t"), result.stdout + "trailing\n"]) {
+    expect(coordinationDeleteOutcome({ ...result, stdout }, sourceRef)).toBe("unknown");
+  }
+  expect(coordinationDeleteOutcome(result, controlRef)).toBe("unknown");
+  expect(coordinationDeleteOutcome({ ...result, error: "timeout" }, sourceRef)).toBe("unknown");
+  expect(coordinationDeleteOutcome({ status: 1, error: null, stdout: `!\t:${sourceRef}\t[rejected] (stale info)\nDone\n` }, sourceRef)).toBe("rejected");
+  expect(coordinationDeleteOutcome({ status: 1, error: null, stdout: `!\t(delete):${sourceRef}\t[rejected] (stale info)\nDone\n` }, sourceRef)).toBe("rejected");
 });

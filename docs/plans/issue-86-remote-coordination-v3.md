@@ -918,8 +918,9 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
    所有普通写已关闭、原生运行已收敛、完整父子链无未决结果。持 cleanup common-dir
    的既有 apply.lock，重验真实 binding/artifact、上述事实及远端 exact SHA，
    再用既有 human 预算入口登记 `operation: cleanup, head: null, candidateId: null,
-   expected: <verified SHA>`。仅在传入受信 cleanup handle 时替换原“本端最后一次
-   Applied”所有权判断；无 handle 的 manifest cleanup 继续 fail-closed，其余
+   expected: <verified SHA>`，保存下述纯审计关联。manifest 分支不再要求“本端
+   最后一次 Applied”；跨端所有权由原生 cleanup 组合层验证，实际 dispatch
+   必须持有其私有 handle，而历史回放不依赖 handle（见 §6.1.4.1）。其余
    撤销、有效窗口、身份、单一未决 attempt 和预算检查不削弱。不生成 commit 或
    candidate，不新设审批类型。每次实际 dispatch 包括失败均占 cleanup attempt；
    unknown 只读恢复不重放，另一次获准网络尝试仍另计，不借相同 transactionId 免额。
@@ -951,6 +952,34 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
    第一条合法 cleanup 回执自锁。报告分别列发布事实、对象验证、停稳和清理结果；
    即便这些通过，未执行的 DG 子断言及跨机器资格仍 incomplete。本节不进行真实
    GitHub 写入、凭据登记或生产启用，不扩大既有有限隔离测试/清理授权。
+
+##### 6.1.4.1 额度登记、历史回放与实际 dispatch 的代码边界
+
+- 沿用 human attempt，manifest cleanup 增加严格的纯审计字段
+  `cleanupEvidenceHash` 与匹配父 scope 的 manifest/client 关联；该 hash 绑定本次
+  原生证据投影、ref/expected 和来源链前缀，不含尚未生成的本次 reservation/outcome，
+  避免自引用。字段不适用于普通 create/cas，未知字段仍拒绝。audit hash 只是证据
+  索引，不是审批、停稳证明或删除能力；现有 receipt/event/LKG 保存它即可。
+- `human.ts::checkAttempt/history` 只校验可回放的 scope、manifest 唯一 cleaner、
+  ref/expected/head/candidate 形状、审计关联、额度及事件顺序。cleanup reservation
+  **之前的链前缀**必须已有 writes-closed，不能用后来 closed 的链尾补合法；当时的
+  revoke/未决/预算规则不变。历史加载不访问当前 clock、远端、runner 或 WeakMap，
+  不因批准现已过期而抹去既有事实，也不把审计 hash 当作已证实的跨端赢家。
+- 普通 reserve 缺该审计关联仍拒绝 manifest cleanup；关联齐备也只是在同锁下
+  登记有限额度，返回 attemptId **不授予网络 dispatch 权**。格式正确的任意 hash
+  不能令 transport 删除，更不能把 reserved 当作 executed/Applied。避免泛用的
+  `skipOwnershipCheck`、`verified=true` 或由调用者提供验证回调。
+- 原生 cleanup 组合层独占私有 handle 校验：先重验 settled、native facts/远端图
+  与真实归属，再登记 attempt；Broker 的 beforeDispatch 在同一 held 锁内校验
+  该 handle 与 exact approval/manifest、attemptId/audit hash、ref/expected、真实
+  binding/artifact、当前窗口及合法链后缀，并一次性消费本次 dispatch 资格。刚
+  登记的**本次 exact pending attempt**由此接续，不能因它自身 pending 而自锁；
+  任何其他未决或未知尝试仍阻断。进程重启后的 audit/attempt 只能读恢复，不能
+  重建私有 handle 或重发原次删除；新获准尝试仍单独计额。
+- 依赖单向保持 `cleanup → qualification/evidence/human/transport`；human 只
+  使用已有 human_scope、manifest 纯数据校验与 receipt，不反向 import cleanup
+  或 runner。实际 guard 使用既有 native transport 组合边界，不给 ledger 增加
+  通用 callback 或另造 authorization store。
 
 ## 7. 施工顺序与最小证据
 

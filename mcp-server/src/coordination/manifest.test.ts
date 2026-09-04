@@ -6,6 +6,7 @@ import { closeQualificationWrites, loadHumanAuthorization, recordCandidateResult
   reserveCandidateQuota, reserveWriteAttempt, revokeHumanAuthorization } from "../approval/human.js";
 import { createSemanticApprovalPacket } from "../approval/service.js";
 import { acquireMutationLock, releaseMutationLock } from "../recovery/service.js";
+import { appendReceiptEvent } from "../receipt/service.js";
 import { hashObject } from "../v2/fs.js";
 import { CoordinationClock } from "./clock.js";
 import { humanCoordinationGuards } from "./authorization.js";
@@ -145,4 +146,38 @@ it("does not silently repair missing LKG tails or accept changed/symlinked manif
   writeFileSync(path, JSON.stringify({ ...manifest, maxCommits: 7 })); expect(() => loadHumanAuthorization(root, reference)).toThrow("QUALIFICATION_MANIFEST_HASH_MISMATCH");
   rmSync(path); const other = join(f.dirs[1], "manifest.json"); writeFileSync(other, JSON.stringify(manifest)); symlinkSync(other, path);
   expect(() => loadQualificationManifest(root, manifest.manifestHash)).toThrow("SYMLINK_TARGET_REJECTED");
+});
+
+it("replays cleanup audit as quota registration only, enforcing prior closure, exact cleaner and finite pending budget", () => {
+  const f = fixture(); const manifest = prepareQualificationManifest(f.input);
+  for (const root of f.dirs) saveQualificationManifest(root, manifest);
+  const scope = scopeForClient(manifest, "a"); const reference = approve(scope); const root = f.dirs[0];
+  const request = { transactionId: "cleanup", operation: "cleanup" as const, ref: sourceRef, head: null, expected: f.source.commitSha,
+    cleanupEvidenceHash: digest, cleanupManifest: scope.manifest };
+  expect(() => reserveWriteAttempt(root, reference, scope.binding, request, clock())).toThrow("HUMAN_QUALIFICATION_WRITES_OPEN");
+  closeQualificationWrites(root, reference);
+  for (const cleanupManifest of [undefined, { ...scope.manifest!, clientId: "b" }]) {
+    expect(() => reserveWriteAttempt(root, reference, scope.binding, { ...request, cleanupManifest }, clock())).toThrow("QUALIFICATION_CLEANUP_EVIDENCE_REQUIRED");
+  }
+  // Audit bytes cannot attest a winner or dispatch: the native cleanup/transport boundary has separate private handles.
+  const first = reserveWriteAttempt(root, reference, scope.binding, request, clock());
+  expect(loadHumanAuthorization(root, reference).attempts[0].outcome).toBeUndefined();
+  expect(() => reserveWriteAttempt(root, reference, scope.binding, request, clock())).toThrow("HUMAN_WRITE_OUTCOME_UNRESOLVED");
+  recordWriteOutcome(root, reference, { attemptId: first.attemptId, status: "rejected", evidenceHash: digest });
+  const second = reserveWriteAttempt(root, reference, scope.binding, request, clock());
+  recordWriteOutcome(root, reference, { attemptId: second.attemptId, status: "rejected", evidenceHash: digest });
+  expect(() => reserveWriteAttempt(root, reference, scope.binding, request, clock())).toThrow("HUMAN_WRITE_BUDGET_EXHAUSTED");
+  expect(loadHumanAuthorization(root, reference)).toMatchObject({ writesClosed: true, candidates: [] });
+  const other = scopeForClient(manifest, "b"); const otherRef = approve(other); closeQualificationWrites(f.dirs[1], otherRef);
+  expect(() => reserveWriteAttempt(f.dirs[1], otherRef, other.binding, { ...request, cleanupManifest: other.manifest }, clock())).toThrow("HUMAN_WRITE_BUDGET_EXHAUSTED");
+});
+
+it("cannot retroactively legalize a cleanup reservation by appending a later writes-closed event", () => {
+  const f = fixture(); const manifest = prepareQualificationManifest(f.input); const root = f.dirs[0]; saveQualificationManifest(root, manifest);
+  const scope = scopeForClient(manifest, "a"); const reference = approve(scope); const key = { root, domain: "approval-human", transactionId: reference };
+  appendReceiptEvent({ ...key, snapshot: { kind: "reserved", attempt: { transactionId: "cleanup", operation: "cleanup", ref: sourceRef, head: null,
+    expected: f.source.commitSha, candidateId: null, attemptId: "741ba5a8-40e2-4848-b5a4-082f4f2145a9", reservedAt: "2026-09-04T04:00:00.000Z",
+    cleanupEvidenceHash: digest, cleanupManifest: scope.manifest } } });
+  appendReceiptEvent({ ...key, snapshot: { kind: "qualification-writes-closed", runId: scope.runId, manifest: scope.manifest } });
+  expect(() => loadHumanAuthorization(root, reference)).toThrow("HUMAN_QUALIFICATION_WRITES_OPEN");
 });

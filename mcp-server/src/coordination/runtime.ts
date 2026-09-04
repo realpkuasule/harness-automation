@@ -31,7 +31,7 @@ export function observeCoordinationBinding(projectRoot: string, remote: string, 
     configHash, controlEpoch: observeQualificationEpoch(projectDir, configHash), ...currentHarnessArtifact() };
 }
 
-function nativeObservers(context: RepositoryContext, approved: HumanScopeBinding) {
+export function nativeCoordinationObservers(context: RepositoryContext, approved: HumanScopeBinding) {
   const remote = loadCoordinationConfig(context.projectDir)?.remote ?? "origin";
   const observeBinding = () => observeCoordinationBinding(context.projectDir, remote, approved.repositoryId, approved.credentialRef);
   const binding = observeBinding();
@@ -50,7 +50,7 @@ export function createQualificationRuntime(projectRoot: string, approvalRef: str
   if (scope.kind !== "qualification-run" || !scope.refs.includes(controlRef)) throw new Error("COORDINATION_QUALIFICATION_SCOPE_REQUIRED");
   if (state.revoked) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
   const genesis = approvedControlGenesis(scope.synthetic, controlRef);
-  const { remote, observeBinding, binding, provider } = nativeObservers(context, scope.binding);
+  const { remote, observeBinding, binding, provider } = nativeCoordinationObservers(context, scope.binding);
   const authority = qualificationOperationAuthority(context.projectDir, binding, observeBinding, () => provider.serverClock());
   const guards = humanCoordinationGuards(context.commonDir, approvalRef, observeBinding, () => provider.serverClock(), held, (intent) => {
     if (intent.subject.kind === "coordination-record") authority.assertCandidate(intent);
@@ -86,7 +86,7 @@ export function createTakeoverRuntime(projectRoot: string, approvalRef: string, 
   const parent = loadHumanAuthorization(context.commonDir, scope.qualification.parentApprovalRef).approval.scope;
   const genesis = approvedControlGenesis(parent.kind === "qualification-run" ? parent.synthetic : undefined, scope.controlRef);
   if (genesis.commitSha !== scope.qualification.genesisSha) throw new Error("HUMAN_PARENT_SCOPE_MISMATCH");
-  const { remote, observeBinding, binding, provider } = nativeObservers(context, scope.binding);
+  const { remote, observeBinding, binding, provider } = nativeCoordinationObservers(context, scope.binding);
   let prepared: ReturnType<typeof prepareTakeover> | undefined;
   const guards = humanCoordinationGuards(context.commonDir, approvalRef, observeBinding, () => provider.serverClock(), held, (intent) => {
     if (!prepared) throw new Error("COORDINATION_OPERATION_AUTHORITY_REQUIRED"); prepared.assertCandidate(intent);

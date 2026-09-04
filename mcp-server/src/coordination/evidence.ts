@@ -6,7 +6,7 @@ import { hashObject } from "../v2/fs.js";
 import { observeCoordinationBinding } from "./runtime.js";
 import { loadCoordinationConfig } from "./service.js";
 import { loadQualificationManifest, validateQualificationManifest, type QualificationManifest } from "./manifest.js";
-import { coordinationPushOutcome } from "./push_result.js";
+import { coordinationDeleteOutcome, coordinationPushOutcome } from "./push_result.js";
 
 function readFamily(commonDir: string, approvalRef: string) {
   const family = loadHumanAuthorizationFamily(commonDir, approvalRef);
@@ -23,6 +23,7 @@ type ClientFacts = ReturnType<typeof readFamily> & {
   origin: { kind: "native-local-loader"; pid: number; platform: string; arch: string; node: string; hostId: string };
 };
 export type VerifiedClientEvidence = Readonly<{ kind: "native-local-client-evidence" }>;
+export type EvidenceLock = { clientId: string; lock: MutationLock };
 const verified = new WeakMap<VerifiedClientEvidence, ClientFacts>();
 
 /** Actual native binding and full local receipt/LKG validation. This does not attest process drain or GitHub qualification. */
@@ -61,11 +62,11 @@ export function recheckClientEvidence(handle: VerifiedClientEvidence, held?: Mut
 }
 
 /** Aggregates observed facts only; absent clients and missing execution evidence are never normalized to zero/PASS. */
-export function evaluateQualificationRun(input: QualificationManifest, evidence: VerifiedClientEvidence[]) {
+export function evaluateQualificationRun(input: QualificationManifest, evidence: VerifiedClientEvidence[], held?: EvidenceLock) {
   const manifest = validateQualificationManifest(input); const clients = evidence.map(readVerifiedClientEvidence);
   if (clients.some((client) => client.manifestHash !== manifest.manifestHash || !manifest.clients.some((item) => item.clientId === client.clientId)) ||
       new Set(clients.map((client) => client.clientId)).size !== clients.length) throw new Error("QUALIFICATION_CLIENT_EVIDENCE_MISMATCH");
-  evidence.forEach((handle) => recheckClientEvidence(handle));
+  evidence.forEach((handle) => recheckClientEvidence(handle, readVerifiedClientEvidence(handle).clientId === held?.clientId ? held.lock : undefined));
   const blockers: Array<{ code: string; clientId?: string; approvalRef?: string; attemptId?: string; candidateId?: string }> = [];
   for (const client of manifest.clients) if (!clients.some((item) => item.clientId === client.clientId)) blockers.push({ code: "QUALIFICATION_CLIENT_MISSING", clientId: client.clientId });
   let commits = 0; let writeAttempts = 0; let cleanupAttempts = 0;
@@ -80,6 +81,10 @@ export function evaluateQualificationRun(input: QualificationManifest, evidence:
         else if (attempt.operation !== "cleanup" && attempt.outcome.status === "applied" &&
             (!attempt.outcome.push || !attempt.head || coordinationPushOutcome(attempt.outcome.push, attempt.head, attempt.ref) !== "updated")) {
           blockers.push({ code: "COORDINATION_UPDATE_ATTRIBUTION_UNPROVEN", clientId: client.clientId, approvalRef, attemptId: attempt.attemptId });
+        }
+        else if (attempt.operation === "cleanup" && attempt.outcome.status === "applied" &&
+            (!attempt.outcome.push || coordinationDeleteOutcome(attempt.outcome.push, attempt.ref) !== "deleted")) {
+          blockers.push({ code: "COORDINATION_DELETE_ATTRIBUTION_UNPROVEN", clientId: client.clientId, approvalRef, attemptId: attempt.attemptId });
         }
       }
     }

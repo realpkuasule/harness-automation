@@ -21,6 +21,8 @@ import { controlEpochDigest } from "./authority.js";
 import { prepareQualificationManifest, saveQualificationManifest, scopeForClient } from "./manifest.js";
 import { collectClientEvidence, evaluateQualificationRun, readVerifiedClientEvidence, recheckClientEvidence } from "./evidence.js";
 import { readSettledQualification, runLocalQualification } from "./qualification.js";
+import { observeQualificationRemote, readQualificationRemote } from "./qualification_remote.js";
+import { applyQualificationCleanup, planQualificationCleanup, recoverQualificationCleanup } from "./qualification_cleanup.js";
 
 const nativeHost = vi.hoisted(() => ({ home: "", sourceGroupSizes: [] as number[] }));
 vi.mock("node:child_process", async (original) => {
@@ -76,12 +78,64 @@ function fixture() {
 function nativeGitFixture({ root, bin, endpoint }: ReturnType<typeof fixture>) {
   const remote = join(bin, "remote.git"); git(root, "init", "--bare", "--quiet", "--template=", remote);
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim(); const trace = join(bin, "git-transport.jsonl");
-  writeFileSync(join(bin, "git"), `#!${process.execPath}\nconst fs=require('node:fs');const cp=require('node:child_process');let a=process.argv.slice(2);if(a.some(x=>['ls-remote','fetch','push'].includes(x))){if(!a.includes(${JSON.stringify(endpoint)})||process.env.HARNESS_GIT_TOKEN!=='synthetic-provider-canary')process.exit(2);fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({argv:a,global:process.env.GIT_CONFIG_GLOBAL,redirects:process.env.GIT_CONFIG_VALUE_2,hooks:process.env.GIT_CONFIG_VALUE_3})+'\\n');a=a.map(x=>x===${JSON.stringify(endpoint)}?${JSON.stringify(remote)}:x);}const r=cp.spawnSync(${JSON.stringify(realGit)},a,{env:process.env,stdio:['inherit','pipe','pipe']});process.stdout.write(r.stdout??'');process.stderr.write(r.stderr??'');process.exit(r.status??1);\n`, { mode: 0o700 });
-  return { trace, remote, realGit };
+  const fault = join(bin, "fault.json"); const fired = join(bin, "fault-fired");
+  writeFileSync(join(bin, "git"), `#!${process.execPath}
+const fs=require('node:fs');const cp=require('node:child_process');let a=process.argv.slice(2);
+const fault=fs.existsSync(${JSON.stringify(fault)})?JSON.parse(fs.readFileSync(${JSON.stringify(fault)},'utf8')):{};
+const deleting=a.includes('push')&&a.at(-1).startsWith(':refs/heads/');
+if(a.some(x=>['ls-remote','fetch','push'].includes(x))){
+  if(!a.includes(${JSON.stringify(endpoint)})||process.env.HARNESS_GIT_TOKEN!=='synthetic-provider-canary')process.exit(2);
+  fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({argv:a,global:process.env.GIT_CONFIG_GLOBAL,redirects:process.env.GIT_CONFIG_VALUE_2,hooks:process.env.GIT_CONFIG_VALUE_3})+'\\n');
+  a=a.map(x=>x===${JSON.stringify(endpoint)}?${JSON.stringify(remote)}:x);
+}
+if(a.includes('ls-remote')&&fault.readbackFailure&&fs.existsSync(${JSON.stringify(fired)}))process.exit(1);
+if(deleting&&fault.beforeDeleteHead)cp.execFileSync(${JSON.stringify(realGit)},['--git-dir='+${JSON.stringify(remote)},'update-ref',a.at(-1).slice(1),fault.beforeDeleteHead]);
+const r=cp.spawnSync(${JSON.stringify(realGit)},a,{env:process.env,stdio:['inherit','pipe','pipe']});
+if(deleting&&fault.readbackFailure)fs.writeFileSync(${JSON.stringify(fired)},'deleted');
+process.stdout.write(deleting&&fault.dropDeleteOutput?'':r.stdout??'');process.stderr.write(r.stderr??'');process.exit(r.status??1);
+`, { mode: 0o700 });
+  return { trace, remote, realGit, fault };
 }
 function syntheticScope(runId: string, controlRef: string): SyntheticScope {
   const genesis = prepareSyntheticObject("control-genesis", { runId, objectId: "genesis", seconds: 1788480000 });
   return { objects: [genesis], controls: [{ fixtureId: "genesis", ref: controlRef }], publications: [{ fixtureId: "genesis", transactionId: "bootstrap", ref: controlRef, expected: null }] };
+}
+async function supervisedFixture(crossClient = false) {
+  const f = fixture(); const native = nativeGitFixture(f); const binding = observeCoordinationBinding(f.root, "origin", "42", "git"); const now = Date.now();
+  const controlRef = "refs/heads/supervised-control"; const sourceRef = "refs/heads/supervised-source";
+  const synthetic = syntheticScope("supervised", controlRef); const source = prepareSyntheticObject("source-fixture", { ...synthetic.objects[0].metadata, objectId: "source" });
+  synthetic.objects.push(source); synthetic.publications.push({ fixtureId: "source", transactionId: "source-create", ref: sourceRef, expected: null });
+  const definition = { kind: "qualification-run" as const, binding, runId: "supervised", synthetic, refs: [controlRef, sourceRef], operations: ["create" as const],
+    maxCommits: 2, maxWriteAttempts: 2, maxCleanupAttempts: 2, expiresAt: new Date(now + 3600_000).toISOString(), cleanupExpiresAt: new Date(now + 7200_000).toISOString() };
+  const clients = [{ clientId: "local", scope: definition }]; const projectRoots = [f.root];
+  if (crossClient) {
+    const root = join(f.bin, "other-client"); mkdirSync(root); git(root, "init", "--quiet"); git(root, "remote", "add", "origin", f.endpoint);
+    const commonDir = join(root, ".git");
+    const plan = planCredentialHostBinding(commonDir, { schemaVersion: "credential-host-binding/1.0", commonDir, repository: "owner/repo", repositoryId: "42", endpointHash: binding.endpointHash,
+      credentials: f.plan.binding.credentials.map(({ hostId, ...credential }) => { expect(hostId).toBe(binding.hostId); return credential; }) });
+    applyCredentialHostBinding(commonDir, plan, plan.planHash);
+    clients[0].scope = { ...definition, maxCommits: 1, maxWriteAttempts: 1, synthetic: { ...synthetic, publications: [synthetic.publications[0]] } };
+    clients.push({ clientId: "other", scope: { ...definition, binding: observeCoordinationBinding(root, "origin", "42", "git"),
+      maxCommits: 1, maxWriteAttempts: 1, maxCleanupAttempts: 0, synthetic: { ...synthetic, publications: [synthetic.publications[1]] } } }); projectRoots.push(root);
+  }
+  const sourceClient = crossClient ? "other" : "local";
+  const manifest = prepareQualificationManifest({ schemaVersion: "qualification-run-manifest/1", runId: "supervised", repository: binding.repository, repositoryId: binding.repositoryId,
+    endpointHash: binding.endpointHash, refs: definition.refs, synthetic, requiredCases: ["dg01-cas"], clients,
+    cleanupClientId: "local", maxCommits: 2, maxWriteAttempts: 2, maxCleanupAttempts: 2, expiresAt: definition.expiresAt, cleanupExpiresAt: definition.cleanupExpiresAt,
+    execution: { kind: "local-synthetic-publication/1", steps: [
+      { stepId: "init", clientId: "local", operation: "bootstrap", fixtureId: "genesis", transactionId: "bootstrap" },
+      { stepId: "source", clientId: sourceClient, operation: "publish-source", fixtureId: "source", transactionId: "source-create" },
+    ] } });
+  const targets = clients.map((client, index) => {
+    const commonDir = client.scope.binding.commonDir; saveQualificationManifest(commonDir, manifest);
+    const scope = scopeForClient(manifest, client.clientId); const inputHash = hashObject(scope); const planHash = hashObject({ inputHash });
+    const packet = createSemanticApprovalPacket({ planHash, inputHash, producerIdentity: "native-runner-fixture", binding: { planHash, inputDigest: inputHash, contextDigest: inputHash, observedHash: inputHash, policyDigest: inputHash },
+      actions: [{ id: scope.kind, kind: "permission-change", protected: true, summary: "LOCAL supervised native fixture", before: null, after: inputHash, reversible: true, recovery: "Retain unknown resources" }] });
+    const approvalRef = recordHumanApproval(commonDir, { scope, packet, approvedBy: "fixture-human", approvedAt: new Date(now).toISOString(), source: { kind: "explicit-human", messageHash: inputHash } }, planHash);
+    return { clientId: client.clientId, projectRoot: projectRoots[index], approvalRef };
+  });
+  const result = await runLocalQualification(manifest, targets);
+  return { f, native, manifest, targets, result, source, sourceRef, controlRef, synthetic, approvalRef: targets[0].approvalRef, sourceClient };
 }
 afterEach(async () => {
   Object.defineProperty(process, "platform", nativePlatform); vi.unstubAllEnvs(); roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true }));
@@ -90,39 +144,73 @@ afterEach(async () => {
 });
 
 describe("authenticated GitHub merge observation (LOCAL native-command fixtures)", { timeout: 30_000 }, () => {
-  it("supervises fixed native publications, observes group exit, then closes and collects without claiming the full DG case", async () => {
-    const f = fixture(); const native = nativeGitFixture(f); const binding = observeCoordinationBinding(f.root, "origin", "42", "git"); const now = Date.now();
-    const controlRef = "refs/heads/supervised-control"; const sourceRef = "refs/heads/supervised-source";
-    const synthetic = syntheticScope("supervised", controlRef); const source = prepareSyntheticObject("source-fixture", { ...synthetic.objects[0].metadata, objectId: "source" });
-    synthetic.objects.push(source); synthetic.publications.push({ fixtureId: "source", transactionId: "source-create", ref: sourceRef, expected: null });
-    const definition = { kind: "qualification-run" as const, binding, runId: "supervised", synthetic, refs: [controlRef, sourceRef], operations: ["create" as const],
-      maxCommits: 2, maxWriteAttempts: 2, maxCleanupAttempts: 2, expiresAt: new Date(now + 3600_000).toISOString(), cleanupExpiresAt: new Date(now + 7200_000).toISOString() };
-    const manifest = prepareQualificationManifest({ schemaVersion: "qualification-run-manifest/1", runId: "supervised", repository: binding.repository, repositoryId: binding.repositoryId,
-      endpointHash: binding.endpointHash, refs: definition.refs, synthetic, requiredCases: ["dg01-cas"], clients: [{ clientId: "local", scope: definition }],
-      cleanupClientId: "local", maxCommits: 2, maxWriteAttempts: 2, maxCleanupAttempts: 2, expiresAt: definition.expiresAt, cleanupExpiresAt: definition.cleanupExpiresAt,
-      execution: { kind: "local-synthetic-publication/1", steps: [
-        { stepId: "init", clientId: "local", operation: "bootstrap", fixtureId: "genesis", transactionId: "bootstrap" },
-        { stepId: "source", clientId: "local", operation: "publish-source", fixtureId: "source", transactionId: "source-create" },
-      ] } });
-    saveQualificationManifest(f.commonDir, manifest); const scope = scopeForClient(manifest, "local"); const inputHash = hashObject(scope); const planHash = hashObject({ inputHash });
-    const packet = createSemanticApprovalPacket({ planHash, inputHash, producerIdentity: "native-runner-fixture", binding: { planHash, inputDigest: inputHash, contextDigest: inputHash, observedHash: inputHash, policyDigest: inputHash },
-      actions: [{ id: scope.kind, kind: "permission-change", protected: true, summary: "LOCAL supervised native fixture", before: null, after: inputHash, reversible: true, recovery: "Retain unknown resources" }] });
-    const approvalRef = recordHumanApproval(f.commonDir, { scope, packet, approvedBy: "fixture-human", approvedAt: new Date(now).toISOString(), source: { kind: "explicit-human", messageHash: inputHash } }, planHash);
-    const result = await runLocalQualification(manifest, [{ clientId: "local", projectRoot: f.root, approvalRef }]);
+  it.each([false, true])("supervises fixed native publications and exact cleanup without claiming the full DG case (cross-client=%s)", async (crossClient) => {
+    const { f, native, manifest, targets, result, source, sourceRef, controlRef, synthetic, approvalRef, sourceClient } = await supervisedFixture(crossClient);
     expect(result.report).toMatchObject({ qualified: false, status: "incomplete", topology: "LOCAL", counts: { commits: 2, writeAttempts: 2, cleanupAttempts: 0 }, countsComplete: true });
     expect(result.report.requiredCases).toEqual([{ id: "dg01-cas", status: "not-run" }]);
     expect(result.report.blockers).toEqual([{ code: "QUALIFICATION_REMOTE_HISTORY_UNPROVEN" }]);
     expect(result.report.execution.steps.map((step) => step.stepId)).toEqual(["init", "source"]);
     expect(readSettledQualification(result.settled).instances[0]).toMatchObject({ leader: { parent: process.pid }, finalMembers: [] });
     // Uncached source transforms really started a compiler descendant; drain did not pass on a warm-loader coincidence.
-    expect(nativeHost.sourceGroupSizes).toHaveLength(1); expect(nativeHost.sourceGroupSizes[0]).toBeGreaterThan(1);
+    expect(nativeHost.sourceGroupSizes).toHaveLength(targets.length); expect(nativeHost.sourceGroupSizes.every((size) => size > 1)).toBe(true);
     expect(() => readSettledQualification({ ...result.settled })).toThrow("QUALIFICATION_RUNNER_DRAIN_UNPROVEN");
     const state = loadHumanAuthorization(f.commonDir, approvalRef); expect(state).toMatchObject({ writesClosed: true, revoked: false });
     expect(state.attempts.every((attempt) => attempt.outcome?.status === "applied")).toBe(true);
     expect(execFileSync(native.realGit, ["rev-parse", sourceRef], { cwd: native.remote, encoding: "utf8" }).trim()).toBe(source.commitSha);
+    const observed = observeQualificationRemote(result.settled); const facts = readQualificationRemote(observed);
+    expect(facts.observations).toEqual([
+      { ref: controlRef, head: synthetic.objects[0].commitSha, ancestry: [synthetic.objects[0].commitSha], winner: expect.objectContaining({ clientId: "local", transactionId: "bootstrap" }) },
+      { ref: sourceRef, head: source.commitSha, ancestry: [source.commitSha], winner: expect.objectContaining({ clientId: sourceClient, transactionId: "source-create" }) },
+    ]);
+    expect(() => readQualificationRemote({ ...observed })).toThrow("QUALIFICATION_REMOTE_ORIGIN_UNPROVEN");
+    expect(() => observeQualificationRemote({ ...result.settled })).toThrow("QUALIFICATION_RUNNER_DRAIN_UNPROVEN");
     const trace = readFileSync(native.trace, "utf8"); expect(trace).not.toContain("synthetic-provider-canary");
-    await expect(runLocalQualification(manifest, [{ clientId: "local", projectRoot: f.root, approvalRef }])).rejects.toThrow("QUALIFICATION_RUN_ALREADY_STARTED");
+    await expect(runLocalQualification(manifest, targets)).rejects.toThrow("QUALIFICATION_RUN_ALREADY_STARTED");
     expect(readFileSync(native.trace, "utf8")).toBe(trace);
+    execFileSync(native.realGit, ["update-ref", sourceRef, synthetic.objects[0].commitSha, source.commitSha], { cwd: native.remote });
+    expect(() => observeQualificationRemote(result.settled)).toThrow("QUALIFICATION_REMOTE_HISTORY_UNPROVEN");
+    execFileSync(native.realGit, ["update-ref", sourceRef, source.commitSha, synthetic.objects[0].commitSha], { cwd: native.remote });
+    const cleanup = planQualificationCleanup(observed, sourceRef);
+    await expect(applyQualificationCleanup({ ...cleanup })).rejects.toThrow("QUALIFICATION_CLEANUP_ORIGIN_UNPROVEN");
+    expect(() => planQualificationCleanup(observed, "refs/heads/main")).toThrow("HUMAN_WRITE_SCOPE_MISMATCH");
+    const raw = new GitHubCoordinationTransport(f.root, "origin", "42", "git");
+    expect(() => raw.deleteRef(sourceRef, source.commitSha)).toThrow("COORDINATION_CLEANUP_AUTHORIZATION_REQUIRED");
+    expect(await applyQualificationCleanup(cleanup)).toMatchObject({ status: "deleted", ref: sourceRef });
+    await expect(applyQualificationCleanup(cleanup)).rejects.toThrow("QUALIFICATION_CLEANUP_ORIGIN_UNPROVEN");
+    const second = planQualificationCleanup(observeQualificationRemote(result.settled), controlRef);
+    expect(await applyQualificationCleanup(second)).toMatchObject({ status: "deleted", ref: controlRef });
+    expect(execFileSync(native.realGit, ["for-each-ref", "--format=%(refname)"], { cwd: native.remote, encoding: "utf8" }).trim()).toBe("");
+    const absent = planQualificationCleanup(observeQualificationRemote(result.settled), sourceRef);
+    expect(await applyQualificationCleanup(absent)).toEqual({ status: "observed-absent", ref: sourceRef, attemptId: null });
+    const final = loadHumanAuthorization(f.commonDir, approvalRef);
+    expect(final.attempts.filter((attempt) => attempt.operation === "cleanup")).toHaveLength(2);
+    expect(final.candidates).toHaveLength(crossClient ? 1 : 2); expect(final.attempts.every((attempt) => attempt.outcome?.status === "applied")).toBe(true);
+  }, 90_000);
+
+  it.each(["stale", "readback", "lost-output"])("retains exact cleanup failures and recovers facts without replay (%s)", async (fault) => {
+    const { f, native, result, sourceRef, controlRef, synthetic, approvalRef } = await supervisedFixture();
+    const cleanup = planQualificationCleanup(observeQualificationRemote(result.settled), sourceRef);
+    writeFileSync(native.fault, JSON.stringify(fault === "stale" ? { beforeDeleteHead: synthetic.objects[0].commitSha } : fault === "readback" ? { readbackFailure: true } : { dropDeleteOutput: true }));
+    let failure: unknown; try { await applyQualificationCleanup(cleanup); } catch (error) { failure = error; }
+    const attempt = loadHumanAuthorization(f.commonDir, approvalRef).attempts.at(-1)!;
+    expect(failure instanceof Error ? failure.message : null, JSON.stringify(attempt.outcome?.push)).toContain(fault === "stale" ? "COORDINATION_CAS_CONFLICT" : fault === "readback" ? "COORDINATION_REMOTE_OBSERVATION_FAILED" : "COORDINATION_WRITE_OUTCOME_UNKNOWN");
+    expect(attempt).toMatchObject({ operation: "cleanup", outcome: { status: fault === "stale" ? "rejected" : "unknown" } });
+    await expect(applyQualificationCleanup(cleanup)).rejects.toThrow("QUALIFICATION_CLEANUP_ORIGIN_UNPROVEN");
+    const pushes = () => readFileSync(native.trace, "utf8").trim().split("\n").map((line) => JSON.parse(line).argv as string[]).filter((argv) => argv.includes("push")).length;
+    const before = pushes(); writeFileSync(native.fault, "{}");
+    if (fault === "stale") {
+      await expect(recoverQualificationCleanup(f.root, approvalRef, attempt.attemptId)).rejects.toThrow("COORDINATION_RECOVERY_REQUIRED");
+      expect(execFileSync(native.realGit, ["rev-parse", sourceRef], { cwd: native.remote, encoding: "utf8" }).trim()).toBe(synthetic.objects[0].commitSha);
+    } else {
+      expect(() => observeQualificationRemote(result.settled)).toThrow("HUMAN_WRITE_OUTCOME_UNRESOLVED");
+      const recovered = await recoverQualificationCleanup(f.root, approvalRef, attempt.attemptId);
+      expect(recovered).toMatchObject({ observed: null, status: fault === "readback" ? "applied" : "state-observed" });
+      await recoverQualificationCleanup(f.root, approvalRef, attempt.attemptId);
+      expect(loadHumanAuthorization(f.commonDir, approvalRef).attempts.at(-1)!.outcome!.status).toBe(fault === "readback" ? "applied" : "unknown");
+    }
+    expect(pushes()).toBe(before);
+    expect(execFileSync(native.realGit, ["rev-parse", controlRef], { cwd: native.remote, encoding: "utf8" }).trim()).toBe(synthetic.objects[0].commitSha);
+    expect(loadHumanAuthorization(f.commonDir, approvalRef).attempts.filter((item) => item.operation === "cleanup")).toHaveLength(1);
   }, 90_000);
 
   it("collects actual local identity and complete receipts without turning missing clients, stale copies or absent execution into PASS", () => {

@@ -12,6 +12,7 @@ export interface CoordinationWriteIntent {
   repository: string; repositoryId: string; endpointHash: string; credentialBindingHash: string;
   credentialRef: string; actor: string; hostId: string; ref: string; head: string; expected: string | null;
 }
+export type CoordinationDeleteIntent = Omit<CoordinationWriteIntent, "head" | "expected"> & { expected: string };
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 function requireRef(ref: string): void {
   if (!/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(ref) || ref.includes("..") ||
@@ -43,7 +44,8 @@ export class GitHubCoordinationTransport implements CoordinationTransport {
   private readonly endpoint: { value: string; hash: string };
   constructor(projectRoot: string, private readonly remote: string, repositoryId: string, private readonly credentialId: string,
     // Supplied only by the real qualification/production authority composition, not a CLI boolean or JSON proof.
-    private readonly authorizeWrite?: (intent: CoordinationWriteIntent) => void) {
+    private readonly authorizeWrite?: (intent: CoordinationWriteIntent) => void,
+    private readonly authorizeDelete?: (intent: CoordinationDeleteIntent) => void) {
     const context = resolveRepositoryContext(projectRoot); this.projectDir = context.projectDir;
     this.endpoint = remotePushEndpoint(this.projectDir, remote);
     if (!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(this.endpoint.value)) throw new Error("CREDENTIAL_HTTPS_ENDPOINT_REQUIRED");
@@ -87,5 +89,17 @@ export class GitHubCoordinationTransport implements CoordinationTransport {
       hostId: this.binding.hostId, ref, head: sha, expected };
     // Identity probes can be slow: authority/time checks and reservation belong immediately before dispatch.
     return this.execute(directory, ["push", "--porcelain", "--no-verify", "--recurse-submodules=no", `--force-with-lease=${ref}:${expected ?? ""}`, this.endpoint.value, `${sha}:${ref}`], () => this.authorizeWrite!(intent));
+  }
+  deleteRef(ref: string, expected: string) {
+    requireRef(ref);
+    if (!SHA.test(expected)) throw new Error("COORDINATION_CONTROL_OBJECT_INVALID");
+    if (!this.authorizeDelete) throw new Error("COORDINATION_CLEANUP_AUTHORIZATION_REQUIRED");
+    const credential = this.binding.credentials.find((item) => item.id === this.credentialId)!;
+    const intent: CoordinationDeleteIntent = { repository: this.repository, repositoryId: this.repositoryId, endpointHash: this.endpoint.hash,
+      credentialBindingHash: this.binding.bindingHash, credentialRef: credential.id, actor: credential.identity, hostId: this.binding.hostId, ref, expected };
+    const directory = objectDirectory();
+    try {
+      return this.execute(directory, ["push", "--porcelain", "--no-verify", "--recurse-submodules=no", `--force-with-lease=${ref}:${expected}`, this.endpoint.value, `:${ref}`], () => this.authorizeDelete!(intent));
+    } finally { rmSync(directory, { recursive: true, force: true }); }
   }
 }
