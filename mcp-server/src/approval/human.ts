@@ -120,6 +120,23 @@ function packetApprovesScope(approval: Approval): boolean {
 export function loadHumanAuthorization(commonDir: string, approvalRef: string): HumanAuthorization {
   return history(commonDir, approvalRef, false);
 }
+
+/** Complete read-only family; never lose a durable child because its LKG append was interrupted. */
+export function loadHumanAuthorizationFamily(commonDir: string, approvalRef: string) {
+  const parent = loadHumanAuthorization(commonDir, approvalRef);
+  if (parent.approval.scope.kind !== "qualification-run" || !parent.approval.scope.manifest) throw new Error("QUALIFICATION_MANIFEST_REQUIRED");
+  const children: Array<{ approvalRef: string; state: HumanAuthorization }> = []; const allocations = new Set<string>();
+  for (const reference of listReceiptTransactions({ root: commonDir, domain: DOMAIN })) {
+    if (reference === approvalRef) continue;
+    const state = loadHumanAuthorization(commonDir, reference); const scope = state.approval.scope;
+    if (scope.kind === "qualification-run" && scope.manifest && hashObject(scope.manifest) === hashObject(parent.approval.scope.manifest)) throw new Error("QUALIFICATION_CLIENT_ALREADY_BOUND");
+    if (scope.kind !== "takeover" || scope.qualification?.parentApprovalRef !== approvalRef) continue;
+    parentAuthorization(commonDir, scope);
+    if (allocations.has(scope.qualification.allocationId)) throw new Error("HUMAN_ALLOCATION_ALREADY_BOUND");
+    allocations.add(scope.qualification.allocationId); children.push({ approvalRef: reference, state });
+  }
+  return { parent, children };
+}
 function history(commonDir: string, approvalRef: string, repairTail: boolean): HumanAuthorization {
   if (!digest.safeParse(approvalRef).success) throw new Error("HUMAN_APPROVAL_REQUIRED");
   const key = { root: commonDir, domain: DOMAIN, transactionId: approvalRef };
@@ -350,10 +367,12 @@ export function revokeHumanAuthorization(commonDir: string, approvalRef: string,
 
 /** Permanent ordinary-write closure, not revocation or a claim that unknown work has drained. */
 export function closeQualificationWrites(commonDir: string, approvalRef: string): HumanAuthorization {
-  return locked(commonDir, () => {
-    const state = history(commonDir, approvalRef, true); const scope = state.approval.scope;
-    if (scope.kind !== "qualification-run" || !scope.manifest) throw new Error("QUALIFICATION_MANIFEST_REQUIRED");
-    if (!state.writesClosed) append(commonDir, state.approval.packet, { kind: "qualification-writes-closed", runId: scope.runId, manifest: scope.manifest });
-    return history(commonDir, approvalRef, false);
-  });
+  return locked(commonDir, (lock) => closeQualificationWritesLocked(lock, commonDir, approvalRef));
+}
+export function closeQualificationWritesLocked(lock: MutationLock, commonDir: string, approvalRef: string): HumanAuthorization {
+  assertMutationLock({ projectDir: commonDir, commonDir, repository: true }, lock);
+  const state = history(commonDir, approvalRef, true); const scope = state.approval.scope;
+  if (scope.kind !== "qualification-run" || !scope.manifest) throw new Error("QUALIFICATION_MANIFEST_REQUIRED");
+  if (!state.writesClosed) append(commonDir, state.approval.packet, { kind: "qualification-writes-closed", runId: scope.runId, manifest: scope.manifest });
+  return history(commonDir, approvalRef, false);
 }

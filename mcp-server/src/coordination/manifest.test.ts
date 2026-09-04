@@ -44,6 +44,23 @@ function approve(scope: ReturnType<typeof scopeForClient>, tag = "first") {
   return recordHumanApproval(scope.binding.commonDir, { packet, scope, approvedBy: "fixture-human", approvedAt: "2026-09-04T03:00:00.000Z", source: { kind: "explicit-human", messageHash: digest } }, planHash);
 }
 
+it("binds ordered fixed publication steps without inferring missing dependencies or accepting commands", () => {
+  const f = fixture(); const next = prepareSyntheticObject("source-fixture", { ...f.source.metadata, objectId: "source-next" }, [f.source.commitSha]);
+  f.input.synthetic.objects.push(next); const publication = { fixtureId: "source-next", transactionId: "source-update", ref: sourceRef, expected: f.source.commitSha };
+  f.input.synthetic.publications.push(publication); f.input.clients[1].scope.synthetic.publications.push(publication);
+  f.input.execution = { kind: "local-synthetic-publication/1", steps: [
+    { stepId: "init", clientId: "a", operation: "bootstrap", fixtureId: "genesis", transactionId: "bootstrap" },
+    { stepId: "source", clientId: "b", operation: "publish-source", fixtureId: "source", transactionId: "source-create" },
+    { stepId: "next", clientId: "b", operation: "publish-source", fixtureId: "source-next", transactionId: "source-update" },
+  ] };
+  const manifest = prepareQualificationManifest(f.input); expect(manifest.execution?.steps).toHaveLength(3);
+  expect(readdirSync(f.dirs[0])).toEqual([]);
+  for (const patch of [{ clientId: "a" }, { operation: "bootstrap" }, { transactionId: "different" }, { stepId: "init" }, { command: "shell" }]) {
+    const input = structuredClone(f.input); Object.assign(input.execution!.steps[1], patch); expect(() => prepareQualificationManifest(input)).toThrow();
+  }
+  const reordered = structuredClone(f.input); reordered.execution!.steps.reverse(); expect(() => prepareQualificationManifest(reordered)).toThrow("QUALIFICATION_MANIFEST_INVALID");
+});
+
 it("keeps hashes acyclic, requires exact per-client approval and counts parent budgets including child allocations once", () => {
   const f = fixture(); f.input.clients[0].scope.takeoverAllocations = [{ allocationId: "child-a", workItem: "github:owner/repo#86", controlRef, sourceRef, genesisSha: f.genesis.commitSha, maxCommits: 2, maxWriteAttempts: 2 }];
   const manifest = prepareQualificationManifest(f.input);

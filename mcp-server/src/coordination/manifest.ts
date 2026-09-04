@@ -23,6 +23,9 @@ const inputSchema = z.object({
     expected: z.string().regex(/^[a-f0-9]{40}$/u).nullable(),
     publications: z.array(z.object({ clientId: id, transactionId: id }).strict()).length(2),
   }).strict().optional(),
+  execution: z.object({ kind: z.literal("local-synthetic-publication/1"),
+    steps: z.array(z.object({ stepId: id, clientId: id, operation: z.enum(["bootstrap", "publish-source"]), fixtureId: id, transactionId: id }).strict()).min(1).max(4096),
+  }).strict().optional(),
 }).strict();
 const manifestSchema = inputSchema.extend({ manifestHash: digest });
 export type QualificationManifest = z.infer<typeof manifestSchema>;
@@ -78,6 +81,20 @@ export function prepareQualificationManifest(input: QualificationManifestInput):
     if (negative?.fixtureId === publication.fixtureId) {
       if (owners.length !== 2 || owners.some((owner) => !negative.publications.some((item) => hashObject(item) === hashObject(owner)))) invalid();
     } else if (owners.length !== 1 || owners[0].transactionId !== publication.transactionId) invalid();
+  }
+  if (value.execution) {
+    const steps = value.execution.steps; const seen = new Set<string>(); const published = new Set<string>(); const heads = new Map<string, string>();
+    if (!value.synthetic.controls.length || new Set(steps.map((step) => step.stepId)).size !== steps.length) invalid();
+    for (const step of steps) {
+      const client = value.clients.find((item) => item.clientId === step.clientId);
+      const publication = client?.scope.synthetic.publications.find((item) => item.fixtureId === step.fixtureId && item.transactionId === step.transactionId);
+      const plan = value.synthetic.objects.find((item) => item.metadata.objectId === step.fixtureId);
+      if (!publication || !plan || (step.operation === "bootstrap") !== (plan.kind === "control-genesis") ||
+          seen.has(step.fixtureId) || (heads.get(publication.ref) ?? null) !== publication.expected ||
+          plan.parents.some((parent) => !published.has(parent))) invalid();
+      if (negative?.fixtureId === step.fixtureId) throw new Error("QUALIFICATION_RUNNER_CONCURRENCY_UNSUPPORTED");
+      seen.add(step.fixtureId); published.add(plan!.commitSha); heads.set(publication!.ref, plan!.commitSha);
+    }
   }
   if (Buffer.byteLength(canonicalJson(value)) > MAX_BYTES) invalid();
   return { ...value, manifestHash: hashObject(value) };

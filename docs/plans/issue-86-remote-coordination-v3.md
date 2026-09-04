@@ -839,6 +839,119 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
    最终跨机器验收目标保持不变。宿主通道尚未实现属于实施缺口，不包装成用户凭据
    blocker，也不据此缩减完整 v3 目标。本节不执行真实网络写入、登记凭据或发布。
 
+#### 6.1.3 本机 synthetic runner/collector 的最小实施批次
+
+1. 先实现固定 `local-synthetic-publication/1` 运行方式，仅顺序调用既有原生 runtime
+   的两类操作：`bootstrap` 发布已批准空 genesis；`publish-source` 发布已批准空树
+   source fixture。每一步仍走 Broker、对象验证、candidate/attempt 回执和 readback，
+   不用测试 transport 替代。初始化只有 §6.1.1 的隔离 bare 对象存储，不创建交付
+   checkout、不复制项目对象、不注册凭据或采用生产配置。这是合成发布及执行证据
+   闭环，不是完整 `dg01-cas` 用例组；不会因为 bootstrap 成功就标该组 PASS。
+2. manifest 的哈希输入增加固定 execution 描述：上述 kind 与有序 steps，每步只含
+   `stepId/clientId/operation/fixtureId/transactionId`。真实 ref/expected/对象字节
+   从对应已批准 client scope/catalog 唯一解析；逐项核验操作 kind、唯一发布端、
+   transactionId 和额度。bootstrap 在其后续依赖之前，source 父对象依赖按清单
+   顺序满足；不按运行时猜测重排、补步骤、重试或扩额。已有不含 execution 的
+   manifest 可以历史读取，但不能隐式生成运行计划。本批不调度同 SHA 多发布者
+   对照；包含该待执行步骤的运行请求须在任何写入前报告 runner 不支持，不能串行
+   执行后冒充 §6.1.2 的 barrier 对照。required case IDs 是验收要求，不是执行结果。
+3. 一个前台 supervisor 仅为列入本轮的本机客户端启动**固定原生 client 入口**，
+   在开始步骤前核对真实 binding/artifact/manifest/scope。各 client 使用 supervisor
+   实际创建的独立进程组；登记实际 ChildProcess 句柄、PID/PGID/可核验启动身份、
+   本轮 IPC 关联和执行 artifact，不能从 CLI JSON 导入。同步 `runWithCredential`
+   启动的 git/gh 及其后代必须留在该受控组内，禁止 shell、daemon、脱组或
+   fire-and-forget；命令、参数和凭据仍由现有固定 runtime/Broker 生成。清单只能
+   选步骤，不可指定任意可执行文件或把任意回调标为受信 runner。
+4. 正常收尾顺序为：**停止新增调度 → 等待全部已启动步骤/子操作 → 验证进程组
+   收敛 → close → collector**。client leader 在全部同步调用结束后进入固定
+   no-more-spawn 阶段并保活；supervisor 读取实际 OS 进程组成员，确认只有仍由本轮
+   持有的 leader 后，才令其正常退出，等待进程 close 并确认无残留组成员。仅 child
+   exit、IPC 自报、spawnSync 返回或 Promise.allSettled 都不能代替该检查。此处
+   覆盖的是本轮固定入口的进程树，不是整个宿主/editor 的写者覆盖。随后逐端取得
+   既有 apply.lock 写/读父票 writes-closed，再同锁读取完整父子 receipt/LKG；
+   supervisor 不得持父锁等待需要该锁的 client，避免再次制造锁嵌套。
+5. 每个步骤与停止检查有界；异常退出、超时、截断、残留后代、失联或无法确认组
+   身份时停止新调度，保留事实和远端资源，不签发 settled。终止只可针对仍可验证
+   为本轮实际创建并持有的进程组；leader 已意外退出、PID/PGID 可能复用或身份不明
+   时不得按旧数字任意 kill。即使曾发送 TERM/KILL 或稍后看不见 leader，也不能
+   据此把异常运行升级为正常收敛。未决远端写、锁失去所有权仍遵守既有恢复边界；
+   有界停止能力不足须如实报告，不能通过等待到票据过期来取得清理权。
+6. 正常 supervisor 才能产生私有 WeakMap settled handle，绑定 manifest、全部
+   client 执行实例和实际收敛证据；native collector 另发绑定真实身份/artifact、
+   关闭事件和完整链 heads 的 facts handle。二者共同供 §6.1.2 唯一清理端使用，
+   loader 只读成功不能制造前者。清理前在原批准锁/窗口/预算内重新核对链和实际
+   ref；来源缺失、unknown、句柄失效或进程重启时仅保留并允许只读恢复，不以导入
+   JSON 重建授权。所有 candidate/attempt/outcome/close 继续写原 approval-human
+   链；运行日志是证据附件而非另一审批库、配额账本或常驻服务。
+7. 本批报告精确步骤与结果、本机进程拓扑和实际 transport 证据；本机收集结果不
+   冒充跨机器资格，未执行的组/子断言仍列为缺口。完整固定 case runner、同 SHA
+   受控并发、跨机器受信通道和生产采用仍需实现及独立证据。本节只确定实现接口，
+   不批准或执行任何真实网络写入、凭据登记、生产启用或额外清理。
+
+#### 6.1.4 本机跨 client 发布事实、远端合成历史与精确清理
+
+1. 最小接口为 `observeQualificationRemote(settled, clientEvidence)`、沿用的
+   `planQualificationCleanup(manifest, settled, clientEvidence, remoteEvidence)`
+   和 `applyQualificationCleanup(cleanupHandle)`；前两者只派生事实/精确意图，不
+   新授权限。settled/evidence/cleanupHandle 必须来自既有私有进程内 registry，
+   真实 cleanup client、repo/endpoint、credential 与 artifact 从 manifest 及
+   native binding 取得，不能注入任意 transport/JSON/布尔证据。可序列化的报告
+   或 plan hash 只供审阅，不可作为删除凭证。缺少实际进程组停稳仍保留现有门禁。
+2. 用唯一 cleanup client 的真实 Broker 对每个获批 ref 执行：读取 exact SHA →
+   fetch 该 SHA 到隔离 bare → 核验完整可达图 → 再读 exact ref，漂移则 retain。
+   复用 objects 的 `validateSyntheticObject` 与 publication 的 source ancestry
+   验证：actual commit 原始字节、空 tree、父节点逐一对应本轮已批准 descriptor，
+   拒绝 catalog 外祖先、项目代码、未知对象或将读取失败当 absent。本批运行方式
+   只有 bootstrap/source；control ref 必须是其 exact 无父 genesis，source ref
+   必须属于获批 source 图。即便额外 control record 格式合法，也不因此取得本批
+   删除权。后续完整 case 的 control 历史复用 Store/history 的完整树和增量验证，
+   不另建历史后端、不以一次 ancestry 检查替代；该后续支持仍需实现。
+3. 跨端归属从全部受信父子链计算，不只认 cleanup 端自己的 Applied。将每个实际
+   candidate 的 subject、父/tree/对象字节 hash、created SHA，与该 client 的
+   manifest publication/transactionId、exact attempt ref/expected/head 和持久化
+   正向 push 结果逐项关联；当前 ref 的 SHA 须有本轮真实更新证据且通过上条对象
+   验证。catalog 中“允许生成”或 ancestry 中“曾出现”不是当前归属；另一端的
+   合法赢家可清理，同 SHA `=`、已知 rejected 或仅 state-observed 不计赢家。
+   同一竞争出现两个不相容的更新归属、遗漏端/子票或任一 unknown 均 retain，
+   不为清理反向改写 verdict。跨客户端事实通过不等于跨机器或完整 DG 资格通过。
+4. 清理端必须位于原 manifest cleanupClientId/refs/cleanupExpiresAt/预算范围内；
+   所有普通写已关闭、原生运行已收敛、完整父子链无未决结果。持 cleanup common-dir
+   的既有 apply.lock，重验真实 binding/artifact、上述事实及远端 exact SHA，
+   再用既有 human 预算入口登记 `operation: cleanup, head: null, candidateId: null,
+   expected: <verified SHA>`。仅在传入受信 cleanup handle 时替换原“本端最后一次
+   Applied”所有权判断；无 handle 的 manifest cleanup 继续 fail-closed，其余
+   撤销、有效窗口、身份、单一未决 attempt 和预算检查不削弱。不生成 commit 或
+   candidate，不新设审批类型。每次实际 dispatch 包括失败均占 cleanup attempt；
+   unknown 只读恢复不重放，另一次获准网络尝试仍另计，不借相同 transactionId 免额。
+5. **回执推进不应造成自锁，也不能被泛化忽略。** settled 绑定原运行实例和关闭
+   时的已验证前缀，不把首次 facts 的全局 LKG head 永久当作唯一可接受值。每次
+   cleanup 前重新 native collect 全部相关链；逐链验证原前缀与当前完整合法后缀，
+   普通写关闭事实不变，不接受新增普通 candidate/attempt/child。本次 reservation
+   追加后，dispatch 校验只认可该 exact attempt 及其新链头，不与追加前快照机械
+   比较，也不放行任意 tail。完成一项后原生重收集，下一项重新派生 cleanup handle；
+   已完成的获批 cleanup 后缀可验证继承，任何未决、撤销或非预期事实变化仍阻断。
+   不用“忽略 cleanup 事件”或更新用户 JSON 来绕过漂移检查，不另建可变清理账本。
+6. 在同一 GitHub transport/Broker 增加窄 `deleteRef(ref, expectedSha)` 操作，
+   只有受信 cleanup dispatch guard 可调用；普通 push 仍要求非空 SHA，不能把
+   空字符串解释为通用删除。固定命令仅推送 `:<exact ref>`，并带
+   `--force-with-lease=<exact ref>:<expected SHA>`；禁 wildcard/mirror/批量 refs。
+   借用同锁覆盖准备、dispatch、正向结果耐久记录、readback 和最终 outcome，
+   最后由原持有者释放。Broker 身份/权限探测后立即重验票据、时间和 exact intent；
+   不把探测前的许可缓存当作 dispatch 许可。
+7. 在现有 push-result 分类器增加严格删除分支，不复用非空 source SHA 的更新
+   正则：只有无执行异常的完整 exact-ref `-`/`[deleted]` 正向结果，加上真实
+   readback absent，才能最终 Applied。先耐久保存实际删除结果，再读回；超时、
+   截断、未知分类或删除后读回失败保留 unknown。失败/拒绝绝不因后来 absent
+   升级；开始时已 absent 只记“观察到不存在”，不 dispatch、不消耗新尝试，也不
+   声称本次删除。未知尝试缺少可靠正向删除证据时，恢复后 absent 仍只是观察事实；
+   若已耐久保存正向结果，可按同事务只读补齐，不重删、不退回或重建远端 ref。
+8. 此批以 existing LOCAL/native tests 覆盖另一 client 创建、唯一 cleaner 删除，
+   图外/源码祖先/错误 ref/伪造 handle/未停稳/unknown/超预算拒绝，ref 在观察后
+   改变时 exact delete 失败，同 SHA no-op 不获归属，以及两 ref 依次清理不会因
+   第一条合法 cleanup 回执自锁。报告分别列发布事实、对象验证、停稳和清理结果；
+   即便这些通过，未执行的 DG 子断言及跨机器资格仍 incomplete。本节不进行真实
+   GitHub 写入、凭据登记或生产启用，不扩大既有有限隔离测试/清理授权。
+
 ## 7. 施工顺序与最小证据
 
 1. 先给协议/时间/错误合同与 CLI 负面用例加测试，再实现窄域；随后补 Broker 的真实
