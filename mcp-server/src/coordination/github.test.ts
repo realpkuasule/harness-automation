@@ -58,8 +58,13 @@ function nativeGitFixture({ root, bin, endpoint }: ReturnType<typeof fixture>) {
 afterEach(() => { Object.defineProperty(process, "platform", nativePlatform); vi.unstubAllEnvs(); roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })); });
 
 describe("authenticated GitHub merge observation (LOCAL native-command fixtures)", { timeout: 30_000 }, () => {
-  it("claims an expired unchanged generation only from the real reader path, preserving source and merge heads separately", () => {
-    const { root, commonDir, provider, record, calls } = fixture();
+  it.each([false, true])("claims an expired unchanged generation from the real reader, including a frozen source (%s)", (frozen) => {
+    const { root, commonDir, provider, record: original, calls } = fixture();
+    const record = frozen ? createCoordinationRecord({ ...original, transactionId: "frozen-transfer", handoff: {
+      transferId: "frozen-transfer", source: { owner: original.owner, machine: original.machine, generation: original.generation,
+        epoch: original.controlEpochDigest, head: original.lastObservedHead, expiresAt: original.expiresAt! },
+      target: { owner: "another", machine: "another-host" },
+    } }) : original;
     const remote = join(root, "remote.git"); git(root, "init", "--bare", "--quiet", remote);
     const controlRef = "refs/heads/coordination"; let genesis = "";
     const store = new GitCoordinationStore(controlRef, { ...localTransport(root, remote), repositoryId: "42" }, (candidate) => { if (!candidate.expectedControlSha) genesis = candidate.controlSha; }, true,
@@ -73,6 +78,7 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
     expect(terminal).toMatchObject({ expiresAt: null, lifecycleState: "Integrated", generation: 1, closeOwnerGeneration: 1, lastObservedHead: record.lastObservedHead,
       integration: { integratedSourceHead: record.lastObservedHead, integratedCommit: "c".repeat(40), headRepositoryId: "43", baseRepositoryId: "42" } });
     expect(validRecord(terminal)).toBe(true);
+    expect(terminal.handoff).toBeUndefined(); // The frozen source remains in the validated ancestor history.
     expect(() => lifecycle.rebind(record.workItem, expectedRecord(terminal), "no-write", record.lastObservedHead)).toThrow("COORDINATION_WRITE_LEASE_UNAVAILABLE");
     expect(() => lifecycle.terminalClaim(record.workItem, expectedRecord(record), 9, "main")).toThrow("COORDINATION_STALE_RECORDHASH");
     expect(readFileSync(calls, "utf8")).not.toContain("synthetic-provider-canary");

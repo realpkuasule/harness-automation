@@ -58,6 +58,7 @@
         "evidenceHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
       }
     },
+    "handoff": { "$ref": "./coordination-handoff.schema.json" },
     "closeOwnerGeneration": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
     "transactionId": { "type": "string", "minLength": 1 },
     "recordHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }

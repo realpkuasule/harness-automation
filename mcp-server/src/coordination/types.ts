@@ -1,3 +1,5 @@
+import type { CoordinationHandoff } from "./handoff_record.js";
+
 export const COORDINATION_SCHEMA_VERSION = "github-coordination/1.0" as const;
 
 export type CoordinationLifecycle = "Admitted" | "Prepared" | "Active" | "Draft" | "Ready" | "MergeArmed" | "Integrated" | "Closing" | "Closed" | "Abandoned";
@@ -51,6 +53,7 @@ export interface CoordinationRecord {
   renewal?: { transactionId: string; proposedExpiresAt: string; reservedAt: string };
   renewalConfirmation?: RenewalProof;
   integration?: MergeEvidence;
+  handoff?: CoordinationHandoff;
   closeOwnerGeneration?: number;
   transactionId: string;
   recordHash: string;

@@ -12,6 +12,11 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
   credential-bound transport. A successful push without exact history readback
   remains unknown. Recovery fetches validated remote history without replaying a
   push, and can record historical success without restoring ownership or lease time.
+- `coordination/handoff_record.ts` defines the strict transfer attachment without a
+  new lifecycle state. An unaccepted handoff blocks ordinary writes, renew and
+  rebind. A verified merge can still terminate that exact frozen generation; the
+  pending attachment is superseded, with its evidence retained in Git history.
+  Record shape and hashes alone are not native transfer or drain evidence.
 - `coordination/runtime.ts` assembles the actual native host binding, Keychain
   resolver, credential Broker, HTTPS Git transport, GitHub server clock and lifecycle
   handlers for a bounded qualification ticket. It does not require a pre-existing

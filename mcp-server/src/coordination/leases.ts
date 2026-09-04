@@ -6,7 +6,7 @@ import type { CoordinationExpected, CoordinationRecord, RenewalProof } from "./t
 
 export function requireWriteLease(record: CoordinationRecord, expected: CoordinationExpected, clock: CoordinationClock): void {
   assertExpected(record, expected);
-  if (record.expiresAt === null || record.renewal) throw new Error("COORDINATION_WRITE_LEASE_UNAVAILABLE");
+  if (record.expiresAt === null || record.renewal || record.handoff && !record.handoff.targetAcceptance) throw new Error("COORDINATION_WRITE_LEASE_UNAVAILABLE");
   clock.requireBefore(record.expiresAt);
 }
 export function nextLease(args: {

@@ -119,6 +119,8 @@ export class CoordinationLifecycleService {
     if (current.record.expiresAt === null) fail("COORDINATION_TERMINAL_CLAIM_INVALID");
     const integration = this.provider.observeMerge(current.record, number, baseRef);
     const content = recordWithoutHash(current.record); delete content.renewal; delete content.renewalConfirmation;
+    // A terminal claim supersedes pending transfer authority; its evidence remains in validated ancestors.
+    delete content.handoff;
     const next = createCoordinationRecord({ ...content, integration, lifecycleState: "Integrated", expiresAt: null,
       closeOwnerGeneration: current.record.generation, transactionId: randomUUID() });
     return this.confirm(this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next }));

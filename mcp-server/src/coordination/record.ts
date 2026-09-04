@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { hashObject } from "../v2/fs.js";
 import { COORDINATION_SCHEMA_VERSION, type CoordinationExpected, type CoordinationRecord, type RenewalProof } from "./types.js";
+import { handoffSchema, validHandoff } from "./handoff_record.js";
 
 const text = z.string().min(1).max(512).refine((value) => !/[\x00-\x1f\x7f]/u.test(value));
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -39,6 +40,7 @@ export const coordinationRecordSchema = z.object({
   renewal: z.object({ transactionId: text, proposedExpiresAt: timestamp, reservedAt: timestamp }).strict().optional(),
   renewalConfirmation: renewalProofSchema.optional(),
   integration: mergeEvidenceSchema.optional(),
+  handoff: handoffSchema.optional(),
   closeOwnerGeneration: generation.optional(), transactionId: text, recordHash: digest,
 }).strict();
 
@@ -65,7 +67,7 @@ export function validRecord(input: unknown): input is CoordinationRecord {
       integration.baseRepositoryId === record.repositoryId && integration.observer === record.owner && integration.hostId === record.machine &&
       Number.isFinite(Date.parse(integration.observedAt)) && new Date(integration.observedAt).toUTCString() === integration.observedAt &&
       integration.evidenceHash === hashObject({ ...integration, evidenceHash: undefined })) &&
-    record.recordHash === hashObject(recordWithoutHash(record));
+    validHandoff(record) && record.recordHash === hashObject(recordWithoutHash(record));
 }
 export function createCoordinationRecord(input: Omit<CoordinationRecord, "schemaVersion" | "recordHash">): CoordinationRecord {
   const record: CoordinationRecord = { ...input, schemaVersion: COORDINATION_SCHEMA_VERSION, recordHash: "" };
