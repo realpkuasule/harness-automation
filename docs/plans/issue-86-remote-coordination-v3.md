@@ -78,7 +78,8 @@ credentials/approval/receipt 域补齐下列窄实现，不引入 Provider 平�
   和本操作能力。`x-oauth-scopes`、repo.permissions、配置自报 scopes 都不是
   fine-grained PAT 写能力证明；区分人工登记的权限摘要与实际验证的能力。读能力用
   对应真实 endpoint；写能力用同 credential/purpose/repo 的获批隔离写入证据及实际
-  mutation/readback，不能额外写生产 ref 来 probe。401/403 或必要能力未知时阻断，
+  mutation/readback，不能额外写生产 ref 来 probe。401/403 阻断，普通生产路径的
+  必要能力未知也阻断；首次隔离试写按 §2.2 授权，不能要求先有待证明的写能力。
   不反复 login、不自动提权，也不因 fine-grained PAT 缺 OAuth scope header 永久拒绝。
 - **takeover 批准**：命令只接收批准引用，既有 approval 域把 HumanApproval 验为
   同一 semantic packet 的真实人工批准事件，并通过同一 receipt chain/LKG 装载；
@@ -98,6 +99,47 @@ credentials/approval/receipt 域补齐下列窄实现，不引入 Provider 平�
 Provider adapter 的证据，以及未注册、错用途、伪造批准、secret canary 的拒绝证据；
 单测注入不代替 OS/GitHub LIVE。实际 token 登记/解锁或新增权限是后续明确人工门，
 与“代码尚缺 resolver/handler”分别报告；生产采用仍另需 DG-01 资格和启用批准。
+
+### 2.2 固定用途的人工授权回执与写尝试预算
+
+在既有 approval 域增加一个小型 `approval/human.ts`，复用 semantic packet、
+receipt/LKG、安全路径和共享 mutation lock，不伪装成 file/workspace recovery。
+人工事件使用同一 receipt 服务的独立类型命名空间（如 `approval-human`），不混入
+现有最多两次的 Reviewer attempt 目录，也不建立第二套存储/审批引擎。
+固定支持以下三种用途，不接受任意 policy/action 或 CLI JSON 自报批准：
+
+| 用途 | 批准绑定与实际准入 |
+|---|---|
+| `qualification-run` | runId、完整 candidate/script hashes、actor/安装 ID、repo ID、endpoint、credentialRef/purpose 与配置 hash、精确临时 refs/允许操作、执行 TTL、commit/网络写尝试预算及清理边界。验证身份和现有凭据后，允许该 scope 内尚未证明写能力的首次试写；成功 mutation/readback 才形成能力证据，不产生生产启用回执 |
+| `production-enable` | 精确配置前后 hash、生产 ref/genesis、actor/repo/endpoint/凭据绑定与完整适用资格证据引用；批准只允许清单中的配置 Apply/明确列出的 bootstrap，不自动扩大权限或写 settings/workflow。Apply 后生成持久的已采用配置回执；运行期仍重验配置、资格及当前租约 |
+| `takeover` | 精确 Work Item、旧/新 owner+machine、generation/Head/epoch/recordHash、资产风险和操作/input/observed hashes、事务 ID、有效期与写尝试上限；只允许该次接管，不能借用为一般写许可 |
+
+共用 envelope 绑定 plan/packet/input/context/policy/observed/action digests、用途、
+批准主体、批准来源、approvedAt/expiresAt 和 scopeHash。记录入口只消费真实的显式
+人工批准，或如实引用其允许的委托范围；不能伪造新的人类签名、把 Reviewer verdict
+或临时调用者对象当 authority。CLI 只传 approvalRef/runId，由固定 loader 从回执链
+验证事件、绑定和未撤销状态；批准、尝试和结果均只含非秘密字段。
+
+最小接口为 `recordHumanApproval`、`loadHumanAuthorization`、
+`reserveWriteAttempt`、`recordWriteOutcome`；由 Broker 的固定操作入口使用，不让
+Store 自行构造授权。隔离授权与生产已采用配置是两条明确路径，不能设置
+`skipQualification` 绕过。资格执行和 takeover 的远端写用可信时间判定 TTL；生产
+enable 批准的 TTL 约束首次配置 Apply，不因这张一次性票据后来到期就自动锁死已经
+合法采用的配置，运行期资格/凭据/策略失效仍须阻断。
+
+每次网络写请求发出前，在共享锁下耐久预留独立 attemptId，绑定 approvalRef、
+事务、操作和 exact ref/expected/candidate SHA；所有实际新尝试（含拒绝、超时）
+逐次计数，commit 数另行计数。并发不得超支；预留后崩溃且是否发送未知，保守保留
+已用额度，同一 attemptId 不能再次 dispatch。unknown outcome 的只读 readback/
+回执恢复不重放写、不重复消费这次额度，
+也不退款；后来若仍获准发起新写请求，必须预留新 attempt 并计入预算，不能凭同一
+transactionId 免费重试。未确认结果不能标记 Applied 或生成成功资格证据。
+
+同一 scope 可预留独立的精确清理额度和有限 cleanupExpiresAt，避免正常试写耗尽
+清理预算；它只能清理已证明本次拥有的 synthetic refs，并仍执行 exact-SHA 校验。
+存在 §4 未收敛的在途/不确定写入时仍保留资产，清理额度不是绕过恢复门的许可。
+TTL/额度耗尽后只允许恢复观察，不追加写或扩大对象；该段仅定义实现，不执行任何
+实际批准登记、凭据注册、生产采用或网络操作。
 
 ## 3. 权威记录与 exact Git CAS
 
@@ -308,7 +350,8 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
 - 有配置但缺 Broker/完整资格/生产启用授权：准确报告各缺口，不能把原语 PASS
   或一个 `enabled=true` 当生产资格。旧证据 hash/实现版本/仓库/身份/配置漂移即失效。
 - 隔离资格测试调用**同一实际 handler/adapter**，使用 scope 绑定的短期授权和
-  合成资产；不会生成生产启用回执。测试 seam 不能经普通 CLI flag 或环境变量绕过门。
+  合成资产；按 §2.2 允许首次资格试写而不预要求 write PASS，不会生成生产启用回执。
+  测试 seam 不能经普通 CLI flag 或环境变量绕过门。
 - 合成测试可在隔离 fixture 中装配具体 transport；生产组合根只能装配 Broker 验证
   的真实 transport。LIVE 所需权限/凭据若尚缺，记录明确缺口，不能把 mock 结果顶替。
 - G-07/W-07/W-08 全部适用证据通过后仍须单独批准永久 ref 的生产采用/配置；
@@ -338,6 +381,7 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
 | drain/接入 | 同锁在途写者未结束不发布 source proof；获锁后的排队写者拒绝 frozen 状态；缓存 admission 不越过新 freeze；未接入入口/缺宿主停稳证据不报告完整 drained，不嵌套获取既有 Apply 锁 |
 | terminal | 有效 exact merge 可在租约过期后终结；新代/epoch/身份漂移拒绝；claim 无 TTL 无写权，不产生 cleanup token、不删 Branch/Worktree |
 | CLI/安全面 | 正常入口真实进入用例；无配置/资格/启用授权零 mutation；未知字段/伪造审批/伪造 merge 证据拒绝；safe-mode 只读恢复观察仍可用 |
+| 人工授权/预算 | 正确隔离授权可首次试写但不能生产启用；错用途/ref/actor/repo/endpoint/hash、过期/超预算拒绝；并发尝试不超支；unknown 只读恢复不重放/重复计数，新写重试仍逐次计数；enable Apply 票据到期不单独撤销已采用配置 |
 
 运行受影响测试、TypeScript 检查、lint，以及源码入口 `check --mode commit` 和 `drift`；
 每项保存 exact HEAD、argv、退出状态及证据 hash。执行构建或完整 wrapper 前检查其命令链。
