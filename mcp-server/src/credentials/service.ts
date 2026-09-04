@@ -72,16 +72,17 @@ function fixedProbe(ref: CredentialRef, env: NodeJS.ProcessEnv): CredentialEvide
     throw new Error("DG02_REVIEWER_CONFIGURATION_REQUIRED");
   }
   if (ref.purpose === "git-transport") {
-    const header = env.GIT_CONFIG_VALUE_1;
-    const request = (url: string) => spawnSync("curl", ["-fsS", "-i", "-H", header ?? "", url], { env, encoding: "utf8", maxBuffer: 1024 * 1024 });
-    const user = request("https://api.github.com/user");
+    // Probe identity through an explicit token environment, never through argv or ambient gh auth.
+    const probeEnv = { ...env, GH_TOKEN: env[ref.envVar] };
+    const request = (argv: string[]) => spawnSync("gh", argv, { env: probeEnv, encoding: "utf8", maxBuffer: 1024 * 1024 });
+    const user = request(["api", "-i", "user"]);
     if (user.error) throw new Error("ENVIRONMENT_BLOCKED: CREDENTIAL_PROBE_UNAVAILABLE");
     const status = statusFromOutput(user.stdout ?? user.stderr ?? "");
     if (status === 401 || status === 403) return { identity: "", repository: "", capabilities: [], status };
     if (user.status !== 0) throw new Error("CREDENTIAL_CAPABILITY_DENIED");
     const headerEnd = (user.stdout ?? "").search(/\r?\n\r?\n/u);
     const identity = JSON.parse(headerEnd < 0 ? user.stdout : user.stdout.slice(headerEnd)) as { login?: string };
-    const repository = request(`https://api.github.com/repos/${ref.repository}`);
+    const repository = request(["api", `repos/${ref.repository}`]);
     const repositoryStatus = statusFromOutput(repository.stdout ?? repository.stderr ?? "");
     if (repositoryStatus === 401 || repositoryStatus === 403) return { identity: "", repository: "", capabilities: [], status: repositoryStatus };
     if (repository.error) throw new Error("ENVIRONMENT_BLOCKED: CREDENTIAL_PROBE_UNAVAILABLE");
@@ -147,5 +148,8 @@ export function runWithCredential(args: {
   validateCredential(args.ref, args.purpose, evidence, args.requiredCapability, args.now ?? new Date());
   const result = (args.runner ?? ((command, argv, childEnv) => spawnSync(command, argv, { env: childEnv, encoding: "utf8", maxBuffer: 1024 * 1024 })))(args.command, args.argv, env);
   if (result.error || result.status !== 0) throw new Error(`CREDENTIAL_COMMAND_FAILED: ${scrubSensitive(`${result.stderr ?? result.stdout ?? result.error ?? ""}`, [resolved.secret])}`);
-  return { status: result.status, stdout: scrubSensitive(result.stdout ?? "", [resolved.secret]), stderr: scrubSensitive(result.stderr ?? "", [resolved.secret]), credentialRef: args.ref.id, identity: args.ref.identity, expiresAt: args.ref.expiresAt };
+  const derivedSecrets = args.purpose === "git-transport"
+    ? [resolved.secret, Buffer.from(`x-access-token:${resolved.secret}`, "utf8").toString("base64")]
+    : [resolved.secret];
+  return { status: result.status, stdout: scrubSensitive(result.stdout ?? "", derivedSecrets), stderr: scrubSensitive(result.stderr ?? "", derivedSecrets), credentialRef: args.ref.id, identity: args.ref.identity, expiresAt: args.ref.expiresAt };
 }

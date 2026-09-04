@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { GitCoordinationStore, confirmRenewal, coordinationStatus, nextLease, observeZeroLossTransfer, reserveRenewal, terminalClaim, transferLease } from "./service.js";
+import { CoordinationLifecycleService, GitCoordinationStore, confirmRenewal, coordinationStatus, nextLease, observeZeroLossTransfer, reserveRenewal, terminalClaim, transferLease } from "./service.js";
 
 const paths: string[] = [];
 function git(cwd: string, ...args: string[]): string { return execFileSync("git", args, { cwd, encoding: "utf8" }).trim(); }
@@ -26,6 +26,13 @@ describe("GitCoordinationStore", () => {
     store.compareAndSwap({ workItem: other.workItem, expectedControlSha: before.controlSha, expected: {}, next: other });
     expect(store.read(first.workItem).record?.recordHash).toBe(saved.recordHash);
     expect(() => store.compareAndSwap({ workItem: first.workItem, expectedControlSha: before.controlSha, expected: { generation: 2 }, next: lease(first.workItem, saved) })).toThrow("COORDINATION_CAS_CONFLICT");
+  });
+
+  it("uses one real lifecycle handler for acquire, rebind, and terminal CAS", () => {
+    const { store } = fixture(); const lifecycle = new CoordinationLifecycleService(store); const input = { prior: null, repository: "owner/repo", repositoryId: "R_1", workItem: "github:owner/repo#9", branch: "codex/test", sourceRepositoryId: "R_1", owner: "octo", machine: "machine-a", controlEpochDigest: "a".repeat(64), head: "b".repeat(40), expiresAt: "2030-01-01T00:00:00.000Z", transactionId: "lifecycle" };
+    const acquired = lifecycle.acquire(input); const expected = { recordHash: acquired.recordHash, generation: 1, owner: "octo", controlEpochDigest: acquired.controlEpochDigest, lastObservedHead: acquired.lastObservedHead };
+    const rebound = lifecycle.rebind(acquired.workItem, expected, "opaque", acquired.lastObservedHead);
+    expect(lifecycle.terminalClaim(acquired.workItem, { ...expected, recordHash: rebound.recordHash }, "c".repeat(40)).expiresAt).toBeNull();
   });
 
   it("reports unconfigured status and refuses production mutation", () => {

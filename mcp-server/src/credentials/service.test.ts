@@ -1,8 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { runWithCredential, scrubSensitive, type CredentialRef } from "./service.js";
 
 const ref: CredentialRef = { id: "keychain:one", purpose: "github-api", hostId: "mac", repository: "owner/repo", identity: "octo", scopes: ["issues:write"], expiresAt: "2030-01-01T00:00:00.000Z", envVar: "GH_TOKEN" };
 const testAdapter = { probe: (_ref: CredentialRef, env: NodeJS.ProcessEnv) => ({ identity: "octo", repository: "owner/repo", capabilities: env.GH_TOKEN ? ["issues:write"] : [], status: 200 }) };
+const temporary: string[] = [];
+const originalPath = process.env.PATH;
+afterEach(() => { process.env.PATH = originalPath; while (temporary.length) rmSync(temporary.pop()!, { recursive: true, force: true }); });
 
 describe("credentials", () => {
   it("uses a resolver-bound session, a test-only probe seam, minimal env, and scrubbed output", () => {
@@ -54,6 +60,16 @@ describe("credentials", () => {
       testAdapter: { probe: () => ({ identity: "octo", repository: "owner/repo", capabilities: ["contents:read"], status: 200 }) },
       runner: (_command, _argv, env) => { expect(env.GIT_ASKPASS).toBeUndefined(); expect(env.GIT_CONFIG_VALUE_0).toBe(""); expect(env.GIT_CONFIG_KEY_1).toContain("extraheader"); expect(env.GIT_CONFIG_VALUE_1).not.toContain("secret"); return { status: 0, stdout: "", stderr: "" } as never; },
     });
+  });
+
+  it("keeps raw and base64 token canaries out of the fixed probe argv and scrubbed output", () => {
+    const bin = mkdtempSync(join(tmpdir(), "harness-gh-probe-")); temporary.push(bin); const captured = join(bin, "argv.json");
+    writeFileSync(join(bin, "gh"), `#!/usr/bin/env node\nconst fs=require('node:fs');const a=process.argv.slice(2);const p=${JSON.stringify(captured)};const old=fs.existsSync(p)?JSON.parse(fs.readFileSync(p,'utf8')):[];old.push(a);fs.writeFileSync(p,JSON.stringify(old));if(a.includes('user'))process.stdout.write('HTTP/2 200\\nx-oauth-scopes: contents:read\\n\\n{"login":"octo"}');else process.stdout.write('{"full_name":"owner/repo"}');\n`, "utf8"); chmodSync(join(bin, "gh"), 0o755); process.env.PATH = `${bin}${delimiter}${originalPath}`;
+    writeFileSync(join(bin, "curl"), `#!/usr/bin/env node\nconst fs=require('node:fs');const a=process.argv.slice(2);const p=${JSON.stringify(captured)};const old=fs.existsSync(p)?JSON.parse(fs.readFileSync(p,'utf8')):[];old.push(a);fs.writeFileSync(p,JSON.stringify(old));process.stdout.write('HTTP/2 200\\nx-oauth-scopes: contents:read\\n\\n{"login":"octo"}');\n`, "utf8"); chmodSync(join(bin, "curl"), 0o755);
+    const gitRef: CredentialRef = { ...ref, purpose: "git-transport", envVar: "HARNESS_GIT_TOKEN", scopes: ["contents:read"] };
+    const secret = "raw-canary"; const encoded = Buffer.from(`x-access-token:${secret}`).toString("base64");
+    const result = runWithCredential({ ref: gitRef, purpose: "git-transport", resolver: { resolve: () => ({ ref: gitRef, secret }) }, command: "git", argv: ["ls-remote"], requiredCapability: "contents:read", runner: () => ({ status: 0, stdout: encoded, stderr: `Basic ${encoded}` } as never) });
+    expect(JSON.stringify(readFileSync(captured, "utf8"))).not.toContain(secret); expect(readFileSync(captured, "utf8")).not.toContain(encoded); expect(JSON.stringify(result)).not.toContain(encoded);
   });
 
   it("never invokes a reviewer before DG-02", () => {

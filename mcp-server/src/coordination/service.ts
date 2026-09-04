@@ -172,6 +172,32 @@ export function transferLease(record: CoordinationRecord, expected: Coordination
   return createCoordinationRecord({ ...recordWithoutHash(record), owner: target.owner, machine: target.machine, sessionRef: target.sessionRef, generation: record.generation + 1, createdAt: new Date().toISOString(), transactionId });
 }
 
+/** Shared lifecycle composition: CLI and isolated qualification fixtures use these exact CAS paths. */
+export class CoordinationLifecycleService {
+  constructor(private readonly store: GitCoordinationStore) {}
+  acquire(input: Parameters<typeof nextLease>[0]): CoordinationRecord {
+    const current = this.store.read(input.workItem);
+    if (current.record) fail("COORDINATION_ALREADY_ACQUIRED");
+    const next = nextLease({ ...input, prior: null });
+    return this.store.compareAndSwap({ workItem: input.workItem, expectedControlSha: current.controlSha, expected: {}, next });
+  }
+  rebind(workItem: string, expected: CoordinationExpected, sessionRef: string | undefined, head: string): CoordinationRecord {
+    const current = this.store.read(workItem); if (!current.record) fail("COORDINATION_RECORD_ABSENT");
+    const next = rebindLease(current.record, expected, sessionRef, head);
+    return this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next });
+  }
+  transfer(workItem: string, expected: CoordinationExpected, target: { owner: string; machine: string; sessionRef?: string }, evidence: ZeroLossTransferEvidence): CoordinationRecord {
+    const current = this.store.read(workItem); if (!current.record) fail("COORDINATION_RECORD_ABSENT");
+    const next = transferLease(current.record, expected, target, evidence);
+    return this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next });
+  }
+  terminalClaim(workItem: string, expected: CoordinationExpected, integratedHead: string): CoordinationRecord {
+    const current = this.store.read(workItem); if (!current.record) fail("COORDINATION_RECORD_ABSENT");
+    const next = terminalClaim(current.record, expected, integratedHead);
+    return this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next });
+  }
+}
+
 export function nextLease(args: { prior: CoordinationRecord | null; repository: string; repositoryId: string; workItem: string; branch: string; sourceRepositoryId: string; owner: string; machine: string; sessionRef?: string; controlEpochDigest: string; head: string; expiresAt: string; lifecycleState?: CoordinationLifecycle; transactionId?: string }): CoordinationRecord {
   return createCoordinationRecord({ repository: args.repository, repositoryId: args.repositoryId, workItem: args.workItem, branch: args.branch, sourceRepositoryId: args.sourceRepositoryId, owner: args.owner, machine: args.machine, sessionRef: args.sessionRef, generation: (args.prior?.generation ?? 0) + 1, controlEpochDigest: args.controlEpochDigest, createdAt: new Date().toISOString(), expiresAt: args.expiresAt, lastObservedHead: args.head, lifecycleState: args.lifecycleState ?? "Admitted", transactionId: args.transactionId ?? randomUUID() });
 }
