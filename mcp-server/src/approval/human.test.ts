@@ -12,7 +12,7 @@ const roots: string[] = [];
 const digest = "a".repeat(64); const head = "b".repeat(40); const ref = "refs/heads/synthetic-qualification";
 const binding = { commonDir: "/fixture-not-registered", repository: "owner/repo", repositoryId: "42", endpointHash: digest, credentialBindingHash: digest,
   credentialRef: "keychain:git", credentialPurpose: "git-transport" as const, actor: "octo", hostId: "741ba5a8-40e2-4848-b5a4-082f4f2145a9", configHash: digest,
-  implementationHead: head, implementationTree: head, runnerHash: digest };
+  implementation: { kind: "source" as const, head, tree: head, artifactDigest: digest }, runnerHash: digest };
 const scope: HumanScope = { kind: "qualification-run", binding, expiresAt: "2026-09-04T05:00:00.000Z", cleanupExpiresAt: "2026-09-04T06:00:00.000Z",
   runId: "bounded-run", refs: [ref], operations: ["create", "cas"], maxCommits: 2, maxWriteAttempts: 2, maxCleanupAttempts: 1 };
 function clock(date = "Fri, 04 Sep 2026 04:00:00 GMT") { const value = new CoordinationClock(() => ({ monotonicMs: 0, wallMs: 0 })); value.observe(date, value.start()); return value; }

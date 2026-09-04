@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { planCredentialHostBinding, applyCredentialHostBinding } from "../credentials/host_binding.js";
-import { sha256 } from "../v2/fs.js";
+import { hashObject, sha256 } from "../v2/fs.js";
+import { createSemanticApprovalPacket } from "../approval/service.js";
+import { loadHumanAuthorization, recordHumanApproval, type HumanScope } from "../approval/human.js";
+import { createQualificationRuntime, observeCoordinationBinding } from "./runtime.js";
 import { GitHubCoordinationReader } from "./github.js";
 import { GitHubCoordinationTransport, type CoordinationWriteIntent } from "./transport.js";
 import { CoordinationLifecycleService, GitCoordinationStore } from "./service.js";
@@ -16,6 +19,9 @@ const nativeHost = vi.hoisted(() => ({ home: "" }));
 vi.mock("node:os", async (original) => ({ ...await original<typeof import("node:os")>(), homedir: () => {
   if (!nativeHost.home) throw new Error("FIXTURE_HOST_REQUIRED"); return nativeHost.home;
 } }));
+// Only the independently tested artifact observation is synthetic here; resolver/Broker/Git/clock composition is real.
+vi.mock("../repository/artifact.js", async (original) => ({ ...await original<typeof import("../repository/artifact.js")>(),
+  currentHarnessArtifact: () => ({ implementation: { kind: "package", artifactDigest: "a".repeat(64) }, runnerHash: "a".repeat(64) }) }));
 const roots: string[] = [];
 const nativePlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
 function git(root: string, ...args: string[]): string { return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim(); }
@@ -42,6 +48,12 @@ function fixture() {
   const respond = (data: unknown = { pr }) => writeFileSync(response, JSON.stringify(data)); respond();
   const provider = new GitHubCoordinationReader(root, "origin", "42", "api");
   return { root, commonDir, plan, calls, record, pr, respond, provider, bin, endpoint };
+}
+function nativeGitFixture({ root, bin, endpoint }: ReturnType<typeof fixture>) {
+  const remote = join(root, "remote.git"); git(root, "init", "--bare", "--quiet", "--template=", remote);
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim(); const trace = join(root, "git-transport.jsonl");
+  writeFileSync(join(bin, "git"), `#!${process.execPath}\nconst fs=require('node:fs');const cp=require('node:child_process');let a=process.argv.slice(2);if(a.some(x=>['ls-remote','fetch','push'].includes(x))){if(!a.includes(${JSON.stringify(endpoint)})||process.env.HARNESS_GIT_TOKEN!=='synthetic-provider-canary')process.exit(2);fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({argv:a,global:process.env.GIT_CONFIG_GLOBAL,redirects:process.env.GIT_CONFIG_VALUE_2,hooks:process.env.GIT_CONFIG_VALUE_3})+'\\n');a=a.map(x=>x===${JSON.stringify(endpoint)}?${JSON.stringify(remote)}:x);}const r=cp.spawnSync(${JSON.stringify(realGit)},a,{env:process.env,stdio:['inherit','pipe','pipe']});process.stdout.write(r.stdout??'');process.stderr.write(r.stderr??'');process.exit(r.status??1);\n`, { mode: 0o700 });
+  return { trace, remote };
 }
 afterEach(() => { Object.defineProperty(process, "platform", nativePlatform); vi.unstubAllEnvs(); roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })); });
 
@@ -92,11 +104,7 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
   });
 
   it("runs the production Git adapter with explicit credentials, exact CAS and no implicit write permission", () => {
-    const { root, bin, endpoint, plan } = fixture();
-    const remote = join(root, "remote.git"); git(root, "init", "--bare", "--quiet", "--template=", remote);
-    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-    const trace = join(root, "git-transport.jsonl");
-    writeFileSync(join(bin, "git"), `#!${process.execPath}\nconst fs=require('node:fs');const cp=require('node:child_process');let a=process.argv.slice(2);if(a.some(x=>['ls-remote','fetch','push'].includes(x))){if(!a.includes(${JSON.stringify(endpoint)})||process.env.HARNESS_GIT_TOKEN!=='synthetic-provider-canary')process.exit(2);fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({argv:a,global:process.env.GIT_CONFIG_GLOBAL,redirects:process.env.GIT_CONFIG_VALUE_2,hooks:process.env.GIT_CONFIG_VALUE_3})+'\\n');a=a.map(x=>x===${JSON.stringify(endpoint)}?${JSON.stringify(remote)}:x);}const r=cp.spawnSync(${JSON.stringify(realGit)},a,{env:process.env,stdio:['inherit','pipe','pipe']});process.stdout.write(r.stdout??'');process.stderr.write(r.stderr??'');process.exit(r.status??1);\n`, { mode: 0o700 });
+    const f = fixture(); const { root, plan } = f; const { trace } = nativeGitFixture(f);
     const objectDirectory = realpathSync(mkdtempSync(join(root, "objects-")));
     git(root, "init", "--bare", "--quiet", "--template=", objectDirectory);
     const tree = git(objectDirectory, "hash-object", "-t", "tree", "-w", "--stdin");
@@ -122,5 +130,30 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
     expect(readFileSync(trace, "utf8")).toBe(traceBefore);
     expect(traceBefore).not.toContain("synthetic-provider-canary");
     for (const line of traceBefore.trim().split("\n")) expect(JSON.parse(line)).toMatchObject({ global: "/dev/null", redirects: "false", hooks: "/dev/null" });
+  });
+
+  it("runs a first bounded qualification write through the native composition without enabling production", () => {
+    const f = fixture(); const { trace } = nativeGitFixture(f); const controlRef = "refs/heads/qualification-native";
+    const binding = observeCoordinationBinding(f.root, "origin", "42", "git"); const now = Date.now();
+    const scope: HumanScope = { kind: "qualification-run", binding, runId: "native-fixture", refs: [controlRef], operations: ["create", "cas"],
+      maxCommits: 1, maxWriteAttempts: 1, maxCleanupAttempts: 1, expiresAt: new Date(now + 3600_000).toISOString(), cleanupExpiresAt: new Date(now + 7200_000).toISOString() };
+    const inputHash = hashObject(scope); const planHash = hashObject({ inputHash });
+    const packet = createSemanticApprovalPacket({ planHash, inputHash, producerIdentity: "native-fixture",
+      binding: { planHash, inputDigest: inputHash, contextDigest: inputHash, observedHash: inputHash, policyDigest: inputHash },
+      actions: [{ id: scope.kind, kind: "permission-change", protected: true, summary: "LOCAL native-command test", before: null, after: inputHash, reversible: true, recovery: "Retain unknown objects" }] });
+    const approvalRef = recordHumanApproval(f.commonDir, { scope, packet, approvedBy: "fixture-human", approvedAt: new Date(now).toISOString(), source: { kind: "explicit-human", messageHash: inputHash } }, planHash);
+    const runtime = createQualificationRuntime(f.root, approvalRef, controlRef);
+    const acquired = runtime.lifecycle.acquire({ repository: binding.repository, repositoryId: binding.repositoryId, workItem: f.record.workItem,
+      branch: f.record.branch, sourceRepositoryId: binding.repositoryId, owner: binding.actor, machine: binding.hostId, controlEpochDigest: "d".repeat(64),
+      head: f.record.lastObservedHead, ttlMs: 60_000, transactionId: "native-first-acquire" });
+    expect(acquired.generation).toBe(1); expect(acquired.machine).toBe(binding.hostId);
+    const receipt = loadHumanAuthorization(f.commonDir, approvalRef);
+    expect(receipt.candidates).toHaveLength(1); expect(receipt.attempts).toHaveLength(1); expect(receipt.attempts[0].outcome?.status).toBe("applied");
+    const before = readFileSync(trace, "utf8"); expect(before).not.toContain("synthetic-provider-canary");
+    expect(before.trim().split("\n").filter((line) => JSON.parse(line).argv.includes("push"))).toHaveLength(1);
+    mkdirSync(join(f.root, ".harness"), { recursive: true });
+    writeFileSync(join(f.root, ".harness/coordination.json"), JSON.stringify({ schemaVersion: "coordination-config/1.0", enabled: false, repository: binding.repository, repositoryId: binding.repositoryId, remote: "origin", controlRef }));
+    expect(() => createQualificationRuntime(f.root, approvalRef, controlRef)).toThrow("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
+    expect(readFileSync(trace, "utf8")).toBe(before);
   });
 });

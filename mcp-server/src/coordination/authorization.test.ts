@@ -20,7 +20,7 @@ function fixture() {
   const controlRef = "refs/heads/synthetic-run";
   const binding = { commonDir: root, repository: "owner/repo", repositoryId: "R_1", endpointHash: digest, credentialBindingHash: digest,
     credentialRef: "git", credentialPurpose: "git-transport" as const, actor: "octo", hostId: "741ba5a8-40e2-4848-b5a4-082f4f2145a9",
-    configHash: digest, implementationHead: sha, implementationTree: sha, runnerHash: digest };
+    configHash: digest, implementation: { kind: "source" as const, head: sha, tree: sha, artifactDigest: digest }, runnerHash: digest };
   const scope: HumanScope = { kind: "qualification-run", binding, runId: "fixture", refs: [controlRef], operations: ["create", "cas"],
     maxCommits: 2, maxWriteAttempts: 2, maxCleanupAttempts: 1, expiresAt: "2026-09-04T05:00:00.000Z", cleanupExpiresAt: "2026-09-04T06:00:00.000Z" };
   const inputHash = hashObject(scope); const planHash = hashObject({ inputHash });

@@ -7,6 +7,7 @@ import { acquireMutationLock, releaseMutationLock } from "../recovery/service.js
 import { appendLkgRecord, appendReceiptEvent, readLkgChain, readReceiptChain } from "../receipt/service.js";
 import { validSemanticApprovalPacket, type SemanticApprovalPacket } from "./service.js";
 import type { CoordinationClock } from "../coordination/clock.js";
+import { harnessArtifactSchema } from "../repository/artifact.js";
 
 const DOMAIN = "approval-human";
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -20,7 +21,7 @@ const bindingSchema = z.object({
   repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u), repositoryId: text,
   endpointHash: digest, credentialBindingHash: digest, credentialRef: text, credentialPurpose: z.literal("git-transport"),
   actor: text, hostId: z.string().uuid(), configHash: digest,
-  implementationHead: sha, implementationTree: sha, runnerHash: digest,
+  implementation: harnessArtifactSchema, runnerHash: digest,
 }).strict();
 const fields = { binding: bindingSchema, expiresAt: timestamp };
 const expectation = z.object({ recordHash: digest, generation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), owner: text, machine: text, lastObservedHead: sha, controlEpochDigest: digest }).strict();
