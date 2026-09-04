@@ -30,8 +30,23 @@ now require these bounds; pending renewal retains the old expiry and grants no
 write permission. Renewal stores a timely readback proof before confirming its
 new expiry without changing generation. A confirmation may finish after the old
 expiry only with that prior proof, before the proposed expiry, and against the
-same exact reservation. Production CLI assembly and the full handoff protocol
-are still pending; LOCAL handler tests do not constitute LIVE lease qualification.
+same exact reservation. Production CLI assembly is still pending; LOCAL handler
+tests do not constitute LIVE lease qualification.
+
+Handoff now has three actual handlers: source freeze, source proof, then target
+acceptance. Both hosts use their own bound source transport; the target never opens
+the source machine's directory. Acceptance replaces ownership in one CAS and keeps
+the original expiry. Late readback cannot grant a fresh lease. Clean assets alone
+are insufficient: source proof also requires verified participating-writer coverage.
+The native host coverage adapter is not yet present, so native proof publication
+reports `COORDINATION_SOURCE_WRITER_COVERAGE_REQUIRED`. Controlled LOCAL fixtures
+exercise this boundary without claiming real Agent/editor quiescence.
+
+Participating writes and handoff reuse the existing common-dir `apply.lock`, with
+owned in-process handles and awaited callbacks. `runManagedWrite` rechecks the exact
+remote tuple, identity, epoch, local branch/HEAD and expiry at the write boundary;
+queued writers cannot reuse admission from before a freeze. This does not fence
+external editors, direct Git, unawaited child processes or adapters not yet wired in.
 
 The GitHub read adapter now uses the approved native credential binding and fixed
 Broker-authenticated GETs for server Date and PR merge facts. Terminal claim takes
@@ -49,5 +64,8 @@ custom Git config/alternates, disables inherited global credentials and redirect
 and preserves scrubbed nonzero CAS results for recovery classification. No writer
 is installed by default: a separate qualification/production authority must approve
 the exact ref, candidate, expected SHA and credential binding before a push. That
-authority/CLI composition is still pending; metadata reads and descriptive scopes
-do not establish write capability or production enablement.
+native isolated-qualification authority is implemented: it binds actual actor,
+installation, workspace HEAD and host-independent control epoch, reserves candidate
+and attempt budgets before their side effects, and recovers unknown outcomes without
+replay. Full qualification/production CLI composition is still pending; metadata
+reads and descriptive scopes do not establish production enablement.

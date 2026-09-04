@@ -12,6 +12,8 @@ import { CoordinationLifecycleService, loadCoordinationConfig } from "./service.
 import { GitCoordinationStore } from "./store.js";
 import { GitHubCoordinationTransport } from "./transport.js";
 import { observeQualificationEpoch, qualificationOperationAuthority } from "./authority.js";
+import { handoffObservers } from "./handoff.js";
+import type { ManagedWriteContext } from "./writer.js";
 
 /** Non-secret observation; all identity comes from the actual checkout, approved host binding and running artifact. */
 export function observeCoordinationBinding(projectRoot: string, remote: string, repositoryId: string, credentialId: string): HumanScopeBinding {
@@ -52,5 +54,14 @@ export function createQualificationRuntime(projectRoot: string, approvalRef: str
       genesisSha: bootstrap.head, repository: binding.repository, repositoryId: binding.repositoryId, controlRef }, head, readValidatedCommit, isAncestor });
     if (checked.status !== "verified") throw new Error("COORDINATION_HISTORY_VALIDATION_PENDING");
   }, guards.beforeCommit);
-  return { context, binding, store, provider, lifecycle: new CoordinationLifecycleService(store, () => provider.serverClock(), provider, authority.prepare) };
+  const handoff = handoffObservers(context, held, transport, observeBinding, () => provider.serverClock());
+  const writer: ManagedWriteContext = { context, store, refreshClock: () => provider.serverClock(), observeAuthority: (record) => {
+    const current = loadHumanAuthorization(context.commonDir, approvalRef); const observed = observeBinding();
+    if (current.revoked || hashObject(observed) !== hashObject(current.approval.scope.binding)) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
+    if (current.approval.scope.kind !== "qualification-run" || !current.approval.scope.refs.includes(`refs/heads/${record.branch}`)) throw new Error("COORDINATION_SOURCE_WRITE_SCOPE_REQUIRED");
+    if (current.attempts.some((attempt) => !attempt.outcome || attempt.outcome.status === "unknown") ||
+        current.candidates.some((candidate) => !candidate.result || candidate.result.status === "unknown")) throw new Error("HUMAN_WRITE_OUTCOME_UNRESOLVED");
+    provider.serverClock().requireBefore(current.approval.scope.expiresAt); return observed;
+  } };
+  return { context, binding, store, provider, writer, lifecycle: new CoordinationLifecycleService(store, () => provider.serverClock(), provider, authority.prepare, handoff) };
 }

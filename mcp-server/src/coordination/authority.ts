@@ -27,8 +27,22 @@ export function observeQualificationEpoch(root: string, configHash: string): z.i
     policy: stat ? { kind: "harness-policy-file", sha256: fileHash(path) } : { kind: "none" } });
 }
 
-export type CoordinationOperation = "acquire" | "rebind" | "renew-reserve" | "renew-confirm" | "terminal-claim";
+export type CoordinationOperation = "acquire" | "rebind" | "renew-reserve" | "renew-confirm" | "terminal-claim" |
+  "transfer-freeze" | "transfer-proof" | "transfer-accept";
 export type OperationAuthority = (operation: CoordinationOperation, current: CoordinationObservation, proposed: CoordinationRecord) => void;
+
+export function assertCoordinationIdentity(record: CoordinationRecord, binding: HumanScopeBinding,
+  identity: { owner: string; machine: string } | undefined = { owner: record.owner, machine: record.machine }): void {
+  if (record.repository !== binding.repository || record.repositoryId !== binding.repositoryId || identity?.owner !== binding.actor ||
+      identity.machine !== binding.hostId || record.controlEpochDigest !== controlEpochDigest(binding.controlEpoch)) throw new Error("COORDINATION_OPERATION_IDENTITY_MISMATCH");
+}
+export function assertCoordinationWorkspace(projectDir: string, record: CoordinationRecord): string {
+  const env = { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" };
+  const head = runGit(projectDir, ["--no-replace-objects", "rev-parse", "--verify", "HEAD^{commit}"], { env }).trim();
+  const branch = runGit(projectDir, ["symbolic-ref", "--quiet", "HEAD"], { env }).trim();
+  if (head !== record.lastObservedHead || branch !== `refs/heads/${record.branch}`) throw new Error("COORDINATION_WORKSPACE_HEAD_MISMATCH");
+  return head;
+}
 
 /** Shared native lifecycle/candidate defense. A valid credential cannot assign some other actor's lease. */
 export function qualificationOperationAuthority(projectDir: string, initial: HumanScopeBinding,
@@ -38,15 +52,13 @@ export function qualificationOperationAuthority(projectDir: string, initial: Hum
     const binding = observeBinding();
     if (hashObject(binding) !== hashObject(initial)) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
     for (const record of [current.record, proposed].filter((item): item is CoordinationRecord => item !== null)) {
-      if (record.repository !== binding.repository || record.repositoryId !== binding.repositoryId || record.owner !== binding.actor ||
-          record.machine !== binding.hostId || record.controlEpochDigest !== controlEpochDigest(binding.controlEpoch)) throw new Error("COORDINATION_OPERATION_IDENTITY_MISMATCH");
+      const identity = operation === "transfer-accept" && record === current.record ? record.handoff?.target : { owner: record.owner, machine: record.machine };
+      if (!identity) throw new Error("COORDINATION_OPERATION_IDENTITY_MISMATCH");
+      assertCoordinationIdentity(record, binding, identity);
     }
     if (operation === "terminal-claim") return; // Native PR evidence, not current local HEAD, establishes integration.
-    const env = { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" };
-    const head = runGit(projectDir, ["--no-replace-objects", "rev-parse", "--verify", "HEAD^{commit}"], { env }).trim();
-    const branch = runGit(projectDir, ["symbolic-ref", "--quiet", "HEAD"], { env }).trim();
-    if (head !== proposed.lastObservedHead || branch !== `refs/heads/${proposed.branch}`) throw new Error("COORDINATION_WORKSPACE_HEAD_MISMATCH");
-    if (current.record && operation !== "renew-confirm") requireWriteLease(current.record, expectedRecord(current.record), refreshClock());
+    assertCoordinationWorkspace(projectDir, proposed);
+    if (current.record && !["renew-confirm", "transfer-proof", "transfer-accept"].includes(operation)) requireWriteLease(current.record, expectedRecord(current.record), refreshClock());
     if (!proposed.expiresAt) throw new Error("COORDINATION_WRITE_LEASE_UNAVAILABLE");
     refreshClock().requireBefore(proposed.expiresAt);
   }

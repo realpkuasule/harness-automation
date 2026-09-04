@@ -2,7 +2,6 @@ import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { readJson, safePath } from "../v2/fs.js";
-import { runGitCommand } from "../repository/git.js";
 import { type CoordinationConfig, type CoordinationExpected, type CoordinationRecord } from "./types.js";
 import { assertExpected, createCoordinationRecord, expectedRecord, recordWithoutHash } from "./record.js";
 import { GitCoordinationStore } from "./store.js";
@@ -11,11 +10,10 @@ import { confirmRenewal, nextLease, observeRenewal, rebindLease, requireWriteLea
 import type { GitHubCoordinationReader } from "./github.js";
 import type { CoordinationOperation, OperationAuthority } from "./authority.js";
 import type { CoordinationObservation } from "./store.js";
+import type { HandoffObservers } from "./handoff.js";
 export { assertExpected, createCoordinationRecord } from "./record.js";
 export { GitCoordinationStore } from "./store.js";
 export { confirmRenewal, nextLease, observeRenewal, rebindLease, reserveRenewal } from "./leases.js";
-
-const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 
 function fail(code: string): never { throw new Error(code); }
 
@@ -38,22 +36,6 @@ export function coordinationStatus(root: string): Record<string, unknown> {
   return config ? { configured: true, enabled: config.enabled, coordinated: false, result: config.enabled ? "COORDINATION_QUALIFICATION_REQUIRED" : "COORDINATION_PRODUCTION_ENABLEMENT_REQUIRED" } : { configured: false, enabled: false, coordinated: false, result: "CoordinationBackendRequired" };
 }
 
-function git(cwd: string, args: string[], env: NodeJS.ProcessEnv, allowFailure = false): string {
-  const result = runGitCommand(cwd, args, env);
-  if (result.error || (!allowFailure && result.status !== 0)) fail(`COORDINATION_GIT_FAILED: ${result.stderr.trim() || result.error || result.status}`);
-  return result.stdout.trim();
-}
-
-function controlRefHead(root: string, endpoint: string, ref: string, env: NodeJS.ProcessEnv): string | null {
-  const result = runGitCommand(root, ["ls-remote", endpoint, ref], env);
-  if (result.error || result.status !== 0) fail("COORDINATION_REMOTE_OBSERVATION_FAILED");
-  const lines = result.stdout.split(/\r?\n/u).filter(Boolean);
-  if (lines.length === 0) return null;
-  const [sha, observed] = lines[0].split(/\s+/u, 2);
-  if (lines.length !== 1 || observed !== ref || !SHA.test(sha)) fail("COORDINATION_REMOTE_OBSERVATION_INVALID");
-  return sha;
-}
-
 export function requireEnabledCoordination(root: string): CoordinationConfig {
   const config = loadCoordinationConfig(root);
   if (!config) fail("CoordinationBackendRequired");
@@ -62,43 +44,10 @@ export function requireEnabledCoordination(root: string): CoordinationConfig {
   fail("CREDENTIAL_TRANSPORT_HELPER_REQUIRED");
 }
 
-export interface ZeroLossTransferEvidence {
-  sourceHead: string;
-  remoteHead: string;
-  targetRetrievedHead: string;
-  trackedClean: true;
-  untracked: [];
-  ignored: [];
-  uniqueCommits: 0;
-  unpushedCommits: 0;
-}
-
-/** Collect, rather than accept, the zero-loss facts from the frozen source and target repositories. */
-export function observeZeroLossTransfer(sourceRoot: string, endpoint: string, sourceRef: string, targetRoot: string, env: NodeJS.ProcessEnv = process.env): ZeroLossTransferEvidence {
-  const sourceHead = git(sourceRoot, ["rev-parse", "HEAD"], env);
-  const remoteHead = controlRefHead(sourceRoot, endpoint, sourceRef, env);
-  if (!remoteHead || remoteHead !== sourceHead) fail("COORDINATION_TRANSFER_REMOTE_HEAD_MISMATCH");
-  const status = git(sourceRoot, ["status", "--porcelain=v1", "--ignored=matching"], env);
-  const untracked = status.split("\n").filter((line) => line.startsWith("??"));
-  const ignored = status.split("\n").filter((line) => line.startsWith("!!"));
-  const tracked = status.split("\n").filter((line) => line && !line.startsWith("??") && !line.startsWith("!!"));
-  const targetRetrievedHead = git(targetRoot, ["rev-parse", "--verify", `${sourceHead}^{commit}`], env, true) || "";
-  const unpushedCommits = Number(git(sourceRoot, ["rev-list", "--count", `${remoteHead}..HEAD`], env));
-  if (tracked.length || untracked.length || ignored.length || targetRetrievedHead !== sourceHead || unpushedCommits !== 0) fail("COORDINATION_TRANSFER_EVIDENCE_INSUFFICIENT");
-  return { sourceHead, remoteHead, targetRetrievedHead, trackedClean: true, untracked: [], ignored: [], uniqueCommits: 0, unpushedCommits: 0 };
-}
-
-export function transferLease(record: CoordinationRecord, expected: CoordinationExpected, target: { owner: string; machine: string; sessionRef?: string }, evidence: ZeroLossTransferEvidence, clock: CoordinationClock, transactionId = randomUUID()): CoordinationRecord {
-  requireWriteLease(record, expected, clock);
-  if (!record.expiresAt || !target.owner || !target.machine || record.lifecycleState === "Integrated" || evidence.sourceHead !== record.lastObservedHead || evidence.remoteHead !== record.lastObservedHead || evidence.targetRetrievedHead !== record.lastObservedHead || !evidence.trackedClean || evidence.untracked.length || evidence.ignored.length || evidence.uniqueCommits !== 0 || evidence.unpushedCommits !== 0) fail("COORDINATION_TRANSFER_EVIDENCE_INSUFFICIENT");
-  const next = recordWithoutHash(record); delete next.renewalConfirmation;
-  return createCoordinationRecord({ ...next, owner: target.owner, machine: target.machine, sessionRef: target.sessionRef, generation: record.generation + 1, createdAt: new Date(Math.floor(Math.max(Date.parse(record.createdAt), clock.bounds().lowerMs))).toISOString(), transactionId });
-}
-
 /** Shared lifecycle composition: CLI and isolated qualification fixtures use these exact CAS paths. */
 export class CoordinationLifecycleService {
   constructor(private readonly store: GitCoordinationStore, private readonly refreshClock: () => CoordinationClock,
-    private readonly provider?: GitHubCoordinationReader, private readonly authority?: OperationAuthority) {}
+    private readonly provider?: GitHubCoordinationReader, private readonly authority?: OperationAuthority, private readonly handoff?: HandoffObservers) {}
   acquire(input: Parameters<typeof nextLease>[0]): CoordinationRecord {
     const current = this.store.read(input.workItem);
     if (current.record) fail("COORDINATION_ALREADY_ACQUIRED");
@@ -133,6 +82,50 @@ export class CoordinationLifecycleService {
     const proof = observeRenewal(observed.record, observed.controlSha, this.refreshClock());
     const next = confirmRenewal(observed.record, expectedRecord(observed.record), proof, this.refreshClock());
     return this.confirm(this.apply("renew-confirm", observed, next));
+  }
+  freezeTransfer(workItem: string, expectedControlSha: string, expected: CoordinationExpected,
+    target: { owner: string; machine: string }, transferId = randomUUID()): CoordinationRecord {
+    const current = this.transferCurrent(workItem, expectedControlSha, expected);
+    requireWriteLease(current.record, expected, this.refreshClock()); this.handoff!.beforeFreeze(current.record);
+    const content = recordWithoutHash(current.record); delete content.renewalConfirmation;
+    const next = createCoordinationRecord({ ...content, transactionId: transferId, handoff: { transferId, target, source: {
+      owner: content.owner, machine: content.machine, generation: content.generation, epoch: content.controlEpochDigest,
+      head: content.lastObservedHead, expiresAt: content.expiresAt!,
+    } } });
+    return this.confirmHandoff(this.apply("transfer-freeze", current, next));
+  }
+  publishSourceProof(workItem: string, expectedControlSha: string, expected: CoordinationExpected, transferId: string): CoordinationRecord {
+    const current = this.transferCurrent(workItem, expectedControlSha, expected, transferId);
+    const binding = this.handoff!.check(current.record);
+    if (current.record.owner !== binding.actor || current.record.machine !== binding.hostId) fail("COORDINATION_OPERATION_IDENTITY_MISMATCH");
+    if (current.record.handoff!.sourceProof) fail("COORDINATION_SOURCE_PROOF_ALREADY_PUBLISHED");
+    const sourceProof = this.handoff!.sourceProof(current.record);
+    const next = createCoordinationRecord({ ...recordWithoutHash(current.record), handoff: { ...current.record.handoff!, sourceProof } });
+    return this.confirmHandoff(this.apply("transfer-proof", current, next));
+  }
+  acceptTransfer(workItem: string, expectedControlSha: string, expected: CoordinationExpected, transferId: string, sessionRef?: string): CoordinationRecord {
+    const current = this.transferCurrent(workItem, expectedControlSha, expected, transferId); const handoff = current.record.handoff!;
+    const binding = this.handoff!.check(current.record);
+    if (handoff.target.owner !== binding.actor || handoff.target.machine !== binding.hostId) fail("COORDINATION_OPERATION_IDENTITY_MISMATCH");
+    const frozen = createCoordinationRecord({ ...recordWithoutHash(current.record), handoff: { ...handoff, sourceProof: undefined } });
+    if (handoff.sourceProof?.freezeRecordHash !== frozen.recordHash) fail("COORDINATION_TRANSFER_EVIDENCE_INSUFFICIENT");
+    const targetAcceptance = this.handoff!.targetAcceptance(current.record);
+    const next = createCoordinationRecord({ ...recordWithoutHash(current.record), owner: binding.actor, machine: binding.hostId,
+      sessionRef, generation: current.record.generation + 1, handoff: { ...handoff, targetAcceptance } });
+    return this.confirm(this.apply("transfer-accept", current, next));
+  }
+  private transferCurrent(workItem: string, expectedControlSha: string, expected: CoordinationExpected, transferId?: string) {
+    if (!this.handoff) fail("COORDINATION_HANDOFF_OBSERVER_REQUIRED"); this.handoff.requireLock();
+    const current = this.store.read(workItem); if (!current.record) fail("COORDINATION_RECORD_ABSENT");
+    if (current.controlSha !== expectedControlSha) fail("COORDINATION_CAS_CONFLICT"); assertExpected(current.record, expected);
+    if (!current.record.expiresAt) fail("COORDINATION_WRITE_LEASE_UNAVAILABLE"); this.refreshClock().requireBefore(current.record.expiresAt);
+    if (transferId !== undefined && (current.record.handoff?.transferId !== transferId || current.record.handoff.targetAcceptance)) fail("COORDINATION_TRANSFER_NOT_FROZEN");
+    return { ...current, record: current.record };
+  }
+  private confirmHandoff(applied: ReturnType<GitCoordinationStore["compareAndSwap"]>): CoordinationRecord {
+    if (applied.disposition !== "current" || !applied.current.record?.expiresAt) fail("COORDINATION_TRANSACTION_SUPERSEDED");
+    this.handoff!.check(applied.current.record); this.refreshClock().requireBefore(applied.current.record.expiresAt);
+    return applied.current.record;
   }
   private apply(operation: CoordinationOperation, current: CoordinationObservation, next: CoordinationRecord) {
     if (!this.authority) fail("COORDINATION_OPERATION_AUTHORITY_REQUIRED");

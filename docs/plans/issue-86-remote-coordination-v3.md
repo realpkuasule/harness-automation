@@ -495,6 +495,67 @@ CLI 只传操作意图、精确预期值、工作区选择和 approvalRef，不�
 伪造本机 Head、直接 store 绕过、policy/配置漂移、未绑定 fork source 的 freeze 零写入，
 并保留合法跨机器同 epoch 与 fork PR 只读 merge 的正向覆盖。
 
+### 5.5 Takeover 的精确批准与新代租约
+
+1. 扩展既有 `kind=takeover` scope，不增加审批域：保留 expected 六元组、
+   expectedControlSha、targetOwner/HostId、newEpochDigest、transactionId 和预算；
+   增加 `newLease { ttlMs, notAfter }`、`targetWorkspace`、`targetBranch`、
+   `targetHead`、`sourceRepositoryId` 及结构化 `assetRisk`。assetRiskHash 必须为
+   该规范化结构的摘要，全部字段进入同一 semantic packet/scopeHash；不能只批准一个
+   无法查看内容的风险 hash。CLI 执行只消费 approvalRef，不接收可替换上述字段的 JSON。
+2. ttlMs 是批准的有限时长，notAfter 是该新租约的绝对最晚期限，均经 schema/协议
+   边界校验。构造候选时以一次可信服务端时间样本固定 createdAt，并按批准公式
+   `newExpiresAt = min(sample.lowerMs + ttlMs, notAfter)` 计算期限；安全上界已不小于
+   新期限则拒绝。写前仍检查批准有效期，CAS/readback 后重新检查新租约有效性；不从
+   确认时间重新起算 TTL。批准票有效期与新租约期限是不同约束，票据过期不自动撤销
+   已合法建立的新代，但也不允许新写尝试。unknown 恢复复用原候选及固定期限，不借
+   resume 延长；获准的新尝试仍逐次计数，不能越过 notAfter。Git CAS 不被描述为
+   服务端原子检查批准 TTL，迟到结果也不能突破这份固定租约的时间上限。
+3. `assetRisk` 由固定本机观察器生成：包含实际目标安装/common-dir/workspace、
+   branch/HEAD、tracked 变更、untracked/ignored 与处理依据、unique/unpushed 事实，
+   以及 Broker 观察的 source repo/ref/endpoint/exact remote Head。源端另列明确的
+   `observed`、`not-observed` 或 `unavailable` 及证据/原因；历史 source proof 必须
+   标作历史，不当作当前观察。未访问或访问失败不能推断源机 offline、clean、无在途
+   写入或无待救援资产。结构显式列出未知源资产、外部写者不可 fencing、保留旧资产
+   和非零损失交接等适用风险，由同一人工批准覆盖；源不可读既不自动放行，也不强制
+   源机上线。清单/观察失败或截断如实失败，不归零；不上传文件内容或秘密作为风险证据。
+4. 计划绑定实际 canonical targetWorkspace（其 common-dir 必须匹配 binding）、
+   targetBranch/targetHead 和 sourceRepositoryId。本轮只接管原 Work Item 的原
+   source 仓库/branch，不顺带重命名、换仓库或覆盖文件；targetHead 可与旧记录 Head
+   不同，但差异及其与实际远端 Head 的关系必须在批准风险中明确可见。执行在目标
+   apply.lock 内重采事实，比较批准的语义事实指纹；新观察时间等审计字段另记回执，
+   不因时间戳自然变化自锁，也不忽略内容/身份/Head 变化。目标必须实际处于获批
+   branch/Head；不得为吻合计划自动 checkout/reset/clean。缺失 source 凭据路由仍
+   按 §5.4 阻断，不以人类接受未知源资产来绕过目标/Provider 身份验证。
+5. takeover 是显式新代 fencing，不要求旧租约仍有效、旧 owner 等于当前 actor、
+   或完整零损失 source proof；但必须精确匹配当前 control SHA、recordHash、旧
+   owner/machine/generation/Head/epoch 和批准风险，且不能重开 terminal 记录。
+   候选保留原 Work Item/source 映射，owner/machine 改为获批目标、generation+1，
+   采用新 Head/epoch/租约；移除属于旧代的 handoff、renewal/renewalConfirmation。
+   不为保留 handoff 而放宽其 generation/epoch 一致性校验：完整旧记录留在 exact
+   parent 的已验证 Git 历史，原事务回执绑定 previousControlSha/recordHash、批准
+   和风险。源 Worktree/分支/文件不删除，不增加不断增长的资产数组或第二账本。
+6. 旧 epoch 只与 scope.expected.controlEpochDigest 及实际旧记录匹配；目标
+   `newEpochDigest` 必须等于当前已验证 `binding.controlEpoch` 的独立 digest，
+   新记录也必须相等。不能把旧 epoch 必须等于新 epoch 写成接管前提，也不能允许
+   调用者任意选新 epoch；生产目标 descriptor 仍来自已批准 adoption，不从 takeover
+   顺便采用新生产策略。共享原生操作校验按 takeover 区分旧身份与获批目标身份。
+7. 隔离资格 fixture 可以使用同一审批域的受限 takeover 票，显式关联已有获批
+   qualification run/清单、精确临时 control ref/genesis 和独立预算分额；其 binding
+   使用 isolated-qualification epoch，范围/时间/额度不得扩大父运行清单。不能仅以
+   `kind!=qualification-run` 就强制 production epoch，亦不能以一个 test flag 放行。
+   此路径运行同一 Broker/Store/接管用例，不要求 production adoption；生产接管则
+   同时要求既有有效 adoption 与专用 takeover 批准。资格结果不是生产采用回执，
+   takeover 子票的候选/尝试须纳入既定运行总上限，不能成为额外隐形预算。
+8. 复用 approval-human 的 candidate 预留、attempt 和回执恢复，且只允许一个未
+   解决尝试；candidate 在 commit 生成前、attempt 在实际 dispatch 前耐久记录。
+   CAS 冲突不自动改 expectedControlSha 后重试，远端成功/本机中断按同一 transactionId
+   只读恢复，已成功接管不得再消费该票再次换代。验收至少覆盖：TTL/Head/risk/epoch
+   篡改拒绝；源 not-observed 经精确批准可行但不声称 offline；旧 handoff 保留历史且
+   新代可解析；terminal 拒绝；未知结果不重发/不续期；隔离票不获得生产权限。
+
+本节只定义实现和测试合同，不登记真实批准、修改凭据、接管现有工作或启用生产。
+
 ## 6. 可调用入口及资格门
 
 提供 `harness-automation coordination status`，以及对应 acquire、renew、rebind、

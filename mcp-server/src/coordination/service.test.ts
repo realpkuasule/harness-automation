@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CoordinationLifecycleService, GitCoordinationStore, confirmRenewal, coordinationStatus, nextLease, observeRenewal, observeZeroLossTransfer, reserveRenewal, transferLease } from "./service.js";
+import { CoordinationLifecycleService, GitCoordinationStore, confirmRenewal, coordinationStatus, nextLease, observeRenewal, reserveRenewal } from "./service.js";
 import { createCoordinationRecord, expectedRecord } from "./record.js";
 import { CoordinationClock } from "./clock.js";
 import { localHistory, localTransport } from "./__fixtures__/transport.js";
@@ -104,17 +104,4 @@ describe("GitCoordinationStore", { timeout: 20_000 }, () => {
     expect(writes).toHaveBeenCalledTimes(1);
   });
 
-  it("moves a generation only after a zero-loss exact-head transfer snapshot", () => {
-    const first = lease(); const expected = expectedRecord(first);
-    expect(() => transferLease(first, expected, { owner: "new", machine: "b" }, { sourceHead: first.lastObservedHead, remoteHead: first.lastObservedHead, targetRetrievedHead: first.lastObservedHead, trackedClean: true, untracked: [], ignored: [], uniqueCommits: 1, unpushedCommits: 0 }, sampleClock())).toThrow("COORDINATION_TRANSFER_EVIDENCE_INSUFFICIENT");
-    expect(transferLease(first, expected, { owner: "new", machine: "b" }, { sourceHead: first.lastObservedHead, remoteHead: first.lastObservedHead, targetRetrievedHead: first.lastObservedHead, trackedClean: true, untracked: [], ignored: [], uniqueCommits: 0, unpushedCommits: 0 }, sampleClock()).generation).toBe(2);
-  });
-
-  it("derives transfer evidence from two Git checkouts, rejecting unpushed source state", () => {
-    const { root, remote } = fixture(); git(root, "checkout", "--orphan", "source"); git(root, "commit", "--allow-empty", "-m", "source"); git(root, "push", "origin", "HEAD:refs/heads/source");
-    const target = join(root, "..", "target"); git(root, "clone", "--quiet", remote, target); git(target, "fetch", "origin", "refs/heads/source"); paths.push(target);
-    const clean = observeZeroLossTransfer(root, remote, "refs/heads/source", target); expect(clean.unpushedCommits).toBe(0);
-    git(root, "commit", "--allow-empty", "-m", "local");
-    expect(() => observeZeroLossTransfer(root, remote, "refs/heads/source", target)).toThrow("COORDINATION_TRANSFER_REMOTE_HEAD_MISMATCH");
-  });
 });
