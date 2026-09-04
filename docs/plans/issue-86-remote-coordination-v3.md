@@ -32,12 +32,64 @@
 | 回执与本地恢复 | 复用 `receipt/service.ts`、`recovery/service.ts`、`v2/fs.ts` 的哈希、耐久写入、锁与 safe-mode 能力；不建第二套审批/回执库 |
 | CLI | 新域 handler，`src/cli.ts` 只薄路由和帮助入口；实际调用相同用例，不能交付一个从未被 CLI 调用的库 |
 
-`credentials/service.ts` 当前在生产 `git-transport` 上明确返回
+基线 `6059146` 的 `credentials/service.ts` 在生产 `git-transport` 上明确返回
 `CREDENTIAL_TRANSPORT_HELPER_REQUIRED`。该缺口必须真实补齐或明确保留 blocked；
 不能将内存 test adapter 当 LIVE，也不能绕回 `tracking/service.ts` 的隐式全局 `gh`。
 缺少 credentialRef、身份不匹配或实际能力不足时，在 mutation 前失败；不自动 login、
 取另一个 token、扩大 scope 或回退 SSH agent。secret 只来自既有 resolver，不能进 argv、
 仓库、Git object、receipt、stdout/stderr。新 helper 与 resolver 仍属于现有 broker。
+
+### 2.1 实施决策：真实 CLI 的凭据、人工批准和 merge 观察
+
+依据成果01 §14、成果03/04 A-01..05，不能以“尚无注入对象”为永久 CLI stub。
+基线只有 `CredentialResolver` 接口，没有现成的系统密钥库注册表；本轮在既有
+credentials/approval/receipt 域补齐下列窄实现，不引入 Provider 平台或第二审批库：
+
+- **受信本机绑定**：从实际 Git common-dir 固定读取新建的
+  `harness/credentials/host-binding.json` 非秘密投影；以既有 receipt chain/LKG
+  校验其获批配置事件、完整绑定 hash、canonical common-dir、真实 host identity、
+  仓库 ID、endpoint、用途、credentialRef、keychain 精确 locator 和到期日。
+  若已有 worktree host binding，同时记录其 hash；尚未配置不阻止凭据注册，也不
+  因注册获得 worktree 权限。绑定变更须重新批准，不能修改旧 strict schema 或让
+  项目 JSON、环境变量、任意配置路径自行提供 resolver/批准。
+  本机状态使用安全路径、拒绝 symlink、owner-only 权限；无 receipt 的手写文件不生效。
+- **可执行注册与装配**：实现只含非秘密输入的绑定 plan/apply 入口，复用既有
+  semantic plan、显式人工批准及 receipt 持久化；注册/变更是人类门，不依赖待注册
+  凭据或未启用 Reviewer 来批准自身。CLI 自动装配固定 loader → OS resolver →
+  同一 Broker → Git/API adapters；配置齐备时真实可运行，缺哪一项就报哪一项。
+  此处只授权编写入口，不执行本项目生产注册、创建 token、扩大权限或启用协调 ref。
+- **OS resolver**：首个实用实现采用本机 macOS Keychain 的固定原生命令
+  `security find-generic-password`，只接受获批 locator，不接受自定义命令；secret
+  输出由 Broker 私有管道捕获，不交给通用命令日志。其他未实现平台明确缺少 adapter，
+  不回退明文文件/global gh/SSH agent。Git 走显式绑定的 transport helper；API 使用
+  对应用途的显式 `GH_TOKEN` 子进程环境。secret 及其 Base64/Basic 等可逆表示均不能
+  放 argv、URL、持久配置或证据；缺失/锁定/拒绝访问是明确凭据门，工具真正不存在才
+  属于 ENVIRONMENT_BLOCKED，不靠错误字符串包含 keychain 就统一归类。
+- **一个实际能力探测器**：Git/API 复用 Broker 的固定 GitHub 身份/仓库探测，分别
+  使用自己的 credentialRef；校验真实响应的 actor、不可变 repo ID、exact endpoint
+  和本操作能力。`x-oauth-scopes`、repo.permissions、配置自报 scopes 都不是
+  fine-grained PAT 写能力证明；区分人工登记的权限摘要与实际验证的能力。读能力用
+  对应真实 endpoint；写能力用同 credential/purpose/repo 的获批隔离写入证据及实际
+  mutation/readback，不能额外写生产 ref 来 probe。401/403 或必要能力未知时阻断，
+  不反复 login、不自动提权，也不因 fine-grained PAT 缺 OAuth scope header 永久拒绝。
+- **takeover 批准**：命令只接收批准引用，既有 approval 域把 HumanApproval 验为
+  同一 semantic packet 的真实人工批准事件，并通过同一 receipt chain/LKG 装载；
+  绑定动作、Work Item/repo ID、旧/新 owner+machine、generation/Head/epoch、资产风险、
+  完整 plan/input/observed hash、批准主体与有效期。成功事务绑定消费，幂等恢复不再
+  批准第二个事务。若需增加人工事件类型，在既有域扩展，不新建 approval 文件库，
+  不把远端 takeover 伪装成本地 file/workspace recovery。CLI JSON 自报 approved、
+  哈希正确或 reviewer verdict 均不等于人工批准；现有显式人工入口的真实性属于
+  受管过程保证，不宣称 hash chain 能抵抗同 UID 恶意重写或提供宿主签名证明。
+- **真实 merge observer**：同一 Broker 用 github-api 用途执行固定 `gh api` 只读
+  PR/仓库观察，交叉绑定 PR 身份、head repo ID、integratedSourceHead、base repo/ref、
+  merged/merged_at 和 merge commit；由实际响应生成带观察 hash 的内部证据，再交给
+  terminal-claim。closed 不等于 merged，当前 branch tip 不代替合并时 source Head，
+  CLI 不能传入一个布尔值或 JSON 充当 Provider 证明。不可完整证明即保留缺口。
+
+源码验收必须包含正常 CLI 经受信 fixture 组合根成功调用真实 OS resolver/固定
+Provider adapter 的证据，以及未注册、错用途、伪造批准、secret canary 的拒绝证据；
+单测注入不代替 OS/GitHub LIVE。实际 token 登记/解锁或新增权限是后续明确人工门，
+与“代码尚缺 resolver/handler”分别报告；生产采用仍另需 DG-01 资格和启用批准。
 
 ## 3. 权威记录与 exact Git CAS
 

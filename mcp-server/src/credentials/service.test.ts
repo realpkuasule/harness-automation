@@ -36,7 +36,7 @@ describe("credentials", () => {
     })).toThrow("CREDENTIAL_INVALID");
     expect(() => runWithCredential({
       ref, purpose: "github-api", resolver: { resolve: () => { throw new Error("keychain unavailable"); } }, command: "fake", argv: [], requiredCapability: "issues:write", testAdapter,
-    })).toThrow("ENVIRONMENT_BLOCKED: CREDENTIAL_STORE_UNAVAILABLE");
+    })).toThrow("CREDENTIAL_RESOLUTION_FAILED");
     expect(() => runWithCredential({
       ref, purpose: "github-api", resolver: { resolve: () => ({ ref, secret: "secret" }) }, command: "fake", argv: [], requiredCapability: "issues:write",
       testAdapter: { probe: () => ({ identity: "octo", repository: "owner/repo", capabilities: [], status: 403 }) },
@@ -64,7 +64,7 @@ describe("credentials", () => {
 
   it("keeps raw and base64 token canaries out of the fixed probe argv and scrubbed output", () => {
     const bin = mkdtempSync(join(tmpdir(), "harness-gh-probe-")); temporary.push(bin); const captured = join(bin, "argv.json");
-    writeFileSync(join(bin, "gh"), `#!/usr/bin/env node\nconst fs=require('node:fs');const a=process.argv.slice(2);const p=${JSON.stringify(captured)};const old=fs.existsSync(p)?JSON.parse(fs.readFileSync(p,'utf8')):[];old.push(a);fs.writeFileSync(p,JSON.stringify(old));if(a.includes('user'))process.stdout.write('HTTP/2 200\\nx-oauth-scopes: contents:read\\n\\n{"login":"octo"}');else process.stdout.write('{"full_name":"owner/repo"}');\n`, "utf8"); chmodSync(join(bin, "gh"), 0o755); process.env.PATH = `${bin}${delimiter}${originalPath}`;
+    writeFileSync(join(bin, "gh"), `#!/usr/bin/env node\nconst fs=require('node:fs');const a=process.argv.slice(2);const p=${JSON.stringify(captured)};const old=fs.existsSync(p)?JSON.parse(fs.readFileSync(p,'utf8')):[];old.push(a);fs.writeFileSync(p,JSON.stringify(old));if(a.includes('user'))process.stdout.write('HTTP/2 200\\nx-oauth-scopes: contents:read\\n\\n{"login":"octo"}');else process.stdout.write(a.at(-1).endsWith('/git/matching-refs/heads')?'[]':'{"full_name":"owner/repo"}');\n`, "utf8"); chmodSync(join(bin, "gh"), 0o755); process.env.PATH = `${bin}${delimiter}${originalPath}`;
     writeFileSync(join(bin, "curl"), `#!/usr/bin/env node\nconst fs=require('node:fs');const a=process.argv.slice(2);const p=${JSON.stringify(captured)};const old=fs.existsSync(p)?JSON.parse(fs.readFileSync(p,'utf8')):[];old.push(a);fs.writeFileSync(p,JSON.stringify(old));process.stdout.write(a.some(x=>x.includes('/repos/'))?'{"full_name":"owner/repo"}':'HTTP/2 200\\nx-oauth-scopes: contents:read\\n\\n{"login":"octo"}');\n`, "utf8"); chmodSync(join(bin, "curl"), 0o755);
     const gitRef: CredentialRef = { ...ref, purpose: "git-transport", envVar: "HARNESS_GIT_TOKEN", scopes: ["contents:read"] };
     const secret = "raw-canary"; const encoded = Buffer.from(`x-access-token:${secret}`).toString("base64");
@@ -86,5 +86,28 @@ describe("credentials", () => {
       testAdapter: { probe: () => { throw new Error("TEST_PROBE_MUST_NOT_RUN"); } },
       runner: () => { throw new Error("REVIEWER_MUST_NOT_RUN"); },
     })).toThrow("DG02_REVIEWER_CONFIGURATION_REQUIRED");
+  });
+
+  it("rejects invalid metadata before secret access and scrubs thrown transport errors", () => {
+    let reads = 0;
+    const invalid = { ...ref, expiresAt: "not-a-date" };
+    expect(() => runWithCredential({ ref: invalid, purpose: "github-api", resolver: { resolve: () => { reads++; return { ref: invalid, secret: "secret" }; } }, command: "fake", argv: [], requiredCapability: "issues:write", testAdapter })).toThrow("CREDENTIAL_INVALID");
+    expect(reads).toBe(0);
+    const secret = "thrown-transport-canary";
+    expect(() => runWithCredential({ ref, purpose: "github-api", resolver: { resolve: () => ({ ref, secret }) }, command: "fake", argv: [], requiredCapability: "issues:write", testAdapter, runner: () => { throw new Error(secret); } })).toThrow("[REDACTED]");
+    expect(() => runWithCredential({ ref, purpose: "github-api", resolver: { resolve: () => { throw new Error(secret); } }, command: "fake", argv: [], requiredCapability: "issues:write", testAdapter })).toThrow(/^CREDENTIAL_RESOLUTION_FAILED$/u);
+  });
+
+  it("does not mistake metadata access for contents access or trust an OAuth scope header", () => {
+    const bin = mkdtempSync(join(tmpdir(), "harness-capability-probe-")); temporary.push(bin);
+    const gh = join(bin, "gh");
+    const script = (deny: boolean) => `#!${process.execPath}\nconst p=process.argv.at(-1);let body;if(p==='user')body={login:'octo'};else if(p==='repos/owner/repo')body={full_name:'owner/repo',id:42};else if(p==='repos/owner/repo/git/matching-refs/heads'){if(${deny}){process.stdout.write('HTTP/2 403\\n\\n{}');process.exit(1);}body=[];}else process.exit(2);process.stdout.write((process.argv.includes('-i')?'HTTP/2 200\\n\\n':'')+JSON.stringify(body));\n`;
+    process.env.PATH = `${bin}${delimiter}${originalPath}`;
+    let executions = 0;
+    const invoke = () => runWithCredential({ ref, purpose: "github-api", resolver: { resolve: () => ({ ref, secret: "synthetic-only" }) }, command: "unused", argv: [], requiredCapability: "contents:read", repositoryId: "42", runner: () => { executions++; return { status: 0, stdout: "", stderr: "" } as never; } });
+    writeFileSync(gh, script(true), { mode: 0o700 });
+    expect(invoke).toThrow("CREDENTIAL_ACCESS_DENIED"); expect(executions).toBe(0);
+    writeFileSync(gh, script(false));
+    expect(invoke().status).toBe(0); expect(executions).toBe(1);
   });
 });

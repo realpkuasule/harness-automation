@@ -17,7 +17,7 @@ export interface CredentialRef {
 
 interface ResolvedCredential { secret: string; ref: CredentialRef; }
 export interface CredentialResolver { resolve(ref: CredentialRef): ResolvedCredential; }
-interface CredentialEvidence { identity: string; repository: string; capabilities: string[]; status: number; }
+interface CredentialEvidence { identity: string; repository: string; repositoryId?: string; capabilities: string[]; status: number; }
 
 /** Explicit test seam; production always uses the fixed GitHub probe below. */
 export interface CredentialTestAdapter { probe(ref: CredentialRef, env: NodeJS.ProcessEnv): CredentialEvidence; }
@@ -67,52 +67,39 @@ function statusFromOutput(output: string): number {
   return match ? Number(match[1]) : 200;
 }
 
-function fixedProbe(ref: CredentialRef, env: NodeJS.ProcessEnv): CredentialEvidence {
-  if (ref.purpose === "reviewer") {
-    throw new Error("DG02_REVIEWER_CONFIGURATION_REQUIRED");
+function fixedProbe(ref: CredentialRef, env: NodeJS.ProcessEnv, requiredCapability: string): CredentialEvidence {
+  if (ref.purpose === "reviewer") throw new Error("DG02_REVIEWER_CONFIGURATION_REQUIRED");
+  // Git and API retain distinct refs, but share one fixed, explicitly authenticated probe.
+  const probeEnv = { PATH: env.PATH, CI: "1", GH_TOKEN: env[ref.envVar] };
+  const request = (endpoint: string): unknown => {
+    const result = spawnSync("gh", ["api", "-i", "--method", "GET", endpoint], { env: probeEnv, encoding: "utf8", timeout: 10_000, maxBuffer: 1024 * 1024 });
+    if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") throw new Error("ENVIRONMENT_BLOCKED: CREDENTIAL_PROBE_UNAVAILABLE");
+    const status = statusFromOutput(result.stdout ?? "");
+    if (status === 401 || status === 403) throw new Error("CREDENTIAL_ACCESS_DENIED");
+    if (result.error || result.status !== 0 || status < 200 || status >= 300) throw new Error("CREDENTIAL_CAPABILITY_DENIED");
+    const offset = result.stdout.search(/\r?\n\r?\n/u);
+    try { return JSON.parse(offset < 0 ? result.stdout : result.stdout.slice(offset)); }
+    catch { throw new Error("CREDENTIAL_PROBE_RESPONSE_INVALID"); }
+  };
+  const identity = request("user") as { login?: string };
+  const repo = request(`repos/${ref.repository}`) as { full_name?: string; id?: number | string };
+  if (!identity || !repo || typeof identity.login !== "string" || typeof repo.full_name !== "string") throw new Error("CREDENTIAL_PROBE_RESPONSE_INVALID");
+  const capabilities = ["metadata:read"];
+  if (requiredCapability === "contents:read") {
+    if (!Array.isArray(request(`repos/${ref.repository}/git/matching-refs/heads`))) throw new Error("CREDENTIAL_PROBE_RESPONSE_INVALID");
+    capabilities.push("contents:read");
   }
-  if (ref.purpose === "git-transport") {
-    // Probe identity through an explicit token environment, never through argv or ambient gh auth.
-    const probeEnv = { ...env, GH_TOKEN: env[ref.envVar] };
-    const request = (argv: string[]) => spawnSync("gh", argv, { env: probeEnv, encoding: "utf8", maxBuffer: 1024 * 1024 });
-    const user = request(["api", "-i", "user"]);
-    if (user.error) throw new Error("ENVIRONMENT_BLOCKED: CREDENTIAL_PROBE_UNAVAILABLE");
-    const status = statusFromOutput(user.stdout ?? user.stderr ?? "");
-    if (status === 401 || status === 403) return { identity: "", repository: "", capabilities: [], status };
-    if (user.status !== 0) throw new Error("CREDENTIAL_CAPABILITY_DENIED");
-    const headerEnd = (user.stdout ?? "").search(/\r?\n\r?\n/u);
-    const identity = JSON.parse(headerEnd < 0 ? user.stdout : user.stdout.slice(headerEnd)) as { login?: string };
-    const repository = request(["api", `repos/${ref.repository}`]);
-    const repositoryStatus = statusFromOutput(repository.stdout ?? repository.stderr ?? "");
-    if (repositoryStatus === 401 || repositoryStatus === 403) return { identity: "", repository: "", capabilities: [], status: repositoryStatus };
-    if (repository.error) throw new Error("ENVIRONMENT_BLOCKED: CREDENTIAL_PROBE_UNAVAILABLE");
-    if (repository.status !== 0) throw new Error("CREDENTIAL_CAPABILITY_DENIED");
-    const repo = JSON.parse(repository.stdout ?? "{}") as { full_name?: string };
-    const scopes = (user.stdout ?? "").match(/^x-oauth-scopes:\s*(.*)$/imu)?.[1] ?? "";
-    return { identity: identity.login ?? "", repository: repo.full_name ?? "", capabilities: scopes.split(",").map((scope) => scope.trim()).filter(Boolean), status };
-  }
-  const request = (argv: string[]) => spawnSync("gh", argv, { env, encoding: "utf8", maxBuffer: 1024 * 1024 });
-  const user = request(["api", "-i", "user"]);
-  if (user.error) throw new Error("ENVIRONMENT_BLOCKED: CREDENTIAL_PROBE_UNAVAILABLE");
-  const status = statusFromOutput(user.stdout ?? user.stderr ?? "");
-  if (status === 401 || status === 403) return { identity: "", repository: "", capabilities: [], status };
-  if (user.status !== 0) throw new Error("CREDENTIAL_CAPABILITY_DENIED");
-  const userText = user.stdout ?? "";
-  const headerEnd = userText.search(/\r?\n\r?\n/u);
-  const identity = JSON.parse(headerEnd < 0 ? userText : userText.slice(headerEnd)) as { login?: string };
-  const repository = request(["api", `repos/${ref.repository}`]);
-  const repositoryStatus = statusFromOutput(repository.stdout ?? repository.stderr ?? "");
-  if (repositoryStatus === 401 || repositoryStatus === 403) return { identity: "", repository: "", capabilities: [], status: repositoryStatus };
-  if (repository.error) throw new Error("ENVIRONMENT_BLOCKED: CREDENTIAL_PROBE_UNAVAILABLE");
-  if (repository.status !== 0) throw new Error("CREDENTIAL_CAPABILITY_DENIED");
-  const repo = JSON.parse(repository.stdout ?? "{}") as { full_name?: string };
-  const scopeHeader = userText.match(/^x-oauth-scopes:\s*(.*)$/imu)?.[1] ?? "";
-  return { identity: identity.login ?? "", repository: repo.full_name ?? "", capabilities: scopeHeader.split(",").map((scope) => scope.trim()).filter(Boolean), status };
+  // A read probe never manufactures write permission from scopes or repo.permissions.
+  return { identity: identity.login, repository: repo.full_name, repositoryId: repo.id === undefined ? undefined : String(repo.id), capabilities, status: 200 };
+}
+
+function validateRef(ref: CredentialRef, expectedPurpose: CredentialPurpose, now: Date): void {
+  if (!CREDENTIAL_PURPOSES.includes(ref.purpose) || !ref.id || !ref.hostId || !ref.repository || !ref.identity || ref.purpose !== expectedPurpose ||
+      ref.envVar !== ENVIRONMENT_VARIABLE[ref.purpose] || !Number.isFinite(Date.parse(ref.expiresAt)) || Date.parse(ref.expiresAt) <= now.getTime()) throw new Error("CREDENTIAL_INVALID");
 }
 
 function validateCredential(ref: CredentialRef, expectedPurpose: CredentialPurpose, evidence: CredentialEvidence, requiredCapability: string, now: Date): void {
-  if (!CREDENTIAL_PURPOSES.includes(ref.purpose) || !ref.id || !ref.hostId || !ref.repository || !ref.identity || ref.purpose !== expectedPurpose ||
-      ref.envVar !== ENVIRONMENT_VARIABLE[ref.purpose] || !Number.isFinite(Date.parse(ref.expiresAt)) || Date.parse(ref.expiresAt) <= now.getTime()) throw new Error("CREDENTIAL_INVALID");
+  validateRef(ref, expectedPurpose, now);
   if (evidence.status === 401 || evidence.status === 403) throw new Error("CREDENTIAL_ACCESS_DENIED");
   if (evidence.status < 200 || evidence.status >= 300 || evidence.identity !== ref.identity || evidence.repository !== ref.repository ||
       !evidence.capabilities.includes(requiredCapability)) throw new Error("CREDENTIAL_CAPABILITY_DENIED");
@@ -125,6 +112,7 @@ export function runWithCredential(args: {
   command: string;
   argv: string[];
   requiredCapability: string;
+  repositoryId?: string;
   runner?: (command: string, argv: string[], env: NodeJS.ProcessEnv) => SpawnSyncReturns<string>;
   testAdapter?: CredentialTestAdapter;
   now?: Date;
@@ -133,23 +121,31 @@ export function runWithCredential(args: {
   if (args.purpose === "reviewer" || args.ref.purpose === "reviewer") {
     throw new Error("DG02_REVIEWER_CONFIGURATION_REQUIRED");
   }
+  validateRef(args.ref, args.purpose, args.now ?? new Date());
   let resolved: ResolvedCredential;
   try {
     resolved = args.resolver.resolve(args.ref);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (/keychain|credential.*store|unavailable/iu.test(message)) throw new Error("ENVIRONMENT_BLOCKED: CREDENTIAL_STORE_UNAVAILABLE");
-    throw new Error(`CREDENTIAL_RESOLUTION_FAILED: ${scrubSensitive(message)}`);
+    if (message === "ENVIRONMENT_BLOCKED: SECURITY_TOOL_UNAVAILABLE") throw new Error(message);
+    // A failing resolver has not supplied the secret to scrub; never echo its arbitrary error.
+    if (["CREDENTIAL_OS_ADAPTER_UNAVAILABLE", "CREDENTIAL_KEYCHAIN_ACCESS_DENIED", "CREDENTIAL_BINDING_STALE", "CREDENTIAL_REF_UNREGISTERED"].includes(message)) throw new Error(message);
+    throw new Error("CREDENTIAL_RESOLUTION_FAILED");
   }
   if (!sameRef(resolved.ref, args.ref) || !resolved.secret) throw new Error("CREDENTIAL_RESOLUTION_FAILED");
   const derivedSecrets = args.purpose === "git-transport"
     ? [resolved.secret, Buffer.from(`x-access-token:${resolved.secret}`, "utf8").toString("base64")]
     : [resolved.secret];
-  if ([args.command, ...args.argv].some((value) => value.includes(resolved.secret))) throw new Error("CREDENTIAL_SECRET_IN_ARGUMENTS");
-  const env = credentialEnv(args.ref, resolved.secret);
-  const evidence = args.testAdapter ? args.testAdapter.probe(args.ref, env) : fixedProbe(args.ref, env);
-  validateCredential(args.ref, args.purpose, evidence, args.requiredCapability, args.now ?? new Date());
-  const result = (args.runner ?? ((command, argv, childEnv) => spawnSync(command, argv, { env: childEnv, encoding: "utf8", maxBuffer: 1024 * 1024 })))(args.command, args.argv, env);
-  if (result.error || result.status !== 0) throw new Error(`CREDENTIAL_COMMAND_FAILED: ${scrubSensitive(`${result.stderr ?? result.stdout ?? result.error ?? ""}`, derivedSecrets)}`);
-  return { status: result.status, stdout: scrubSensitive(result.stdout ?? "", derivedSecrets), stderr: scrubSensitive(result.stderr ?? "", derivedSecrets), credentialRef: args.ref.id, identity: args.ref.identity, expiresAt: args.ref.expiresAt };
+  if ([args.command, ...args.argv].some((value) => derivedSecrets.some((secret) => value.includes(secret)))) throw new Error("CREDENTIAL_SECRET_IN_ARGUMENTS");
+  try {
+    const env = credentialEnv(args.ref, resolved.secret);
+    const evidence = args.testAdapter ? args.testAdapter.probe(args.ref, env) : fixedProbe(args.ref, env, args.requiredCapability);
+    validateCredential(args.ref, args.purpose, evidence, args.requiredCapability, args.now ?? new Date());
+    if (args.repositoryId !== undefined && evidence.repositoryId !== args.repositoryId) throw new Error("CREDENTIAL_REPOSITORY_ID_MISMATCH");
+    const result = (args.runner ?? ((command, argv, childEnv) => spawnSync(command, argv, { env: childEnv, encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 })))(args.command, args.argv, env);
+    if (result.error || result.status !== 0) throw new Error(`CREDENTIAL_COMMAND_FAILED: ${result.stderr || result.stdout || result.error || "unknown error"}`);
+    return { status: result.status, stdout: scrubSensitive(result.stdout ?? "", derivedSecrets), stderr: scrubSensitive(result.stderr ?? "", derivedSecrets), credentialRef: args.ref.id, identity: args.ref.identity, expiresAt: args.ref.expiresAt };
+  } catch (error) {
+    throw new Error(scrubSensitive(error instanceof Error ? error.message : String(error), derivedSecrets));
+  }
 }

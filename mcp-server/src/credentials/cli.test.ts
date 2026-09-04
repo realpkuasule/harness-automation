@@ -1,0 +1,32 @@
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { afterEach, expect, it } from "vitest";
+import { sha256 } from "../v2/fs.js";
+
+const roots: string[] = [];
+afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
+it("registers only an exact approved plan through the actual CLI without reading a secret", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "harness-credential-cli-"))); roots.push(root);
+  const init = spawnSync("git", ["init", "--quiet", root]); expect(init.status).toBe(0);
+  const endpoint = "https://github.com/owner/repo.git";
+  expect(spawnSync("git", ["remote", "add", "origin", endpoint], { cwd: root }).status).toBe(0);
+  const input = join(root, "input.json");
+  const commonDir = join(root, ".git");
+  writeFileSync(input, JSON.stringify({ schemaVersion: "credential-host-binding/1.0", commonDir, hostId: hostname(), repository: "owner/repo", repositoryId: "42", endpointHash: sha256(endpoint), credentials: [{ id: "keychain:cli", purpose: "git-transport", hostId: hostname(), repository: "owner/repo", identity: "octo", scopes: ["contents:read"], expiresAt: "2099-01-01T00:00:00.000Z", envVar: "HARNESS_GIT_TOKEN", keychainService: "no-real-secret", keychainAccount: "fixture" }] }));
+  const cli = resolve("src/cli.ts");
+  const run = (...args: string[]) => spawnSync(process.execPath, ["--import", "tsx", cli, "credentials", ...args, "--project", root], { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }, encoding: "utf8", timeout: 20_000 });
+  const planned = run("plan", "--input", input); expect(planned.status, planned.stderr).toBe(0);
+  const output = JSON.parse(planned.stdout);
+  expect(output.approval.risk).toBe("protected");
+  const path = join(commonDir, "harness/credentials/host-binding.json");
+  expect(existsSync(path)).toBe(false);
+  const rejected = run("apply", "--plan", output.planPath, "--approve", "bad"); expect(rejected.status).toBe(1);
+  expect(existsSync(path)).toBe(false);
+  const applied = run("apply", "--plan", output.planPath, "--approve", output.plan.planHash);
+  expect(applied.status, applied.stderr).toBe(0);
+  expect(JSON.parse(applied.stdout)).toMatchObject({ registered: true, capabilitiesVerified: false, secretsRead: false });
+  expect(JSON.parse(readFileSync(path, "utf8")).bindingHash).toBe(output.plan.binding.bindingHash);
+  expect(run("apply", "--plan", output.planPath, "--approve", output.plan.planHash).status).toBe(0);
+});

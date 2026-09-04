@@ -82,6 +82,7 @@ import {
   updateGitHubWorkItem,
 } from "./tracking/service.js";
 import { coordinationStatus, requireEnabledCoordination } from "./coordination/service.js";
+import { runCredentialCommand } from "./credentials/cli.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -730,6 +731,8 @@ Usage:
   harness-automation delivery pr --authorization <sha256> --title <title> [--body <body>] [--project .]
   harness-automation delivery merge --authorization <sha256> --pull-request <number> [--project .]
   harness-automation coordination status|acquire|renew|rebind|transfer|takeover|terminal-claim [--project .]
+  harness-automation credentials plan --input <non-secret-binding.json> [--remote origin] [--project .]
+  harness-automation credentials apply --plan <plan.json> --approve <exact-hash> [--remote origin] [--project .]
   harness-automation session handoff --work-item <provider:repo#issue> --session <session-id> [--to-status in-progress|ready-for-review] [--dry-run] [--project .]
   harness-automation session status [--work-item <provider:repo#issue>] [--project .]
   harness-automation session seed --work-item <provider:repo#issue> [--project .]
@@ -933,6 +936,9 @@ function runWorkflow(argv: string[]): void {
     case "coordination":
       runCoordinationCommand(root, args);
       return;
+    case "credentials":
+      printJson(runCredentialCommand(root, args));
+      return;
     case "github": {
       if (args.positionals[0] !== "audit") throw new Error("GITHUB_COMMAND_REQUIRED: choose audit");
       const report = auditGitHubGovernance({ projectRoot: root, organization: value(args, "organization") });
@@ -965,7 +971,7 @@ function main(): void {
     const message = error instanceof Error ? error.message : String(error);
     if (argv.length === 0 || argv[0] === "install") fail(message);
     else console.error(JSON.stringify({ ok: false, error: message }, null, 2));
-    process.exitCode = 1;
+    process.exitCode = ["credentials", "coordination"].includes(argv[0]) && message.startsWith("ENVIRONMENT_BLOCKED:") ? 3 : 1;
   }
 }
 
