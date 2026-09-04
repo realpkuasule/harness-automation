@@ -64,7 +64,8 @@ function dependencyIdentities(root: string, mode: "source" | "package") {
       // Node's package search order works for hidden exports and type-only packages without loading an entry.
       const dependency = resolver.resolve.paths(`${name}/package.json`)?.map((path) => join(path, name)).find((path) => lstatSync(join(path, "package.json"), { throwIfNoEntry: false }));
       if (!dependency) { if (optional) { edges[name] = null; continue; } throw new Error(`HARNESS_DEPENDENCY_MISSING: ${name}`); }
-      if (readPackage(dependency).data.name !== name) throw new Error(`HARNESS_DEPENDENCY_INVALID: ${name}`);
+      const expectedName = /^npm:((?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*)(?:@.+)?$/iu.exec(dependencies[name])?.[1] ?? name;
+      if (readPackage(dependency).data.name !== expectedName) throw new Error(`HARNESS_DEPENDENCY_INVALID: ${name}`);
       edges[name] = visit(dependency);
     }
     // Same manifest/version can have different resolved peers; retain each distinct dependency edge set.

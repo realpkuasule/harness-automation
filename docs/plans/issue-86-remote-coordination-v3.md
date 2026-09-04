@@ -357,6 +357,54 @@ source proof 必须绑定 freeze/transferId、common-dir/Work Item、实际覆�
 零损失 source proof，保持 `HandoffPending + Blocked` 或走已批准的显式 takeover；
 不虚构宿主已暂停。隔离 fixture 的证明不得转为生产覆盖资格，凭据/生产采用门不变。
 
+### 5.2 最小交接字段与调用合同
+
+以下为 §5/§5.1 的接口约束，不新增生命周期、审批系统或后端；类型名可沿用现有
+实现。`ctx` 仅由受信组合根装配，含已验证身份、配置、Broker、Store、时钟和观察器；
+CLI 只传操作意图、精确预期值、工作区选择和 approvalRef，不接收授权/事实对象。
+
+1. record 只增加窄 `handoff`：`transferId`、`source { owner, machine,
+   generation, epoch, head }`、`target { owner, machine }`、可选 `sourceProof`
+   与 `targetAcceptance`。source 元组从冻结前的真实记录固定，接收后仍保留以绑定
+   原代；无 targetAcceptance 表示冻结，有 sourceProof 仅表示该操作已有源证明，
+   均不改变 lifecycleState。targetAcceptance 存在时必须满足目标身份及 generation
+   换代合同，不能仅靠添加字段解冻；接受后普通写仍须通过实时租约等全部检查。
+2. `sourceProof` 绑定已提交的 `freezeRecordHash`、结构化 source facts、覆盖/
+   停稳证据及 canonical hash；不得让 freeze 自引用其尚未产生的 recordHash。
+   `targetAcceptance` 绑定 sourceProofHash、实际 retrieval/workspace facts 及其
+   hash；facts 包含 source repo ID/ref/exact SHA、观察身份及时间，不保存 secret。
+   远端 proof 是受管执行的审计证据，hash 或外部 JSON 本身不是凭据或 drain authority。
+3. `assertManagedWriteAllowedLocked(ctx, lock, expected)` 只供已持有原 apply.lock
+   的真实写入口调用；未持锁入口通过薄 wrapper 使用同一 acquire/release API。
+   lock 是进程内持有句柄，不是可序列化的“已排空”凭证。锁覆盖检查、实际变更及全部
+   子进程/写结果收敛；取得锁只证明此前参与该锁的操作结束。未收敛网络写/子进程、
+   锁忙或遗留锁均不能据此出具 drain。既有锁拥有者不得嵌套取得同锁。
+4. `freezeTransfer(ctx, { workItem, expected, transferId, target })` 在源本机锁内
+   重验当前 owner/安装 ID/Head/generation/epoch/TTL，再 exact CAS 固定 handoff；
+   expected 同时绑定 control SHA 和 recordHash。冻结禁止普通写、renew、rebind；
+   只有绑定此 transferId 的证明/接受或明确授权恢复可以继续，不能借通用写入口绕过。
+5. `publishSourceProof(ctx, { workItem, transferId, expectedFrozen })` 取得同锁、
+   重读精确 frozen record，再调用固定观察器采集事实，不允许传 facts/drained。
+   覆盖证据须来自实际已接入的写入口及可核验的宿主停稳能力，而非配置声明或用户
+   JSON。覆盖/在途结果不可证明时保持冻结并返回 `HandoffPending + Blocked`，不写
+   sourceProof；#86 的受控 fixture 只能证明 fixture。#87 后续须在真正 mutation
+   边界接入此锁及校验；本节不使冻结 #87 或尚未接入的宿主自动获得覆盖。
+6. `acceptTransfer(ctx, { workItem, transferId, expectedProof, targetWorkspace })`
+   由目标 host 使用自身安装身份/Broker，在目标本机锁内验证指定目标及 source proof，
+   真实 fetch 绑定的 source repo/ref/exact SHA，验证本机目标工作区并重读远端 source
+   Head。任何源路径仅作审计信息，不访问源机器目录；targetWorkspace 须映射到本机
+   已验证绑定。最后 exact CAS 一并写 acceptance、替换 owner/machine、generation+1，
+   保留旧 expiresAt；readback/时间检查失败不给 token，不在 transfer 内续租。
+7. `takeover(ctx, { workItem, expected, approvalRef })` 从既有 approval-human
+   链装载精确批准，重验当前 record/身份/Head/epoch、目标及资产风险绑定后才 CAS
+   换代；不能把缺少 source proof 当自动 takeover 条件。源机离线时如实将无法观察
+   的资产列为风险，由该批准覆盖，不为取得 takeover 强行要求源机可读。保留旧资产
+   和原 handoff 历史，并以同一事务回执记录批准及风险证据；不冒充零损失 transfer。
+8. 所有阶段使用同一 transferId 和现有事务/回执，proof 发布及 acceptance 前后均
+   重验冻结、Head、generation/epoch 和时间；无关 ref 竞争也须重新观察业务条件。
+   unknown outcome 只读恢复原候选及合法历史，不自动解冻、重发或清理；不持源本机
+   锁等待目标端。这些接口只定义实现边界，不批准真实跨机交接、凭据登记或生产启用。
+
 ## 6. 可调用入口及资格门
 
 提供 `harness-automation coordination status`，以及对应 acquire、renew、rebind、

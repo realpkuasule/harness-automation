@@ -80,3 +80,12 @@ it("does not confuse a declared npm dependency with a same-named Node built-in",
   writeFileSync(join(dependency, "package.json"), JSON.stringify({ name: "punycode", version: "2.0.0" }));
   writeRuntimeManifest(root); expect(inspectHarnessArtifact(root, "package").kind).toBe("package");
 });
+
+it.each(["fixture-dep", "@fixture/dep"])("binds npm aliases to their declared package identity (%s)", (target) => {
+  const root = fixture(); const dependency = join(root, "node_modules/alias-dep"); mkdirSync(dependency);
+  writeFileSync(join(root, "package.json"), JSON.stringify({ name: "@realpkuasule/harness-automation", version: "0.0.0", dependencies: { "alias-dep": `npm:${target}@^1.0.0` } }));
+  writeFileSync(join(dependency, "package.json"), JSON.stringify({ name: target, version: "1.0.0" }));
+  writeRuntimeManifest(root); expect(inspectHarnessArtifact(root, "package").kind).toBe("package");
+  writeFileSync(join(dependency, "package.json"), JSON.stringify({ name: "wrong-identity", version: "1.0.0" }));
+  expect(() => inspectHarnessArtifact(root, "package")).toThrow("HARNESS_DEPENDENCY_INVALID");
+});

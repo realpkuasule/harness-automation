@@ -27,7 +27,8 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
 
 Artifact inventory uses Node's package search paths, not dependency execution.
 Type-only packages, hidden/redirected package exports and dependencies sharing a
-name with a Node built-in are covered by regression tests. Package inspection does
+name with a Node built-in are covered by regression tests. npm aliases bind to the
+explicitly declared target package name, including scoped names. Package inspection does
 not require a Harness Git clone and never substitutes the target project's HEAD.
 
 All current qualification integration tests use disposable local Git repositories
