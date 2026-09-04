@@ -142,14 +142,14 @@ export function runWithCredential(args: {
     throw new Error(`CREDENTIAL_RESOLUTION_FAILED: ${scrubSensitive(message)}`);
   }
   if (!sameRef(resolved.ref, args.ref) || !resolved.secret) throw new Error("CREDENTIAL_RESOLUTION_FAILED");
+  const derivedSecrets = args.purpose === "git-transport"
+    ? [resolved.secret, Buffer.from(`x-access-token:${resolved.secret}`, "utf8").toString("base64")]
+    : [resolved.secret];
   if ([args.command, ...args.argv].some((value) => value.includes(resolved.secret))) throw new Error("CREDENTIAL_SECRET_IN_ARGUMENTS");
   const env = credentialEnv(args.ref, resolved.secret);
   const evidence = args.testAdapter ? args.testAdapter.probe(args.ref, env) : fixedProbe(args.ref, env);
   validateCredential(args.ref, args.purpose, evidence, args.requiredCapability, args.now ?? new Date());
   const result = (args.runner ?? ((command, argv, childEnv) => spawnSync(command, argv, { env: childEnv, encoding: "utf8", maxBuffer: 1024 * 1024 })))(args.command, args.argv, env);
-  if (result.error || result.status !== 0) throw new Error(`CREDENTIAL_COMMAND_FAILED: ${scrubSensitive(`${result.stderr ?? result.stdout ?? result.error ?? ""}`, [resolved.secret])}`);
-  const derivedSecrets = args.purpose === "git-transport"
-    ? [resolved.secret, Buffer.from(`x-access-token:${resolved.secret}`, "utf8").toString("base64")]
-    : [resolved.secret];
+  if (result.error || result.status !== 0) throw new Error(`CREDENTIAL_COMMAND_FAILED: ${scrubSensitive(`${result.stderr ?? result.stdout ?? result.error ?? ""}`, derivedSecrets)}`);
   return { status: result.status, stdout: scrubSensitive(result.stdout ?? "", derivedSecrets), stderr: scrubSensitive(result.stderr ?? "", derivedSecrets), credentialRef: args.ref.id, identity: args.ref.identity, expiresAt: args.ref.expiresAt };
 }
