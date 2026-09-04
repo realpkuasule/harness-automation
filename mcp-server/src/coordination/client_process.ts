@@ -8,7 +8,7 @@ import { hashObject } from "../v2/fs.js";
 const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u);
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
 export const clientCommandSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("step"), nonce: z.string().uuid(), stepId: id }).strict(),
+  z.object({ type: z.enum(["step", "prepare", "dispatch", "recover-rejected"]), nonce: z.string().uuid(), stepId: id }).strict(),
   z.object({ type: z.literal("stop"), nonce: z.string().uuid() }).strict(),
   z.object({ type: z.literal("exit"), nonce: z.string().uuid() }).strict(),
 ]);
@@ -22,7 +22,8 @@ type Message = z.infer<typeof messageSchema>;
 type Member = { pid: number; parent: number; group: number; started: string };
 type Pending = { accept: (message: Message) => boolean; resolve: (message: Message) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
 export type ClientProcess = Readonly<{ kind: "native-qualification-client" }>;
-export type ClientLaunch = { projectRoot: string; approvalRef: string; manifestHash: string; clientId: string; bindingHash: string };
+export type ClientLaunch = { projectRoot: string; approvalRef: string; manifestHash: string; clientId: string; bindingHash: string;
+  role?: "writer" | "rejected-recovery"; attemptId?: string };
 type State = { child: ChildProcess; launch: ClientLaunch; nonce: string; pid: number; identity?: Member; pending?: Pending; failure?: Error;
   phase: "starting" | "ready" | "running" | "quiescent" | "exiting" | "settled" | "failed"; outputBytes: number;
   closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }>; settlement?: { leader: Member; finalMembers: Member[] } };
@@ -72,10 +73,13 @@ function liveIdentity(state: State, members: Member[]): Member {
 export async function startClientProcess(launch: ClientLaunch): Promise<ClientProcess> {
   if (!["darwin", "linux"].includes(process.platform)) throw new Error("ENVIRONMENT_BLOCKED: PROCESS_GROUP_INSPECTION_UNAVAILABLE");
   digest.parse(launch.approvalRef); digest.parse(launch.manifestHash); digest.parse(launch.bindingHash); id.parse(launch.clientId);
+  const role = z.enum(["writer", "rejected-recovery"]).parse(launch.role ?? "writer");
+  if (role === "rejected-recovery") z.string().uuid().parse(launch.attemptId);
+  else if (launch.attemptId !== undefined) throw new Error("QUALIFICATION_PROCESS_ROLE_INVALID");
   const source = import.meta.url.endsWith(".ts"); const entry = fileURLToPath(new URL(source ? "./client_worker.ts" : "./client_worker.js", import.meta.url));
   const loader = source ? ["--import", createRequire(import.meta.url).resolve("tsx")] : [];
   const nonce = randomUUID();
-  const child = spawn(process.execPath, [...loader, entry, launch.projectRoot, launch.approvalRef, launch.manifestHash, launch.clientId, nonce], {
+  const child = spawn(process.execPath, [...loader, entry, launch.projectRoot, launch.approvalRef, launch.manifestHash, launch.clientId, nonce, role, ...(launch.attemptId ? [launch.attemptId] : [])], {
     cwd: launch.projectRoot, detached: true, stdio: ["ignore", "pipe", "pipe", "ipc"],
     env: { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR, CI: "1" },
   });
@@ -103,12 +107,12 @@ export async function startClientProcess(launch: ClientLaunch): Promise<ClientPr
   } catch (error) { abandonClientProcess(handle); throw error; }
 }
 
-export async function runClientStep(handle: ClientProcess, stepId: string): Promise<string> {
+export async function runClientStep(handle: ClientProcess, stepId: string, action: "step" | "prepare" | "dispatch" | "recover-rejected" = "step"): Promise<string> {
   const state = stateOf(handle); id.parse(stepId);
   if (state.phase !== "ready") throw new Error("QUALIFICATION_PROCESS_NOT_READY");
   liveIdentity(state, groupMembers(state.pid)); state.phase = "running";
   const result = waiting(state, (message) => message.type === "result" && message.stepId === stepId, 180_000);
-  send(state, { type: "step", nonce: state.nonce, stepId });
+  send(state, { type: action, nonce: state.nonce, stepId });
   const message = await result; if (state.failure) throw state.failure;
   state.phase = "ready"; return (message as Extract<Message, { type: "result" }>).resultHash;
 }

@@ -70,6 +70,7 @@ export function createQualificationRuntime(projectRoot: string, approvalRef: str
     provider.serverClock().requireBefore(current.approval.scope.expiresAt); return observed;
   } };
   return { context, binding, store, provider, writer,
+    prepareBootstrap: () => store.prepareBootstrap(approvedSyntheticPublication(scope.synthetic!, genesis.metadata.objectId).publication, guards.beforeSyntheticPush),
     bootstrap: () => store.bootstrap(approvedSyntheticPublication(scope.synthetic!, genesis.metadata.objectId).publication, guards.beforeSyntheticPush),
     sourceFixture: (fixtureId: string) => runApprovedSourceFixture(transport, scope.synthetic!, fixtureId, guards.beforeCommit, guards.beforeSyntheticPush),
     recoverSynthetic: (attemptId: string) => recoverHumanSyntheticWrite(context.commonDir, approvalRef, attemptId, store, transport, held),

@@ -9,6 +9,8 @@ import { coordinationPushOutcome } from "./push_result.js";
 import { collectSettledEvidence, readSettledQualification, type SettledQualification } from "./qualification.js";
 import { loadCoordinationConfig } from "./service.js";
 import { GitHubCoordinationTransport } from "./transport.js";
+import { requiredQualificationCases } from "./qualification_cases.js";
+import { sameShaClientFacts } from "./same_sha.js";
 
 type Winner = { clientId: string; approvalRef: string; candidateId: string; attemptId: string; transactionId: string };
 type Observation = { ref: string; head: string | null; ancestry: string[]; winner: Winner | null };
@@ -43,7 +45,7 @@ export function observeQualificationRemote(settlement: SettledQualification, hel
   const proof = readSettledQualification(settlement); const evidence = collectSettledEvidence(settlement, held);
   const first = readVerifiedClientEvidence(evidence[0]);
   const manifest = loadQualificationManifest(first.chains[0].state.approval.scope.binding.commonDir, proof.manifestHash);
-  if (manifest.execution?.kind !== "local-synthetic-publication/1") throw new Error("QUALIFICATION_EXECUTION_REQUIRED");
+  if (!manifest.execution) throw new Error("QUALIFICATION_EXECUTION_REQUIRED");
   const report = evaluateQualificationRun(manifest, evidence, held);
   const gap = report.blockers.find((item) => !["QUALIFICATION_RUNNER_DRAIN_UNPROVEN", "QUALIFICATION_REMOTE_HISTORY_UNPROVEN"].includes(item.code));
   if (gap) throw new Error(gap.code);
@@ -81,4 +83,31 @@ export function readQualificationRemote(handle: QualificationRemoteEvidence) {
   return { manifest: structuredClone(facts.manifest), observations: structuredClone(facts.observations), evidence: [...facts.evidence], settled: facts.settled,
     evidenceHash: hashObject({ manifestHash: facts.manifest.manifestHash, observations: facts.observations,
       clients: facts.evidence.map((item) => { const value = readVerifiedClientEvidence(item); return { clientId: value.clientId, heads: value.heads }; }) }) };
+}
+
+/** Partial case evidence requires actual native settlement, original receipts and current approved remote history. */
+export function observedQualificationCases(handle: QualificationRemoteEvidence) {
+  const facts = readQualificationRemote(handle); const cases = requiredQualificationCases(facts.manifest.requiredCases);
+  if (facts.manifest.execution?.kind !== "local-same-sha-publication/1") return cases;
+  const proof = readSettledQualification(facts.settled); const negative = facts.manifest.sameShaPublicationNegativeControl!;
+  const reader = proof.instances.find((instance) => instance.launch.role === "rejected-recovery");
+  const winner = facts.observations.find((item) => item.ref === negative.ref)?.winner;
+  if (proof.instances.length !== 3 || new Set(proof.instances.map((instance) => instance.leader.pid)).size !== 3 || !reader ||
+      reader.launch.clientId !== negative.publications[1].clientId || proof.steps.length !== 5 || proof.steps.at(-1)?.stepId !== "rejected-restart" ||
+      winner?.clientId !== negative.publications[0].clientId) throw new Error("QUALIFICATION_SAME_SHA_EVIDENCE_INVALID");
+  const clients = negative.publications.map((publication, index) => {
+    const client = facts.evidence.map(readVerifiedClientEvidence).find((item) => item.clientId === publication.clientId)!;
+    const observed = sameShaClientFacts(client.projectRoot, client.approvalRef, index === 0 ? "updated" : "no-op");
+    if (!observed.writesClosed || hashObject(observed.heads) !== hashObject(client.heads)) throw new Error("QUALIFICATION_EVIDENCE_DRIFT");
+    return observed;
+  });
+  if (reader.launch.attemptId !== clients[1].attemptId || winner.attemptId !== clients[0].attemptId) throw new Error("QUALIFICATION_SAME_SHA_EVIDENCE_INVALID");
+  const evidenceHash = hashObject({ remote: facts.evidenceHash, clients, instances: proof.instances, steps: proof.steps });
+  for (const group of cases) for (const assertion of group.subassertions) {
+    if (group.id === "dg01-cas" && ["same-sha-update", "same-sha-noop-rejected", "same-sha-unique-winner"].includes(assertion.id) ||
+        group.id === "dg01-recovery" && assertion.id === "rejected-restart-not-upgraded") {
+      assertion.status = "passed"; assertion.evidenceHash = evidenceHash; group.status = "incomplete";
+    }
+  }
+  return cases;
 }

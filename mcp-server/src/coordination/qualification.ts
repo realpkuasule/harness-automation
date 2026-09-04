@@ -5,7 +5,8 @@ import { resolveRepositoryContext } from "../repository/git.js";
 import { hashObject } from "../v2/fs.js";
 import { abandonClientProcess, readClientSettlement, runClientStep, settleClientProcess, startClientProcess, type ClientProcess } from "./client_process.js";
 import { collectClientEvidence, evaluateQualificationRun, readVerifiedClientEvidence, type EvidenceLock, type VerifiedClientEvidence } from "./evidence.js";
-import { validateQualificationManifest, type QualificationManifest } from "./manifest.js";
+import { qualificationSteps, validateQualificationManifest, type QualificationManifest } from "./manifest.js";
+import { sameShaClientFacts } from "./same_sha.js";
 
 const targetSchema = z.object({ clientId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u), projectRoot: z.string().min(1), approvalRef: z.string().regex(/^[a-f0-9]{64}$/u) }).strict();
 export type QualificationClientTarget = z.infer<typeof targetSchema>;
@@ -55,13 +56,31 @@ export async function runLocalQualification(input: QualificationManifest, inputT
     return { ...target, projectRoot: facts.projectRoot, bindingHash: hashObject(scope.binding), hostId: facts.origin.hostId };
   });
   if (new Set(prepared.map((target) => target.hostId)).size !== 1) throw new Error("QUALIFICATION_LOCAL_HOST_MISMATCH");
-  const clients = new Map<string, ClientProcess>(); const steps: Settlement["steps"] = []; const launchRequestedClients: string[] = [];
+  const clients = new Map<string, ClientProcess>(); const supervised: ClientProcess[] = [];
+  const steps: Settlement["steps"] = []; const launchRequestedClients: string[] = [];
   try {
     for (const target of prepared) {
       launchRequestedClients.push(target.clientId);
-      clients.set(target.clientId, await startClientProcess({ ...target, manifestHash: manifest.manifestHash }));
+      const client = await startClientProcess({ ...target, manifestHash: manifest.manifestHash });
+      clients.set(target.clientId, client); supervised.push(client);
     }
-    for (const step of manifest.execution.steps) steps.push({ stepId: step.stepId, resultHash: await runClientStep(clients.get(step.clientId)!, step.stepId) });
+    const scheduled = qualificationSteps(manifest);
+    if (manifest.execution.kind === "local-same-sha-publication/1") {
+      // Each actual client finishes its original expected-ref read/materialization before either can send.
+      for (const step of scheduled) {
+        const target = prepared.find((item) => item.clientId === step.clientId)!;
+        const resultHash = await runClientStep(clients.get(step.clientId)!, step.stepId, "prepare");
+        if (resultHash !== hashObject(sameShaClientFacts(target.projectRoot, target.approvalRef, "prepared"))) throw new Error("QUALIFICATION_SAME_SHA_EVIDENCE_INVALID");
+        steps.push({ stepId: `${step.stepId}-prepare`, resultHash });
+      }
+      for (const target of prepared) sameShaClientFacts(target.projectRoot, target.approvalRef, "prepared");
+      for (const [index, step] of scheduled.entries()) {
+        const target = prepared.find((item) => item.clientId === step.clientId)!;
+        const resultHash = await runClientStep(clients.get(step.clientId)!, step.stepId, "dispatch");
+        if (resultHash !== hashObject(sameShaClientFacts(target.projectRoot, target.approvalRef, index === 0 ? "updated" : "no-op"))) throw new Error("QUALIFICATION_SAME_SHA_EVIDENCE_INVALID");
+        steps.push({ stepId: `${step.stepId}-dispatch`, resultHash });
+      }
+    } else for (const step of scheduled) steps.push({ stepId: step.stepId, resultHash: await runClientStep(clients.get(step.clientId)!, step.stepId) });
     // No parent holds apply.lock while waiting for a child which needs that same lock.
     for (const client of clients.values()) await settleClientProcess(client);
     const evidence: VerifiedClientEvidence[] = [];
@@ -72,14 +91,25 @@ export async function runLocalQualification(input: QualificationManifest, inputT
         return collectClientEvidence(context.projectDir, target.approvalRef, lock);
       }));
     }
+    if (manifest.execution.kind === "local-same-sha-publication/1") {
+      const target = prepared.find((item) => item.clientId === scheduled[1].clientId)!;
+      const before = sameShaClientFacts(target.projectRoot, target.approvalRef, "no-op");
+      launchRequestedClients.push(target.clientId);
+      const reader = await startClientProcess({ ...target, manifestHash: manifest.manifestHash, role: "rejected-recovery", attemptId: before.attemptId! });
+      supervised.push(reader);
+      const resultHash = await runClientStep(reader, "rejected-restart", "recover-rejected");
+      const after = sameShaClientFacts(target.projectRoot, target.approvalRef, "no-op");
+      if (hashObject(before) !== hashObject(after) || resultHash !== hashObject({ before, after, result: "rejected-unchanged" })) throw new Error("QUALIFICATION_RESTART_EVIDENCE_INVALID");
+      await settleClientProcess(reader); steps.push({ stepId: "rejected-restart", resultHash });
+    }
     const handle: SettledQualification = Object.freeze({ kind: "settled-local-qualification" });
-    settled.set(handle, { manifestHash: manifest.manifestHash, clients: [...clients.values()], evidence, steps });
+    settled.set(handle, { manifestHash: manifest.manifestHash, clients: supervised, evidence, steps });
     const proof = readSettledQualification(handle); const observed = evaluateQualificationRun(manifest, evidence);
     return { settled: handle, evidence, report: { ...observed,
       execution: { kind: manifest.execution.kind, steps: proof.steps, instances: proof.instances, drainCoverage: "this-run-native-process-groups-only" },
       blockers: observed.blockers.filter((item) => item.code !== "QUALIFICATION_RUNNER_DRAIN_UNPROVEN") } };
   } catch (error) {
-    clients.forEach(abandonClientProcess);
+    supervised.forEach(abandonClientProcess);
     throw new Error(error instanceof Error ? error.message : "QUALIFICATION_EXECUTION_FAILED", {
       cause: { error, qualificationProgress: { kind: manifest.execution.kind, steps: structuredClone(steps),
         launchRequestedClients, readyClients: [...clients.keys()], drainCoverage: "unproven" } },

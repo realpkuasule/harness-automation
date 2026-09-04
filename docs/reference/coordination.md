@@ -129,9 +129,11 @@ harness-automation coordination qualification recover-cleanup --approval RECEIPT
 
 Use the exact `planPath`/`planHash` printed by `plan`. Input has only `manifest`
 (the strict `qualification-run-manifest/1` input, without `manifestHash`) and
-`targets` (`{clientId, projectRoot}` per client). This implementation accepts only
-`local-synthetic-publication/1`: ordered approved bootstrap/source publications,
-then process-group settlement and exact-ref cleanup by the sole approved cleaner.
+`targets` (`{clientId, projectRoot}` per client). Fixed execution choices are
+`local-synthetic-publication/1` (ordered approved bootstrap/source publications)
+and `local-same-sha-publication/1` (the bounded two-writer negative control below).
+Both use actual process-group settlement and exact-ref cleanup by the sole
+approved cleaner; neither accepts a custom command, callback or Provider.
 The summary lists the repository, refs, steps, per-client/global budgets and windows.
 The fixed CLI rejects plans whose cleaner cannot cover all refs or whose cleanup
 budget cannot cover the distinct refs this execution will publish; it never raises
@@ -154,11 +156,33 @@ all actual tickets before starting a child; it cannot use the confirmation file
 as permission. Plan/approve exit `0` means only that operation completed.
 
 The current `run` always reports qualification **incomplete** (exit `2`), even
-when the finite execution and cleanup complete; required case assertions remain
-`not-run`. Failure exits `1`, or `3` only for a genuine missing host capability.
+when the finite execution and cleanup complete. Every selected case retains its
+fixed assertion inventory: assertions not actually executed remain `not-run`,
+and a partly covered group remains `incomplete`. Failure exits `1`, or `3` only
+for a genuine missing host capability.
 Reports retain completed steps, cleanup outcomes and per-client recovery locations.
 An unknown outcome never triggers replay or deletion of the remaining resources.
 Read-only `recover-cleanup` may append proven original deletion facts, but cannot
 reconstruct a settled-run handle, reissue a push or clean another ref after restart.
 Full DG-01 cases, trusted cross-machine execution, production adoption and host
 writer coverage remain separate unfinished work.
+
+The same-SHA mode requires exactly one approved empty genesis/control ref,
+two bound clients with distinct publication transaction IDs, the matching
+`sameShaPublicationNegativeControl`, and both `dg01-cas`/`dg01-recovery` groups.
+Each writer prepares its actual object and initial expected-ref observation before
+either sends. The manifest publication order then yields one real update and one
+Git `=`/up-to-date result. The latter is durably rejected, not a second success.
+Preparation reserves a candidate but holds no dispatch lock; sending is one-shot
+and rechecks bytes, identity, time and the original approval. Copied, expired,
+revoked or reused preparations cannot send.
+
+After both writers settle and their ordinary tickets close, a new fixed read-only
+worker checks that the loser's original rejected attempt cannot be upgraded by
+native recovery and that receipt/candidate/attempt counts do not change. Its real
+process group must also settle before cleanup. Two candidates/two writes and one
+cleanup are charged; there is no extra recovery write or budget refund. Only the
+same-SHA update, no-op rejection, unique attribution and fresh-process rejection
+assertions are reported as passed. This controlled interleaving does not prove
+simultaneous acquire competition, full case coverage, multiple machines or LIVE
+GitHub qualification.

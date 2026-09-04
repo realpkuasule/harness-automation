@@ -11,11 +11,14 @@ export interface SyntheticCandidate {
 export interface SyntheticApplied { candidate: SyntheticCandidate; observedHead: string; }
 export interface SyntheticWriteResult { candidate: SyntheticCandidate; pushed?: GitCommandResult; applied?: SyntheticApplied; error?: string; }
 export type SyntheticPushGuard = (candidate: SyntheticCandidate) => WriteRecorder<SyntheticWriteResult>;
+export type SyntheticPreparation = Readonly<{ kind: "prepared-synthetic-publication" }>;
+const preparations = new WeakMap<SyntheticPreparation, { candidate: SyntheticCandidate; plan: SyntheticObjectPlan;
+  transport: CoordinationTransport; beforePush: SyntheticPushGuard; readback: (candidate: SyntheticCandidate) => SyntheticApplied; consumed: boolean }>();
 
-/** Only precomputed empty-tree objects. Authority and quota are checked before materialization and each dispatch. */
-export function publishSyntheticObject(transport: CoordinationTransport, input: SyntheticObjectPlan, publication: SyntheticPublication,
+/** Preparation owns no dispatch lock or network attempt; the original ticket still governs the later send. */
+export function prepareSyntheticPublication(transport: CoordinationTransport, input: SyntheticObjectPlan, publication: SyntheticPublication,
   beforeCommit: CoordinationCommitGuard, beforePush: SyntheticPushGuard, validateParent: (directory: string) => void,
-  readback: (candidate: SyntheticCandidate) => SyntheticApplied): SyntheticApplied {
+  readback: (candidate: SyntheticCandidate) => SyntheticApplied): SyntheticPreparation {
   const plan = syntheticObjectSchema.parse(input);
   if (publication.fixtureId !== plan.metadata.objectId || plan.kind === "control-genesis" && publication.expected !== null) throw new Error("HUMAN_SYNTHETIC_SCOPE_REQUIRED");
   if (transport.readRef(publication.ref) !== publication.expected) throw new Error("COORDINATION_CAS_CONFLICT");
@@ -32,13 +35,26 @@ export function publishSyntheticObject(transport: CoordinationTransport, input: 
     } catch (error) { recordCreation(null); throw error; }
     recordCreation(plan.commitSha);
     const candidate: SyntheticCandidate = { ref: publication.ref, head: plan.commitSha, expected: publication.expected, intent };
+    const handle: SyntheticPreparation = Object.freeze({ kind: "prepared-synthetic-publication" });
+    preparations.set(handle, { candidate, plan, transport, beforePush, readback, consumed: false }); return handle;
+  } finally { if (!retain) rmSync(directory, { recursive: true, force: true }); }
+}
+
+/** No caller-supplied candidate, transport, scope or replay. Git still decides the exact-old-SHA condition. */
+export function dispatchSyntheticPublication(handle: SyntheticPreparation): SyntheticApplied {
+  const prepared = preparations.get(handle);
+  if (!prepared || prepared.consumed) throw new Error("SYNTHETIC_PREPARATION_UNPROVEN");
+  prepared.consumed = true;
+  const { candidate, plan, transport, beforePush, readback } = prepared; const directory = candidate.intent.objectDirectory; let retain = true;
+  try {
+    validateSyntheticObject(directory, plan);
     const recordWrite = beforePush(candidate);
     let failure: { error: unknown } | undefined;
     try {
       let pushed: GitCommandResult | undefined; let applied: SyntheticApplied;
       try {
-        pushed = transport.push(directory, plan.commitSha, publication.ref, publication.expected);
-        requireCoordinationPush(pushed, plan.commitSha, publication.ref);
+        pushed = transport.push(directory, candidate.head, candidate.ref, candidate.expected);
+        requireCoordinationPush(pushed, candidate.head, candidate.ref);
         recordWrite({ candidate, pushed });
         applied = readback(candidate);
       } catch (error) {
@@ -54,6 +70,11 @@ export function publishSyntheticObject(transport: CoordinationTransport, input: 
       catch (error) { if (failure) throw new AggregateError([failure.error, error], "COORDINATION_WRITE_AND_RELEASE_FAILED"); throw error; }
     }
   } finally { if (!retain) rmSync(directory, { recursive: true, force: true }); }
+}
+
+/** Ordinary publications use the same two boundaries consecutively, without a scheduling callback. */
+export function publishSyntheticObject(...args: Parameters<typeof prepareSyntheticPublication>): SyntheticApplied {
+  return dispatchSyntheticPublication(prepareSyntheticPublication(...args));
 }
 
 export function validateSourceAncestry(directory: string, plans: SyntheticObjectPlan[], head: string): string[] {

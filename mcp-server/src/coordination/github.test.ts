@@ -49,6 +49,12 @@ vi.mock("node:os", async (original) => ({ ...await original<typeof import("node:
 vi.mock("../repository/artifact.js", async (original) => ({ ...await original<typeof import("../repository/artifact.js")>(),
   currentHarnessArtifact: () => ({ implementation: { kind: "package", artifactDigest: "a".repeat(64) }, runnerHash: "a".repeat(64) }) }));
 const roots: string[] = [];
+function expectUnexecutedCas(cases: unknown) {
+  expect(cases).toEqual([{ id: "dg01-cas", status: "not-run", subassertions: [
+    "dual-acquire-single-winner", "stale-sha", "stale-generation", "stale-owner", "stale-head", "stale-epoch", "stale-record-hash",
+    "other-work-items-preserved", "same-sha-update", "same-sha-noop-rejected", "same-sha-unique-winner",
+  ].map((id) => ({ id, status: "not-run", evidenceHash: null })) }]);
+}
 const nativePlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
 function git(root: string, ...args: string[]): string { return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim(); }
 function fixture() {
@@ -164,6 +170,49 @@ afterEach(async () => {
 });
 
 describe("authenticated GitHub merge observation (LOCAL native-command fixtures)", { timeout: 30_000 }, () => {
+  it("executes the fixed two-process same-SHA negative control and verifies rejection in a fresh read-only process", async () => {
+    const p = prepareSupervisedFixture(true); const input = qualificationRequest(p); const request = JSON.parse(readFileSync(input, "utf8"));
+    const manifest = request.manifest; const genesis = p.synthetic.objects[0];
+    const publication = { fixtureId: "genesis", transactionId: "bootstrap", ref: p.controlRef, expected: null };
+    manifest.refs = [p.controlRef]; manifest.synthetic = { objects: [genesis], controls: [{ fixtureId: "genesis", ref: p.controlRef }], publications: [publication] };
+    manifest.requiredCases = ["dg01-cas", "dg01-recovery"]; manifest.maxCleanupAttempts = 1;
+    manifest.sameShaPublicationNegativeControl = { caseId: "dg01-cas", fixtureId: "genesis", ref: p.controlRef, expected: null,
+      publications: [{ clientId: "local", transactionId: "bootstrap" }, { clientId: "other", transactionId: "no-op" }] };
+    manifest.execution = { kind: "local-same-sha-publication/1" };
+    for (const [index, client] of manifest.clients.entries()) {
+      client.scope.refs = manifest.refs; client.scope.maxCommits = 1; client.scope.maxWriteAttempts = 1; client.scope.maxCleanupAttempts = index === 0 ? 1 : 0;
+      client.scope.synthetic = { ...manifest.synthetic, publications: [{ ...publication, transactionId: index === 0 ? "bootstrap" : "no-op" }] };
+    }
+    writeFileSync(input, JSON.stringify(request));
+    const planned = await qualificationCli(p.f.root, "plan", "--input", input); expect(planned.status, planned.stderr).toBe(0);
+    const plan = JSON.parse(planned.stdout);
+    const approved = await qualificationCli(p.f.root, "approve", "--plan", plan.planPath, "--approve", plan.planHash, "--approved-by", "fixture-human", "--approval-source", "synthetic-same-sha-message");
+    expect(approved.status, approved.stderr).toBe(0);
+    const result = await qualificationCli(p.f.root, "run", "--plan", plan.planPath); expect(result.status, result.stderr || result.stdout).toBe(2);
+    const report = JSON.parse(result.stdout);
+    expect(report).toMatchObject({ executionStatus: "completed", qualified: false, qualificationStatus: "incomplete",
+      counts: { commits: 2, writeAttempts: 2, cleanupAttempts: 1 }, cleanup: [{ ref: p.controlRef, status: "deleted" }] });
+    expect(report.execution.instances).toHaveLength(3);
+    expect(new Set(report.execution.instances.map((instance: { leader: { pid: number } }) => instance.leader.pid)).size).toBe(3);
+    expect(report.requiredCases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "dg01-cas", status: "incomplete", subassertions: expect.arrayContaining([
+        expect.objectContaining({ id: "same-sha-update", status: "passed" }), expect.objectContaining({ id: "same-sha-noop-rejected", status: "passed" }),
+        expect.objectContaining({ id: "same-sha-unique-winner", status: "passed" }), expect.objectContaining({ id: "dual-acquire-single-winner", status: "not-run" }),
+      ]) }),
+      expect.objectContaining({ id: "dg01-recovery", status: "incomplete", subassertions: expect.arrayContaining([
+        expect.objectContaining({ id: "rejected-restart-not-upgraded", status: "passed" }), expect.objectContaining({ id: "unknown-outcome-no-replay", status: "not-run" }),
+      ]) }),
+    ]));
+    const approvals = JSON.parse(approved.stdout).registered;
+    const loser = loadHumanAuthorization(p.manifest.clients[1].scope.binding.commonDir, approvals[1].approvalRef);
+    expect(loser.candidates).toHaveLength(1); expect(loser.attempts).toHaveLength(1);
+    expect(loser.attempts[0].outcome).toMatchObject({ status: "rejected", push: { status: 0, error: null } });
+    expect(loser.attempts[0].outcome?.push?.stdout).toContain("=\t");
+    const transport = readFileSync(p.native.trace, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(transport.filter((item) => item.argv.includes("push"))).toHaveLength(3);
+    expect(git(p.f.root, "--git-dir=" + p.native.remote, "for-each-ref", "--format=%(refname)")).toBe("");
+  }, 180_000);
+
   it("keeps the actual worker's startup authorization error instead of replacing it with unexpected exit", async () => {
     const f = fixture();
     await expect(startClientProcess({ projectRoot: f.root, approvalRef: "b".repeat(64), manifestHash: "c".repeat(64),
@@ -260,7 +309,7 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
   it.each([false, true])("supervises fixed native publications and exact cleanup without claiming the full DG case (cross-client=%s)", async (crossClient) => {
     const { f, native, manifest, targets, result, source, sourceRef, controlRef, synthetic, approvalRef, sourceClient } = await supervisedFixture(crossClient);
     expect(result.report).toMatchObject({ qualified: false, status: "incomplete", topology: "LOCAL", counts: { commits: 2, writeAttempts: 2, cleanupAttempts: 0 }, countsComplete: true });
-    expect(result.report.requiredCases).toEqual([{ id: "dg01-cas", status: "not-run" }]);
+    expectUnexecutedCas(result.report.requiredCases);
     expect(result.report.blockers).toEqual([{ code: "QUALIFICATION_REMOTE_HISTORY_UNPROVEN" }]);
     expect(result.report.execution.steps.map((step) => step.stepId)).toEqual(["init", "source"]);
     expect(readSettledQualification(result.settled).instances[0]).toMatchObject({ leader: { parent: process.pid }, finalMembers: [] });
@@ -345,7 +394,7 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
     expect(report).toMatchObject({ status: "incomplete", qualified: false, topology: "LOCAL", countsComplete: false });
     expect(report.blockers).toEqual(expect.arrayContaining([{ code: "QUALIFICATION_CLIENT_MISSING", clientId: "missing" },
       { code: "HUMAN_QUALIFICATION_WRITES_OPEN", clientId: "local" }, { code: "QUALIFICATION_RUNNER_DRAIN_UNPROVEN" }, { code: "QUALIFICATION_REMOTE_HISTORY_UNPROVEN" }]));
-    expect(report.requiredCases).toEqual([{ id: "dg01-cas", status: "not-run" }]);
+    expectUnexecutedCas(report.requiredCases);
     expect(() => readVerifiedClientEvidence({ ...before })).toThrow("QUALIFICATION_EVIDENCE_ORIGIN_UNPROVEN");
     const projection = readVerifiedClientEvidence(before); projection.chains[0].state.writesClosed = true;
     expect(readVerifiedClientEvidence(before).chains[0].state.writesClosed).toBe(false);

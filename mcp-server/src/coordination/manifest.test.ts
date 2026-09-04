@@ -115,6 +115,30 @@ it("allows exactly two listed same-SHA publishers, each with one charged candida
   expect(loadHumanAuthorization(f.dirs[1], reference).attempts).toHaveLength(1);
 });
 
+it("limits the fixed same-SHA execution to one approved genesis, two writers and the required negative/recovery groups", () => {
+  const f = fixture(); const input = f.input; const publication = input.synthetic.publications[0];
+  input.refs = [controlRef]; input.synthetic = { ...input.synthetic, objects: [f.genesis], publications: [publication] };
+  for (const [index, client] of input.clients.entries()) {
+    client.scope.synthetic = { ...input.synthetic, publications: [{ ...publication, transactionId: index === 0 ? "bootstrap" : "no-op" }] };
+    client.scope.refs = [controlRef];
+  }
+  input.requiredCases = ["dg01-cas", "dg01-recovery"];
+  input.sameShaPublicationNegativeControl = { caseId: "dg01-cas", fixtureId: "genesis", ref: controlRef, expected: null,
+    publications: [{ clientId: "a", transactionId: "bootstrap" }, { clientId: "b", transactionId: "no-op" }] };
+  input.execution = { kind: "local-same-sha-publication/1" };
+  expect(prepareQualificationManifest(input).execution?.kind).toBe("local-same-sha-publication/1");
+  expect(readdirSync(f.dirs[0])).toEqual([]);
+  for (const patch of [
+    (value: QualificationManifestInput) => { delete value.sameShaPublicationNegativeControl; },
+    (value: QualificationManifestInput) => { value.requiredCases = ["dg01-cas"]; },
+    (value: QualificationManifestInput) => { value.sameShaPublicationNegativeControl!.expected = f.genesis.commitSha; },
+    (value: QualificationManifestInput) => { value.clients[1].clientId = value.clients[0].clientId; },
+    (value: QualificationManifestInput) => { value.execution = { kind: "local-synthetic-publication/1", steps: [{ stepId: "uncontrolled", clientId: "a", operation: "bootstrap", fixtureId: "genesis", transactionId: "bootstrap" }] }; },
+  ]) {
+    const changed = structuredClone(input); patch(changed); expect(() => prepareQualificationManifest(changed)).toThrow();
+  }
+});
+
 it("closes ordinary writes durably and idempotently, allowing facts but neither dispatch nor unverified cleanup", () => {
   const f = fixture(); const manifest = prepareQualificationManifest(f.input); saveQualificationManifest(f.dirs[0], manifest);
   const scope = scopeForClient(manifest, "a"); const reference = approve(scope); const root = f.dirs[0];

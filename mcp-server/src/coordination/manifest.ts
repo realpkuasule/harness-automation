@@ -23,9 +23,9 @@ const inputSchema = z.object({
     expected: z.string().regex(/^[a-f0-9]{40}$/u).nullable(),
     publications: z.array(z.object({ clientId: id, transactionId: id }).strict()).length(2),
   }).strict().optional(),
-  execution: z.object({ kind: z.literal("local-synthetic-publication/1"),
+  execution: z.discriminatedUnion("kind", [z.object({ kind: z.literal("local-synthetic-publication/1"),
     steps: z.array(z.object({ stepId: id, clientId: id, operation: z.enum(["bootstrap", "publish-source"]), fixtureId: id, transactionId: id }).strict()).min(1).max(4096),
-  }).strict().optional(),
+  }).strict(), z.object({ kind: z.literal("local-same-sha-publication/1") }).strict()]).optional(),
 }).strict();
 const manifestSchema = inputSchema.extend({ manifestHash: digest });
 export type QualificationManifest = z.infer<typeof manifestSchema>;
@@ -82,7 +82,14 @@ export function prepareQualificationManifest(input: QualificationManifestInput):
       if (owners.length !== 2 || owners.some((owner) => !negative.publications.some((item) => hashObject(item) === hashObject(owner)))) invalid();
     } else if (owners.length !== 1 || owners[0].transactionId !== publication.transactionId) invalid();
   }
-  if (value.execution) {
+  if (value.execution?.kind === "local-same-sha-publication/1") {
+    const object = value.synthetic.objects[0];
+    if (!negative || !value.requiredCases.includes("dg01-recovery") || value.clients.length !== 2 || value.refs.length !== 1 ||
+        value.synthetic.objects.length !== 1 || value.synthetic.controls.length !== 1 || value.synthetic.publications.length !== 1 ||
+        object.kind !== "control-genesis" || object.metadata.objectId !== negative.fixtureId || negative.expected !== null ||
+        value.clients.some((client) => client.scope.synthetic.publications.length !== 1 || (client.scope.takeoverAllocations?.length ?? 0) !== 0)) invalid();
+  }
+  if (value.execution?.kind === "local-synthetic-publication/1") {
     const steps = value.execution.steps; const seen = new Set<string>(); const published = new Set<string>(); const heads = new Map<string, string>();
     if (!value.synthetic.controls.length || new Set(steps.map((step) => step.stepId)).size !== steps.length) invalid();
     for (const step of steps) {
@@ -105,6 +112,13 @@ export function validateQualificationManifest(input: unknown): QualificationMani
   const manifest = prepareQualificationManifest(value);
   if (manifest.manifestHash !== manifestHash) throw new Error("QUALIFICATION_MANIFEST_HASH_MISMATCH");
   return manifest;
+}
+/** Fixed actions only; same-SHA scheduling is not supplied by a request file. */
+export function qualificationSteps(manifest: QualificationManifest) {
+  if (!manifest.execution) throw new Error("QUALIFICATION_EXECUTION_REQUIRED");
+  if (manifest.execution.kind === "local-synthetic-publication/1") return manifest.execution.steps;
+  return manifest.sameShaPublicationNegativeControl!.publications.map((publication, index) => ({ ...publication,
+    stepId: `same-sha-${index + 1}`, operation: "bootstrap" as const, fixtureId: manifest.sameShaPublicationNegativeControl!.fixtureId }));
 }
 export function scopeForClient(input: QualificationManifest, clientId: string): Extract<HumanScope, { kind: "qualification-run" }> {
   const manifest = validateQualificationManifest(input); const client = manifest.clients.find((value) => value.clientId === clientId);

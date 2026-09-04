@@ -7,7 +7,7 @@ import type { CoordinationExpected, CoordinationRecord } from "./types.js";
 import type { HistoryCheck } from "./history.js";
 import { syntheticObjectSchema, type CoordinationCommitSubject, type SyntheticObjectPlan, type SyntheticPublication } from "./synthetic.js";
 import { objectDirectory, objectEnv, objectGit, validateSyntheticObject } from "./objects.js";
-import { publishSyntheticObject, type SyntheticApplied, type SyntheticCandidate, type SyntheticPushGuard } from "./publication.js";
+import { dispatchSyntheticPublication, prepareSyntheticPublication, type SyntheticApplied, type SyntheticCandidate, type SyntheticPushGuard } from "./publication.js";
 import { requireCoordinationPush } from "./push_result.js";
 
 export interface CoordinationTransport {
@@ -106,8 +106,11 @@ export class GitCoordinationStore {
     finally { rmSync(directory, { recursive: true, force: true }); }
   }
   bootstrap(publication: SyntheticPublication, beforePush: SyntheticPushGuard): SyntheticApplied {
+    return dispatchSyntheticPublication(this.prepareBootstrap(publication, beforePush));
+  }
+  prepareBootstrap(publication: SyntheticPublication, beforePush: SyntheticPushGuard) {
     if (!this.genesis || !this.beforeCommit || !this.historyCheck || publication.ref !== this.controlRef || publication.expected !== null) throw new Error("COORDINATION_BOOTSTRAP_AUTHORIZATION_REQUIRED");
-    return publishSyntheticObject(this.transport, this.genesis, publication, this.beforeCommit, beforePush, () => {}, (candidate) => this.recoverBootstrap(candidate));
+    return prepareSyntheticPublication(this.transport, this.genesis, publication, this.beforeCommit, beforePush, () => {}, (candidate) => this.recoverBootstrap(candidate));
   }
   recoverBootstrap(candidate: SyntheticCandidate): SyntheticApplied {
     const genesis = this.genesis;

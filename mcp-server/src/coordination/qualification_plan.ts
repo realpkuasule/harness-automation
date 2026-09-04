@@ -5,7 +5,7 @@ import { recordHumanApproval } from "../approval/human.js";
 import { createSemanticApprovalPacket } from "../approval/service.js";
 import { resolveRepositoryContext } from "../repository/git.js";
 import { canonicalJson, durableWriteOnce, hashObject, safePath } from "../v2/fs.js";
-import { prepareQualificationManifest, saveQualificationManifest, scopeForClient, validateQualificationManifest, type QualificationManifestInput } from "./manifest.js";
+import { prepareQualificationManifest, qualificationSteps, saveQualificationManifest, scopeForClient, validateQualificationManifest, type QualificationManifestInput } from "./manifest.js";
 import { nativeCoordinationObservers } from "./runtime.js";
 
 const targetSchema = z.object({ clientId: z.string().min(1).max(128), projectRoot: z.string().min(1) }).strict();
@@ -32,7 +32,7 @@ function preparePlan(projectRoot: string, input: unknown) {
   const manifest = prepareQualificationManifest(request.manifest as QualificationManifestInput);
   if (!manifest.execution) throw new Error("QUALIFICATION_EXECUTION_REQUIRED");
   const cleaner = manifest.clients.find((client) => client.clientId === manifest.cleanupClientId)!;
-  const publishedRefs = new Set(manifest.execution.steps.map((step) => manifest.synthetic.publications.find((item) => item.fixtureId === step.fixtureId)!.ref));
+  const publishedRefs = new Set(qualificationSteps(manifest).map((step) => manifest.synthetic.publications.find((item) => item.fixtureId === step.fixtureId)!.ref));
   if (manifest.refs.some((ref) => !cleaner.scope.refs.includes(ref)) || cleaner.scope.maxCleanupAttempts < publishedRefs.size) throw new Error("QUALIFICATION_CLEANUP_SCOPE_INSUFFICIENT");
   if (request.targets.length !== manifest.clients.length || new Set(request.targets.map((target) => target.clientId)).size !== request.targets.length ||
       request.targets.some((target) => !manifest.clients.some((client) => client.clientId === target.clientId))) throw new Error("QUALIFICATION_CLIENT_SCOPE_MISMATCH");
@@ -67,7 +67,7 @@ export function planQualificationCommand(projectRoot: string, input: unknown) {
   const planPath = savedPlanPath(plan); saveOnce(planPath, plan);
   return { planPath, planHash: plan.planHash, secretsRead: false, remoteWrites: 0, approved: false, productionEnabled: false,
     summary: { repository: plan.manifest.repository, repositoryId: plan.manifest.repositoryId, refs: plan.manifest.refs,
-      steps: plan.manifest.execution!.steps, cleanupClientId: plan.manifest.cleanupClientId,
+      execution: plan.manifest.execution!.kind, steps: qualificationSteps(plan.manifest), cleanupClientId: plan.manifest.cleanupClientId,
       clients: plan.targets.map(({ clientId, scope }) => ({ clientId, maxCommits: scope.maxCommits, maxWriteAttempts: scope.maxWriteAttempts, maxCleanupAttempts: scope.maxCleanupAttempts,
         expiresAt: scope.expiresAt, cleanupExpiresAt: scope.cleanupExpiresAt })),
       maxCommits: plan.manifest.maxCommits, maxWriteAttempts: plan.manifest.maxWriteAttempts, maxCleanupAttempts: plan.manifest.maxCleanupAttempts,

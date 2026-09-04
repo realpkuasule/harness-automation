@@ -1113,6 +1113,89 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
    原生回归；没有任意 command/Provider/JSON verified 捷径，也不修改生产资格
    判定来迁就子集。本节只确定实施顺序，不新增批准、不运行真实凭据或远端写入。
 
+#### 6.1.7 Native acquire 竞争、stale tuple 与其他 Work Item 保留
+
+1. 下一单元固定为 `local-acquire-contention/1`，不并入旧 publication profile。
+   清单绑定两个 client、两个不同 Work Item key（遵循现有 record schema）、一个
+   control ref、两个空树 source fixture refs，以及逐步骤 client/transactionId、
+   branch/source SHA 和有限 lease TTL。两份 A 工作区分属两个已登记 common-dir；
+   B 工作区位于其中一端。Work Item 仅是本隔离控制 ref 中的测试记录，不创建或
+   修改 Issue/Project、不冒充正式交付租约。不得上传项目对象、改用户 checkout
+   的 HEAD/index/文件、切换已有分支，或为新 clone/common-dir 复制凭据与批准。
+2. 为此 profile 增加获批 `localResources`：逐项 exact resourceId/clientId、真实
+   authorityRoot/commonDir、canonical 新路径、新 branch、source fixtureId/SHA、
+   allowed operations（导入该合成图、创建一次、只读核验、精确收尾）、有效期及
+   本端最大同时存量；绑定已观察 worktree config/host-binding 摘要。进入 manifest
+   core 和原逐端 human scope 后再计算 hash，不能循环引用批准 hash。最小实例
+   **3 个 linked worktree/3 个本地 branch**（A 两份、B 一份），没有重新分配/自动
+   重试余量。plan/load/run 在任何发布前校验配置、保护路径、容量及远端/本地收尾
+   范围；普通 run 无此字段就零本地分配。缺安全绑定、策略不允许或容量不足时明确
+   拒绝，不静默 configure、扩根或加容量；这不把已有纯 publication 资格试写改成
+   必须先初始化 v2。真实新增路径/分支/对象写入只能来自未来 exact run plan 批准，
+   当前可继续实现与 disposable LOCAL 测试，无需先执行真实配置或索取生产许可。
+3. 在既有 worktree-delivery 域复用/窄提取 `validateTarget`、`validateBranch`、
+   `workspaceStatus` 的实读与容量规则、已有工作区资产核验和 exact add/remove
+   原语；所有资源 reserve/create/close 使用同一 `recovery.acquireMutationLock`
+   的 opaque held 句柄与原 receipt/LKG 能力。不得直接伪装调用要求真实 Provider
+   项目状态与 Delivery lease 的 `planWorkspaceAllocation`，也不复制一套宽松路径
+   检查。资格夹具的预留/创建/保留/收尾事实写**原 qualification human receipt**，
+   原 worktree status/audit 只读投影这些资源、计入同一容量与占用检查；正常 allocate
+   也必须看见它们。先在锁内耐久预留全部本端名额，再创建；未决创建继续占额，不能
+   靠换名/无 lease 隐身。投影不是第二资源账本，不伪造 active/done 交付状态，不改
+   既有 host-binding strict schema。两个 common-dir 不假装共享锁：先逐端完成
+   前置检查/有限预留，任一端失败就停止后续创建并精确收尾本轮已知资源。
+4. 只通过现有 Broker 将 exact source 图取到 config-free bare 暂存区，核验批准
+   object bytes、全部祖先与空树后，以固定对象导入原语（如受限 pack/index-pack）
+   将**仅该有限合成图**导入原 common-dir；不得用项目对象作父，也不经项目 URL
+   rewrite 的任意 fetch 路由。已有对象字节的复制不是再生成 candidate，但本地
+   object-store 写入必须在 localResources 中披露。沿用受管 add 原语创建新 branch
+   与 no-checkout linked worktree，固定命令禁 hooks/fsmonitor/自动维护副作用，
+   不持久改 Git config；source 空树令真实工作区应为空且 clean。实读 Git worktree
+   注册、真实路径/common-dir、symbolic HEAD 与 exact commit 后，native loader
+   才签发绑定本次 receipt/resource/进程实例的私有 workspace capability。路径或
+   branch 已存在、漂移、symlink、部分创建或身份不明就保留/拒绝，不 force 接管。
+5. qualification runtime 内部区分 authorityContext 与 fixture workspaceContext：
+   原 authorityRoot 决定 Broker、credentialRef/actor/安装 UUID、endpoint、实际
+   config/policy epoch 与 artifact；新工作区只供现有 `assertCoordinationWorkspace`
+   及受管写者 context 实读 branch/HEAD，且必须分享原 exact common-dir。保留
+   LifecycleService 与 Store 的双层真实身份/候选校验，不以空 fixture 的 policy
+   `none` 替换原 epoch，不复制配置/凭据。组合入口只接上一步 native 私有能力并
+   再验证原批准范围；没有 production `--workspace`、caller-set root、跳过验证或
+   JSON `verified` 入口。资源只属于该固定资格流程，不由此授予普通代码写入权。
+6. 固定次序：发布 genesis/source-A/source-B → 分配并核验三个夹具 → 用 B 的
+   实际 native lifecycle acquire 预置 B → 两个 A worker 都从含 B 的同一已读 tip
+   prepare 首次 acquire → 两者均完成后各 dispatch 一次。窄拆现有 lifecycle/
+   Store prepare/dispatch，普通 acquire 仍连续调用；prepare 执行原 authority、
+   服务端时钟、完整树/expected 校验和 candidate quota，保存不同 transactionId
+   的私有候选；dispatch 重验身份、工作区、窗口、候选与原审批/Broker 门，以原
+   exact-old-SHA Git push 竞争，不换父、不自动重试。barrier 等待不持 apply.lock；
+   dispatcher 不重建候选或把预期冲突在发送前吞掉。必须取得一条真实 update 和
+   一条完整 Git stale rejection、同父不同 SHA、实际赢家读回与唯一成功 acquire；
+   unknown、提前门禁或迟到失去租期不能算该断言通过。原同 SHA `=` 对照仍独立。
+7. 在赢家真实工作区与 native runtime 上，固定 worker 逐项改变完整 expected 的
+   generation/owner/machine/Head/epoch/recordHash，走原 rebind 入口；另以旧 tip
+   对照 Store 的 expected-control-SHA 前置检查。每次必须命中目标拒绝、候选/网络
+   attempt 计数不变、control ref/tree 不变，而非让错误 workspace/expired lease
+   掩盖待测条件。只读收集 B 在预置、两候选树、赢家树及所有拒绝后的 exact blob/
+   recordHash 相同，A 恰好新增一条；不能只比较记录数量。固定执行步骤本身绑定
+   scope 中的 Work Item/branch/source/TTL，不能借这些入口提交任意 next record。
+   本最小实例上限是 **6 candidates、6 write attempts、3 remote cleanup attempts**：
+   genesis 1 + source 2 + B acquire 1 + A contenders 2，失败也计入；初始化端可分
+   5/5，另一端 1/1。stale 对照零新候选/写尝试；3 个本地资源另计，不能挪用网络
+   额度或自动加预算。计划必须同时足够清理全部 3 refs 和全部本轮创建资源。
+8. 复用 §6.1.4 的 native remote evidence/唯一 cleaner，窄扩此 profile 的控制图
+   校验：从批准 genesis 验证完整记录历史，所有新增 candidate 必须可关联本次
+   原 human receipt、固定步骤与 source 图，实际当前赢家唯一可归因；只认格式
+   正确而来源不明的记录仍 retain。先停止调度、真实监督全部进程停稳/关闭普通写
+   窗口、完成 exact-SHA 远端清理，再以同锁复验本地资源身份、clean/untracked/
+   ignored/unique/unpushed 和 exact branch/head 后收尾。批准的合成对象采用
+   exact 图归属证明，不因它不在 main 祖先中而自锁，也不因此放行额外资产；本地
+   branch 仅在本轮工作区移除后 exact-old-SHA 删除，无 force/remove-all/prune。
+   失败资源保留原回执与容量占用，允许原只读恢复，不凭 closed 声明已清理；已经
+   导入但无 ref 的合成对象可留待正常 Git 维护，本流程不运行广域 gc/prune。报告
+   只增加本次实际执行的固定子断言；LOCAL 双进程不等于跨机器或 GitHub LIVE，
+   其余 §7 子断言继续 not-run，完整 qualification/生产采用目标与门禁不变。
+
 ## 7. 施工顺序与最小证据
 
 1. 先给协议/时间/错误合同与 CLI 负面用例加测试，再实现窄域；随后补 Broker 的真实

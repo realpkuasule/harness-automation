@@ -3,13 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, expect, it, vi } from "vitest";
-import { loadHumanAuthorization, recordHumanApproval, type HumanScope } from "../approval/human.js";
+import { loadHumanAuthorization, recordHumanApproval, revokeHumanAuthorization, type HumanScope } from "../approval/human.js";
+import { acquireMutationLock, releaseMutationLock } from "../recovery/service.js";
 import { createSemanticApprovalPacket } from "../approval/service.js";
 import { hashObject } from "../v2/fs.js";
 import { humanCoordinationGuards, recoverHumanSyntheticWrite } from "./authorization.js";
 import { CoordinationClock } from "./clock.js";
 import { objectGit } from "./objects.js";
-import { recoverSourceFixture, runApprovedSourceFixture } from "./publication.js";
+import { dispatchSyntheticPublication, recoverSourceFixture, runApprovedSourceFixture } from "./publication.js";
 import { createCoordinationRecord } from "./record.js";
 import { GitCoordinationStore } from "./store.js";
 import { prepareSyntheticObject, type SyntheticScope } from "./synthetic.js";
@@ -134,6 +135,31 @@ it("does not count a same-SHA up-to-date race loser as an applied bootstrap", ()
   const script = `import {recoverHumanSyntheticWrite} from ${JSON.stringify(source)};try{recoverHumanSyntheticWrite(process.argv[1],process.argv[2],process.argv[3],{recoverBootstrap(){throw Error('READBACK_CALLED')}},{repository:'owner/repo',repositoryId:'R_1'});process.exitCode=1}catch(e){if(e.message!=='COORDINATION_RECOVERY_REQUIRED')throw e}`;
   execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script, loser.root, loser.approvalRef, loser.state().attempts[0].attemptId]);
   expect(loser.state().attempts[0].outcome?.status).toBe("rejected");
+});
+
+it("prepares without an attempt or held lock, refuses copied/reused handles, and still lets Git classify a later same-SHA no-op", () => {
+  const loser = fixture(); const winner = fixture(8, loser.remote);
+  const prepared = loser.store.prepareBootstrap(loser.synthetic.publications[0], loser.guards.beforeSyntheticPush);
+  expect(loser.state().candidates).toHaveLength(1); expect(loser.state().attempts).toHaveLength(0); expect(loser.pushes()).toBe(0);
+  releaseMutationLock(acquireMutationLock({ projectDir: loser.root, commonDir: loser.root, repository: true }));
+  expect(() => dispatchSyntheticPublication({ ...prepared })).toThrow("SYNTHETIC_PREPARATION_UNPROVEN");
+  winner.bootstrap();
+  expect(() => dispatchSyntheticPublication(prepared)).toThrow("COORDINATION_CAS_NOT_PERFORMED");
+  expect(loser.state().attempts).toHaveLength(1); expect(loser.state().attempts[0].outcome?.status).toBe("rejected");
+  expect(() => dispatchSyntheticPublication(prepared)).toThrow("SYNTHETIC_PREPARATION_UNPROVEN");
+  expect(loser.pushes()).toBe(1);
+});
+
+it.each(["expiry", "revocation", "object-loss"])("rechecks the original authority and object at prepared dispatch (%s)", (fault) => {
+  const f = fixture(); const prepared = f.store.prepareBootstrap(f.synthetic.publications[0], f.guards.beforeSyntheticPush);
+  if (fault === "expiry") f.expire();
+  else if (fault === "revocation") revokeHumanAuthorization(f.root, f.approvalRef, "fixture revocation after preparation");
+  else rmSync(join(f.state().candidates[0].objectDirectory, "objects", f.genesis.commitSha.slice(0, 2), f.genesis.commitSha.slice(2)));
+  expect(() => dispatchSyntheticPublication(prepared)).toThrow();
+  expect(() => dispatchSyntheticPublication(prepared)).toThrow("SYNTHETIC_PREPARATION_UNPROVEN");
+  expect(f.state().candidates).toHaveLength(1); expect(f.state().attempts).toHaveLength(0); expect(f.pushes()).toBe(0);
+  expect(f.local.readRef(controlRef)).toBeNull();
+  releaseMutationLock(acquireMutationLock({ projectDir: f.root, commonDir: f.root, repository: true }));
 });
 
 it("requires one complete exact-ref porcelain result, not a success exit, substring or truncated output", () => {

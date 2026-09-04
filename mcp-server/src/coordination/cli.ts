@@ -8,7 +8,8 @@ import { evaluateQualificationRun } from "./evidence.js";
 import { collectSettledEvidence, runLocalQualification } from "./qualification.js";
 import { applyQualificationCleanup, planQualificationCleanup, recoverQualificationCleanup } from "./qualification_cleanup.js";
 import { approveQualificationCommand, loadQualificationCliPlan, planQualificationCommand, readQualificationInput, type QualificationCliPlan } from "./qualification_plan.js";
-import { observeQualificationRemote, readQualificationRemote } from "./qualification_remote.js";
+import { observeQualificationRemote, observedQualificationCases, readQualificationRemote } from "./qualification_remote.js";
+import { requiredQualificationCases } from "./qualification_cases.js";
 
 const commands: Record<string, string[]> = {
   plan: ["input"], approve: ["plan", "approve", "approved-by", "approval-source"], run: ["plan"], "recover-cleanup": ["approval", "attempt"],
@@ -27,9 +28,11 @@ async function runPlan(plan: QualificationCliPlan) {
   const recovery = targets.map((target, index) => ({ ...target, commonDir: plan.targets[index].scope.binding.commonDir }));
   durableWriteOnce(safePath(plan.managementCommonDir, `harness/plans/qualification-start-${runId}.json`), canonicalJson({ planHash: plan.planHash, reportPath, recovery }), 0o600);
   let execution: unknown = null;
+  let requiredCases = requiredQualificationCases(plan.manifest.requiredCases);
   const cleanup: Array<Awaited<ReturnType<typeof applyQualificationCleanup>>> = [];
   try {
     const result = await runLocalQualification(plan.manifest, targets); execution = result.report.execution;
+    requiredCases = observedQualificationCases(observeQualificationRemote(result.settled));
     for (const ref of plan.manifest.refs) {
       // Every cleanup advances the original ledger; obtain fresh native evidence for the next ref.
       const remote = observeQualificationRemote(result.settled);
@@ -38,7 +41,7 @@ async function runPlan(plan: QualificationCliPlan) {
     const remote = readQualificationRemote(observeQualificationRemote(result.settled));
     const observed = evaluateQualificationRun(plan.manifest, collectSettledEvidence(result.settled));
     const report = { ...observed, executionStatus: "completed", qualificationStatus: "incomplete", qualified: false,
-      planHash: plan.planHash, execution, cleanup, remote: remote.observations, recovery,
+      planHash: plan.planHash, execution, cleanup, remote: remote.observations, recovery, requiredCases,
       blockers: observed.blockers.filter((item) => !["QUALIFICATION_RUNNER_DRAIN_UNPROVEN", "QUALIFICATION_REMOTE_HISTORY_UNPROVEN"].includes(item.code)) };
     durableWriteOnce(reportPath, canonicalJson(report), 0o600);
     return { exitCode: 2, value: { ...report, reportPath } };
@@ -46,7 +49,7 @@ async function runPlan(plan: QualificationCliPlan) {
     const code = error instanceof Error ? error.message : "QUALIFICATION_EXECUTION_FAILED";
     if (execution === null && error instanceof Error) execution = (error.cause as { qualificationProgress?: unknown } | undefined)?.qualificationProgress ?? null;
     const report = { executionStatus: "failed", qualificationStatus: "incomplete", qualified: false, planHash: plan.planHash,
-      error: code, execution, cleanup, recovery, requiredCases: plan.manifest.requiredCases.map((id) => ({ id, status: "not-run" })) };
+      error: code, execution, cleanup, recovery, requiredCases };
     try { durableWriteOnce(reportPath, canonicalJson(report), 0o600); }
     catch (recordError) { throw new AggregateError([error, recordError], "QUALIFICATION_EXECUTION_AND_REPORT_FAILED"); }
     return { exitCode: code.startsWith("ENVIRONMENT_BLOCKED:") ? 3 : 1, value: { ...report, reportPath } };

@@ -7,6 +7,7 @@ import { observeCoordinationBinding } from "./runtime.js";
 import { loadCoordinationConfig } from "./service.js";
 import { loadQualificationManifest, validateQualificationManifest, type QualificationManifest } from "./manifest.js";
 import { coordinationDeleteOutcome, coordinationPushOutcome } from "./push_result.js";
+import { requiredQualificationCases } from "./qualification_cases.js";
 
 function readFamily(commonDir: string, approvalRef: string) {
   const family = loadHumanAuthorizationFamily(commonDir, approvalRef);
@@ -94,5 +95,5 @@ export function evaluateQualificationRun(input: QualificationManifest, evidence:
   blockers.push({ code: "QUALIFICATION_RUNNER_DRAIN_UNPROVEN" }, { code: "QUALIFICATION_REMOTE_HISTORY_UNPROVEN" });
   return { manifestHash: manifest.manifestHash, status: "incomplete" as const, qualified: false, topology: "LOCAL" as const,
     observedClients: clients.map((client) => client.clientId), counts: { commits, writeAttempts, cleanupAttempts },
-    countsComplete: clients.length === manifest.clients.length, requiredCases: manifest.requiredCases.map((id) => ({ id, status: "not-run" as const })), blockers };
+    countsComplete: clients.length === manifest.clients.length, requiredCases: requiredQualificationCases(manifest.requiredCases), blockers };
 }

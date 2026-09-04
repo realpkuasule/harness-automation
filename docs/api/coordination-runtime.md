@@ -67,6 +67,19 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
   and positive-result recovery still use the original approval-human receipt/LKG.
   Complete finite execution returns `2` / qualification `incomplete`, not PASS.
   See [CLI usage and limits](../reference/coordination.md#finite-local-qualification-cli).
+- Synthetic publication shares private prepare/dispatch boundaries. Normal
+  bootstrap/source publication invokes them consecutively; fixed same-SHA workers
+  prepare independently before ordered sends. No dispatch lock spans supervisor
+  waiting, and the private preparation cannot be serialized, swapped or replayed.
+- `coordination/same_sha.ts` verifies real candidate/attempt facts and the narrow
+  read-only rejected-recovery operation. The supervisor checks both prepared
+  receipts before sending, verifies update/no-op outcomes, closes ordinary writes,
+  then starts a fresh read-only process and checks unchanged original chain heads.
+  `qualification_remote.observedQualificationCases` combines actual settlement,
+  receipt facts and current approved remote history for four partial assertions.
+  `qualification_cases.ts` retains the full fixed per-group assertion inventory;
+  neither a manifest nor a passed subset can delete missing coverage or grant
+  production authority.
 
 Artifact inventory uses Node's package search paths, not dependency execution.
 Type-only packages, hidden/redirected package exports and dependencies sharing a
