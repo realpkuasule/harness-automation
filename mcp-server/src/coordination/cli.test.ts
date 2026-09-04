@@ -19,4 +19,14 @@ describe("coordination CLI", () => {
     const mutation = invoke(root, "renew");
     expect(mutation.status).not.toBe(0); expect(mutation.stderr).toContain("CoordinationBackendRequired");
   });
+  it("rejects extra, duplicate, missing, forged-approval and arbitrary-command qualification arguments", () => {
+    for (const args of [
+      ["run", "--plan", "absent", "--approved", "true"], ["run", "--plan", "one", "--plan", "two"],
+      ["run", "--plan"], ["plan", "--input", "absent", "extra"], ["run", "--plan", "absent", "--", "echo", "bad"],
+      ["run", "--plan", "absent", "--provider", "fake"],
+    ]) {
+      const result = spawnSync(process.execPath, ["--import", "tsx", cli, "coordination", "qualification", ...args], { encoding: "utf8" });
+      expect(result.status).toBe(1); expect(result.stderr).toContain("QUALIFICATION_ARGUMENTS_INVALID");
+    }
+  }, 30_000);
 });

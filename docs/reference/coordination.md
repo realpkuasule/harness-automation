@@ -1,6 +1,6 @@
 # Remote coordination (v3 foundation)
 
-`harness-automation coordination status` reports the local configuration state. Without a separately approved, qualified production configuration, every mutation command fails closed and performs no remote write.
+`harness-automation coordination status` reports the local configuration state. Without a separately approved, qualified production configuration, production lifecycle commands fail closed and perform no remote write. The separate finite qualification commands below require their own explicit, bounded approval and never enable production.
 
 The implementation uses one configured internal ref and exact-old-SHA Git `--force-with-lease` CAS. It provides only `coordinated` semantics; it cannot prevent an actor from bypassing Harness with direct Git access. The v1 record schema is [coordination-v1.schema.json](../api/coordination-v1.schema.json).
 
@@ -107,7 +107,8 @@ planning creates no Git objects. Materialization requires a candidate slot; the
 first business record consumes a separate slot and is a child of genesis. The
 approved catalog distinguishes control anchors, read-only source ancestors and
 exact publication rights. Source fixtures contain only approved empty-tree ancestry,
-never project objects or control records. CLI/full-run assembly remains pending.
+never project objects or control records. The fixed local publication CLI below is
+available; the full qualification case runner remains pending.
 
 Git exit 0 alone is not CAS success: exact-ref porcelain `up to date` is recorded as
 `rejected` / `COORDINATION_CAS_NOT_PERFORMED`, with no quota refund. A positive ref
@@ -116,3 +117,48 @@ plus validated history to mark the attempt applied; an observed SHA alone proves
 only state, not which publisher won. Rejected attempts never become applied, and
 an attribution-unknown synthetic attempt remains unknown with `state-observed`
 recovery output. Recovery never grants a lease or automatic cleanup ownership.
+
+## Finite local qualification CLI
+
+```sh
+harness-automation coordination qualification plan --input /outside-source/run-request.json --project /management-checkout
+harness-automation coordination qualification approve --plan /saved/plan.json --approve EXACT_PLAN_HASH --approved-by PERSON --approval-source MESSAGE_REFERENCE --project /management-checkout
+harness-automation coordination qualification run --plan /saved/plan.json --project /management-checkout
+harness-automation coordination qualification recover-cleanup --approval RECEIPT_REF --attempt ATTEMPT_UUID --project /cleaner-checkout
+```
+
+Use the exact `planPath`/`planHash` printed by `plan`. Input has only `manifest`
+(the strict `qualification-run-manifest/1` input, without `manifestHash`) and
+`targets` (`{clientId, projectRoot}` per client). This implementation accepts only
+`local-synthetic-publication/1`: ordered approved bootstrap/source publications,
+then process-group settlement and exact-ref cleanup by the sole approved cleaner.
+The summary lists the repository, refs, steps, per-client/global budgets and windows.
+The fixed CLI rejects plans whose cleaner cannot cover all refs or whose cleanup
+budget cannot cover the distinct refs this execution will publish; it never raises
+an approved budget automatically.
+Clients must already have matching non-secret native credential registrations;
+planning never reads secrets, registers credentials, creates Git objects or writes
+the remote. Multiple local common-dirs are not evidence of multiple machines.
+
+Plans, confirmation inputs and reports live under the management Git common-dir's
+`harness/plans/`; per-client manifests use that client's same state directory.
+They do not dirty the Harness source artifact. Do not store an untracked request
+inside the Harness source checkout or weaken its clean-artifact check.
+
+`approve` is an explicit operator action, not cryptographic verification of a
+person or an AI self-approval mechanism. It saves the original human receipts;
+JSON `approved: true` has no authority. Multi-client registration is not atomic.
+On partial registration, resolve the reported gate and repeat the exact command:
+the original timestamp, packets and registered events are reused. `run` reloads
+all actual tickets before starting a child; it cannot use the confirmation file
+as permission. Plan/approve exit `0` means only that operation completed.
+
+The current `run` always reports qualification **incomplete** (exit `2`), even
+when the finite execution and cleanup complete; required case assertions remain
+`not-run`. Failure exits `1`, or `3` only for a genuine missing host capability.
+Reports retain completed steps, cleanup outcomes and per-client recovery locations.
+An unknown outcome never triggers replay or deletion of the remaining resources.
+Read-only `recover-cleanup` may append proven original deletion facts, but cannot
+reconstruct a settled-run handle, reissue a push or clean another ref after restart.
+Full DG-01 cases, trusted cross-machine execution, production adoption and host
+writer coverage remain separate unfinished work.

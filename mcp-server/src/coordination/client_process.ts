@@ -16,7 +16,7 @@ const messageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ready"), nonce: z.string().uuid(), pid: z.number().int().positive(), bindingHash: digest }).strict(),
   z.object({ type: z.literal("result"), nonce: z.string().uuid(), stepId: id, resultHash: digest }).strict(),
   z.object({ type: z.literal("quiescent"), nonce: z.string().uuid() }).strict(),
-  z.object({ type: z.literal("failure"), nonce: z.string().uuid(), code: z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/u) }).strict(),
+  z.object({ type: z.literal("failure"), nonce: z.string().uuid(), code: z.string().regex(/^(?:ENVIRONMENT_BLOCKED: )?[A-Z][A-Z0-9_]{0,127}$/u) }).strict(),
 ]);
 type Message = z.infer<typeof messageSchema>;
 type Member = { pid: number; parent: number; group: number; started: string };

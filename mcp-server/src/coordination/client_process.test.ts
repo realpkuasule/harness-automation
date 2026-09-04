@@ -69,3 +69,7 @@ it("refuses wrong IPC identity and abnormal leader exit even if a result was alr
   await expect(settleClientProcess(handle)).rejects.toThrow();
   expect(() => readClientSettlement(handle)).toThrow("QUALIFICATION_PROCESS_DRAIN_UNPROVEN");
 });
+
+it("preserves a required host-capability gate reported by its actual child", async () => {
+  await expect(launch("environment-blocked")).rejects.toThrow("ENVIRONMENT_BLOCKED: PROCESS_GROUP_INSPECTION_UNAVAILABLE");
+});

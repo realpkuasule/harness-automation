@@ -83,6 +83,7 @@ import {
 } from "./tracking/service.js";
 import { coordinationStatus, requireEnabledCoordination } from "./coordination/service.js";
 import { runCredentialCommand } from "./credentials/cli.js";
+import { runQualificationCommand } from "./coordination/cli.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -674,8 +675,11 @@ function runDeliveryCommand(root: string, args: ParsedArguments): void {
   }
 }
 
-function runCoordinationCommand(root: string, args: ParsedArguments): void {
+async function runCoordinationCommand(root: string, args: ParsedArguments): Promise<void> {
   const action = args.positionals[0];
+  if (action === "qualification") {
+    const result = await runQualificationCommand(root, args); printJson(result.value); process.exitCode = result.exitCode; return;
+  }
   if (action === "status") { printJson(coordinationStatus(root)); return; }
   if (["acquire", "renew", "rebind", "transfer", "takeover", "terminal-claim"].includes(action ?? "")) {
     // The production composition is deliberately gated; this is the same entrypoint future qualification enables.
@@ -731,6 +735,10 @@ Usage:
   harness-automation delivery pr --authorization <sha256> --title <title> [--body <body>] [--project .]
   harness-automation delivery merge --authorization <sha256> --pull-request <number> [--project .]
   harness-automation coordination status|acquire|renew|rebind|transfer|takeover|terminal-claim [--project .]
+  harness-automation coordination qualification plan --input <request.json> [--project .]
+  harness-automation coordination qualification approve --plan <saved-plan> --approve <sha256> --approved-by <person> --approval-source <message-reference> [--project .]
+  harness-automation coordination qualification run --plan <saved-plan> [--project .]
+  harness-automation coordination qualification recover-cleanup --approval <receipt-ref> --attempt <uuid> [--project .]
   harness-automation credentials plan --input <non-secret-binding.json> [--remote origin] [--project .]
   harness-automation credentials apply --plan <plan.json> --approve <exact-hash> [--remote origin] [--project .]
   harness-automation session handoff --work-item <provider:repo#issue> --session <session-id> [--to-status in-progress|ready-for-review] [--dry-run] [--project .]
@@ -781,11 +789,12 @@ function printLkg(root: string): void {
   });
 }
 
-function runWorkflow(argv: string[]): void {
+async function runWorkflow(argv: string[]): Promise<void> {
   const separator = argv.indexOf("--");
   const workflowArguments = separator === -1 ? argv : argv.slice(0, separator);
   const trailingCommand = separator === -1 ? [] : argv.slice(separator + 1);
   const command = workflowArguments[0];
+  if (command === "coordination" && separator !== -1) throw new Error("QUALIFICATION_ARGUMENTS_INVALID");
   const args = parseArguments(workflowArguments.slice(1));
   const root = projectRoot(args);
   switch (command) {
@@ -934,7 +943,7 @@ function runWorkflow(argv: string[]): void {
       runDeliveryCommand(root, args);
       return;
     case "coordination":
-      runCoordinationCommand(root, args);
+      await runCoordinationCommand(root, args);
       return;
     case "credentials":
       printJson(runCredentialCommand(root, args));
@@ -962,11 +971,11 @@ function runWorkflow(argv: string[]): void {
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   try {
     if (argv.length === 0 || argv[0] === "install") install({ syncGlobal: !argv.includes("--no-global") });
-    else runWorkflow(argv);
+    else await runWorkflow(argv);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (argv.length === 0 || argv[0] === "install") fail(message);
@@ -975,4 +984,4 @@ function main(): void {
   }
 }
 
-main();
+void main();

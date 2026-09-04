@@ -43,6 +43,9 @@ it("uses the Harness source checkout itself, rejects dirty code and never trusts
   const root = fixture(); git(root, "init", "--quiet"); git(root, "add", "."); git(root, "commit", "--quiet", "-m", "fixture");
   const result = inspectHarnessArtifact(root, "source");
   expect(result).toMatchObject({ kind: "source", head: git(root, "rev-parse", "HEAD"), tree: git(root, "rev-parse", "HEAD^{tree}") });
+  const plans = join(root, ".git/harness/plans"); mkdirSync(plans, { recursive: true });
+  writeFileSync(join(plans, "qualification-fixture.json"), '{"approved":false}');
+  expect(inspectHarnessArtifact(root, "source")).toEqual(result);
   writeFileSync(join(root, "src/cli.ts"), "// dirty\n");
   expect(() => inspectHarnessArtifact(root, "source")).toThrow("HARNESS_SOURCE_CHECKOUT_DIRTY");
 });

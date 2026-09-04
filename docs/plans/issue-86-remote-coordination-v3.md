@@ -981,6 +981,138 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
   或 runner。实际 guard 使用既有 native transport 组合边界，不给 ledger 增加
   通用 callback 或另造 authorization store。
 
+#### 6.1.5 固定本机 qualification 流程的最小 CLI 接入
+
+1. 实际入口是 `mcp-server/src/cli.ts`；沿用 `ParsedArguments`，参考现有
+   `credentials/cli.ts` 的逐命令白名单与重复参数拒绝，在窄 coordination CLI
+   模块实现以下命令（均支持 `--project <management checkout>`）：
+
+   | 命令 | 最小参数与作用 |
+   |---|---|
+   | `coordination qualification plan` | `--input <non-secret-run-request.json>`；核验并保存 manifest、目标映射及逐端待批准 scope/packet，不登记批准 |
+   | `coordination qualification approve` | `--plan <saved-plan> --approve <exact-plan-hash> --approved-by <person> --approval-source <human-message-reference>`；显式登记本计划各端有限 qualification 父票，不运行 |
+   | `coordination qualification run` | `--plan <saved-plan>`；加载真实批准链，在同一进程完成固定 runner → remote observe → 逐 ref cleanup |
+   | `coordination qualification recover-cleanup` | `--approval <receipt-ref> --attempt <attempt-id> --project <cleaner checkout>`；调用既有只读远端恢复用例，不重发删除 |
+
+   不增加 `--verified`、`--provider`、任意命令、导入 settled handle 或“自动批准”
+   开关。run 是包含原票有限 cleanup 的固定流程，计划清单明确显示这一点；不提供
+   普通“先 run 退出、以后导入 JSON cleanup”的失效句柄路径。
+2. input 是有限 manifest 请求及 `{clientId, projectRoot}` 目标映射，不是审批事件。
+   复用 synthetic/manifest schema；用每端真实 repository context、已登记非秘密
+   credentialRef 与 `observeCoordinationBinding/currentHarnessArtifact` 取得实际
+   binding，输入中的绑定只能匹配，不能自证 actor/host/epoch/artifact。绑定缺失
+   明确报凭据登记门，不自动登记或扩权。拒绝未知/重复/多余参数、重复客户端、
+   漂移对象或本批未支持的 execution kind；plan 不读取 secret、不写远端。
+3. 复用 `prepare/saveQualificationManifest`、`scopeForClient`、
+   `createSemanticApprovalPacket` 与 `recordHumanApproval`。计划 core 包含
+   manifest、canonical targets 和 scopes；先计算 core planHash，再派生各 scope
+   的审批 packet，不能把包含 planHash 的 packet 回填进自己的哈希输入。packet
+   一次生成并耐久保存。各端 manifest 写既有 common-dir/harness/plans，管理端
+   保存完整计划；都是待批准输入，不能因文件名/packet 存在而当作已批准。输出
+   一份人可读摘要：exact repo/refs、步骤、每端与总额度、窗口、唯一 cleaner、
+   合成内容范围和“不启用生产”，同时保留机器可读 planPath/hash。
+4. approve 是已有 CLI 信任边界上的**显式操作者确认入口**；source message 引用
+   只作为审计来源，不能声称 CLI 已密码学验证真人身份，agent 也不得从计划文件
+   中的 `explicit-human` 字样推断已获用户批准。重新校验计划、实际绑定与 exact
+   hash 后逐端登记原 human receipt，批准来源由这次显式调用形成，不接受导入
+   `approved: true`/成品 approval JSON。多 common-dir 登记不是原子事务：中断时
+   报告已登记/未登记列表；重试只复用同计划、同批准人/来源的原事件及 approvedAt，
+   不重新生成时间/packet 导致幂等自锁，也不静默撤销或重批其他端。run 从各端原
+   receipt 加载批准，不能只相信 approve 输出；所有票齐备才启动第一个 client。
+5. plan、输入快照、批准来源和运行报告均保存在既有 common-dir 运行期区域，
+   不写源码 checkout 或 dist。Harness source 模式先要求真实执行代码 clean，
+   之后保存这些计划仍不改变 source HEAD/tree/artifact；目标项目 HEAD 不能冒充
+   Harness HEAD。输入若自己放在 Harness 源码树中造成 dirty，应移动该输入的
+   存放位置或正常处理变更，不通过扩大 artifact/git-status 忽略规则放行。包模式
+   继续用实际 runtime manifest；plan/approve/run 均复核，没有 caller hash 覆盖。
+6. run 复用 `runLocalQualification` 返回的私有 settled/evidence，再调用既有
+   remote/cleanup 入口。每个 ref 清理后重新 native observe/collect、生成下一个
+   私有计划，不能复用第一项的旧 chain-head 快照；无凭据/批准/能力或前置不合格
+   时零远端 mutation。中途失败保留真实步骤、清理结果及 recovery 定位，不自行
+   重跑或伪造停稳；所有凭据解析、真实 API 时间/身份检查仍经原 Broker。
+7. `runCoordinationCommand`、`runWorkflow`、`main` 必须贯通 await，所有异步
+   rejection 进入既有 JSON 错误出口；不能 `printJson(Promise)`、未等待就 exit，
+   或丢失异常后返回成功。plan/approve 的 0 仅表示该操作完成，不表示资格通过。
+   当前 run 即使发布/清理成功，也输出 `executionStatus: completed`、
+   `qualificationStatus: incomplete`、`qualified: false` 和真实 not-run 子断言，
+   返回 2（未完成/门禁）；1 保留给实现/测试/验证失败，3 仅真实宿主能力缺失。
+   凭据、策略、批准与窗口门分别输出稳定 code，不能伪装 ENVIRONMENT_BLOCKED。
+   未来资格入口只有全部必需检查实际通过才可 0；本批不提供会误绿的 qualify 命令。
+8. 在现有 coordination/credentials CLI tests 和 native fixtures 上补真实 spawn
+   入口验证：plan 不批准/不读 secret/不写远端，错 hash 或伪造事件不运行，多端
+   注册中断可幂等继续，计划落盘不使 clean artifact 失效，source 漂移仍拒绝；
+   fixed run 实际进入原生发布/停稳/观察/清理、第二 ref 不因回执推进自锁、异步
+   失败被捕获、incomplete 不返回绿色。复用已有隔离 OS/gh/git fixture，不加生产
+   `--test-provider` 或 JSON 证据捷径。`acquire/renew/rebind/transfer/takeover/
+   terminal-claim` 当前只有 requireEnabled 门，不能因该门返回就报告执行成功；
+   生产组合仍明确未完成并待后续实现。本批只实现和 LOCAL 测试，不登记本项目
+   真实凭据/资格票、不执行 GitHub 试写或生产启用，也不缩减完整 v3 目标。
+
+#### 6.1.6 固定资格 runner 的下一可执行切片
+
+1. 现有 `publication.test.ts` 的同 SHA 对照用 LOCAL transport 和同进程调度回调，
+   另有新进程拒绝恢复测试；`github.test.ts` 已覆盖受控原生串行发布/清理。这些是
+   可复用的回归来源，不等于固定资格 runner 已执行相应 DG 子断言，更不是 LIVE
+   授权。下一单元只补**原生双进程同 SHA no-op 与新进程 verdict 不升级**，不同时
+   扩展全部 lifecycle 或生产采用。
+2. 在既有 execution 判别联合增加固定 `local-same-sha-publication/1`，复用
+   `sameShaPublicationNegativeControl`；最小实例仅一个无父空 genesis/control
+   ref、两个已绑定 client/不同 transactionId，expected 为 absent。由该对象
+   publications 的固定顺序决定先后 dispatch，不接受自定义流程或 barrier 回调。
+   两端各占 1 candidate、1 write attempt，总上限至少 2/2；唯一 cleaner 至少
+   1 次且包含该 ref，不因 SHA 相同免计，也不因两发布者把删除数算成 2。固定 CLI
+   流程在 plan/load/run 前都校验 cleaner.refs 覆盖本流程全部目标 refs，cleanup
+   上限至少等于将发布的不同 ref 数；不自动加码，纯 manifest 不因此丧失表达较小
+   范围的能力。原 serial execution 的语义和不支持并发的拒绝保持不变。
+3. 将现有 synthetic publication 内部窄拆成 prepare/dispatch：prepare 执行原
+   expected-ref 实读、父图验证、candidate quota、对象物化与 created 回执；只
+   返回 worker 私有、绑定本次 scope/transaction/object directory 的一次性句柄。
+   普通 bootstrap/source 仍连续调用这两段。prepare 不预留网络 attempt，也不
+   持 apply.lock 等 supervisor；后续 dispatch 重新验证对象、绑定、批准、时间和
+   closed 状态，并按原 beforePush/Broker 路径持锁登记 attempt、实际 push/readback。
+   不把先前 expected 观察当作现在仍相等的保证：exact-old-SHA 仍交给 Git；此处
+   不追加一个会吞掉真正 `=` 的前置 ref-equality 拒绝，也不放宽身份/预算/时间门。
+   句柄不可导入、跨 worker 使用或重放；失败保留原 candidate/attempt 恢复边界。
+4. 扩展现有固定 worker/IPC 的 prepare 与 dispatch 消息，均绑定 supervisor nonce、
+   manifest/client/step 和实际进程实例。两端必须都真实 prepare 完成，collector
+   对照原 candidate 回执确认 same SHA/同 expected 后，才先 dispatch 第一个；
+   验证其正向更新并读回，再 dispatch 第二个，必须实际取得完整 exact-ref Git
+   `=`，在原 human 链记 rejected。这个**受控交错**不是“两个 acquire 同时竞争”
+   的证据。预期 no-op 只有真实分类及回执匹配时作为该子断言的正常结果返回；
+   任意其他异常、提前拒绝或 unknown 都不能被 worker 吞成通过。消息失序、重复
+   dispatch、nonce/句柄漂移及任一端失败时停止新增写，不自动重试另一条路线。
+5. 两写者先正常组停稳并关闭普通写窗口，再用同一固定 worker 入口的窄只读角色
+   启动一个**新的** loser 进程，核对真实绑定和 exact 已拒绝 attempt，调用原生
+   synthetic recovery，并复读 rejected verdict、candidate/attempt 计数未变化。
+   该角色允许读取非 pristine 的已关闭票，但没有 prepare/dispatch 指令，不能
+   为恢复放宽普通 writer 的 pristine 门。它复用原 clientId/批准，只增加进程实例
+   和 role，不新增客户端预算；监督其实际停稳后，原 collector/remote/唯一 cleaner
+   接续。不以测试内 fake Store、人工写入 verdict 或 JSON `readOnly=true` 代替。
+6. 在原报告中为 §7 的固定用例组增加固定子断言结果，不另造批准或可执行脚本
+   registry。本切片仅覆盖 `dg01-cas` 下 same-SHA 实际更新、no-op 拒绝、唯一
+   可归因赢家，以及 `dg01-recovery` 下 rejected 在新进程不升级；证据引用原
+   candidate/attempt/receipt、实际 worker 实例、Git 正向/`=` 输出、远端对象图
+   与真实 readback。每组其余子断言仍 not-run/incomplete，不能因覆盖一项就把
+   整组标 PASS；所需子断言清单逐条保留 §7，不由 manifest 自定义或删除。结果
+   仍 `qualified: false`，按既有 CLI incomplete 结局返回。
+7. 后续按下表的最小边界补齐同一固定 runner；已有测试可复用固定断言/fixtures，
+   不调用任意 Vitest 命令再把汇总转换为授权资格。DET/LOCAL 事实与实际 Broker
+   LIVE 事实分别记录 exact artifact、run/case/subassertion、真实拓扑和来源：
+
+   | 后续切片及现有测试来源 | 必须保留的用例组/真实证据边界 |
+   |---|---|
+   | Native acquire 双候选竞争、rebind/renew；service/authority/authorization | 补 `dg01-cas` 全部预期元组、唯一主写/其他 Work Item 保留；`dg01-time-renew` 正向服务端时间与换绑。实际 GitHub CAS/Date/readback 不能用本机时钟或模拟 Provider 顶替 |
+   | 固定故障与恢复；clock/history/store/publication | `dg01-objects-history`、`dg01-late-renew`、`dg01-recovery` 及剩余时间边界：真实 LOCAL Git 图/进程重启和版本化确定性时钟故障；不修改宿主系统时钟、不把注入结果说成 LIVE |
+   | 身份、票据/预算与 CLI；credentials、authority、human、manifest、CLI | `dg01-identity-scope`、`dg01-human-budget`、`dg01-cli-gates` 全部子断言；真实 native 入口/链及无 mutation 证据，secret canary 只用合成值，不以 mock API 身份声称生产权限 |
+   | 交接/接管及写者排空；handoff/takeover/client_process | `dg01-handoff`、`dg01-drain`：复用真实目标取回与有限接管票、受管写者锁/进程覆盖；同机两个目录不能替代实际跨机器受信执行/读取通道 |
+   | terminal；service/github | `dg01-terminal`：原生 Provider 的实际 exact PR/merge 只读证据及旧代拒绝；如需要新建 PR fixture，另列其有限授权，不能借只含 synthetic refs 的票执行 PR 写入 |
+
+8. 最终仍须完成成果04 DG-01 的真实公开/私有测试仓库证据和跨机器合同，按每份
+   有限清单静态计额，不把旧 probe 配额当无限许可。本切片先补 manifest enum、
+   publication 两段复用、固定双 writer/只读 restart 调度及上述子断言，再做 LOCAL
+   原生回归；没有任意 command/Provider/JSON verified 捷径，也不修改生产资格
+   判定来迁就子集。本节只确定实施顺序，不新增批准、不运行真实凭据或远端写入。
+
 ## 7. 施工顺序与最小证据
 
 1. 先给协议/时间/错误合同与 CLI 负面用例加测试，再实现窄域；随后补 Broker 的真实

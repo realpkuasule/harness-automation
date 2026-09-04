@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { basename, join } from "node:path";
 const [root, , , , nonce] = process.argv.slice(2);
 const mode = basename(root); const digest = "a".repeat(64);
+if (mode === "environment-blocked") process.send({ type: "failure", nonce, code: "ENVIRONMENT_BLOCKED: PROCESS_GROUP_INSPECTION_UNAVAILABLE" });
 process.on("disconnect", () => process.exit(1));
 process.on("message", (message) => {
   if (message.type === "step") {
@@ -15,4 +16,4 @@ process.on("message", (message) => {
   } else if (message.type === "stop") process.send({ type: "quiescent", nonce });
   else if (message.type === "exit") process.exit(0);
 });
-process.send({ type: "ready", nonce: mode === "wrong-nonce" ? "00000000-0000-4000-8000-000000000000" : nonce, pid: process.pid, bindingHash: digest });
+if (mode !== "environment-blocked") process.send({ type: "ready", nonce: mode === "wrong-nonce" ? "00000000-0000-4000-8000-000000000000" : nonce, pid: process.pid, bindingHash: digest });

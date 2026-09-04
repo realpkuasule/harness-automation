@@ -31,7 +31,8 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
   resolver, credential Broker, HTTPS Git transport, GitHub server clock and lifecycle
   handlers for a bounded qualification ticket. It does not require a pre-existing
   write PASS, create credentials, enable production or grant permission beyond the
-  ticket. Multi-client run manifests and the complete CLI runner are still pending.
+  ticket. The finite multi-client publication path is described below; the complete
+  qualification case runner and production adoption remain pending.
 - `coordination/synthetic.ts` precomputes strict empty-tree descriptors without
   writing objects. The approved catalog binds control anchors and exact publication
   rights separately from read-only ancestors. `store.bootstrap` and
@@ -54,6 +55,18 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
   Node/platform/architecture. A changed dependency produces a different digest and
   cannot reuse the previous qualification. This is integrity binding, not a signed
   software-supply-chain attestation or resistance to a malicious same-UID actor.
+- `coordination/qualification_plan.ts` validates native bindings and saves immutable
+  manifests, target scopes and semantic packets in existing common-dir plan storage.
+  Core plan hashing precedes packet derivation, avoiding a self-reference. Explicit
+  CLI approval alone records human receipts; a saved confirmation is only a stable
+  retry input, including after partial multi-common-dir registration.
+- `coordination/cli.ts` awaits the fixed local runner, native remote observation and
+  bounded cleanup in one process. Each deletion gets fresh cohort evidence. Runner,
+  collector and cleanup handles are process-private and cannot be imported from JSON.
+  Reports retain partial progress without claiming drain; pre-dispatch accounting
+  and positive-result recovery still use the original approval-human receipt/LKG.
+  Complete finite execution returns `2` / qualification `incomplete`, not PASS.
+  See [CLI usage and limits](../reference/coordination.md#finite-local-qualification-cli).
 
 Artifact inventory uses Node's package search paths, not dependency execution.
 Type-only packages, hidden/redirected package exports and dependencies sharing a

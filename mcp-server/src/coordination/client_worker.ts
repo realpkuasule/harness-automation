@@ -7,6 +7,12 @@ import { loadQualificationManifest } from "./manifest.js";
 import { createQualificationRuntime, observeCoordinationBinding } from "./runtime.js";
 import { loadCoordinationConfig } from "./service.js";
 
+// Forward fixed codes, including genuine capability gaps, never raw command output or secret-bearing error details.
+function failureCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  return /^(ENVIRONMENT_BLOCKED: [A-Z][A-Z0-9_]{0,127}|[A-Z][A-Z0-9_]{0,127})(?::|$)/u.exec(message)?.[1] ?? "QUALIFICATION_CLIENT_FAILED";
+}
+
 function main(): void {
   const [projectRoot, approvalRef, manifestHash, clientId, nonce, ...extra] = process.argv.slice(2);
   if (extra.length || !process.send || !process.connected) throw new Error("QUALIFICATION_SUPERVISOR_REQUIRED");
@@ -40,8 +46,7 @@ function main(): void {
       const result = step.operation === "bootstrap" ? runtime.bootstrap() : runtime.sourceFixture(step.fixtureId);
       next++; send({ type: "result", stepId: step.stepId, resultHash: hashObject(result) });
     } catch (error) {
-      stopped = true; const message = error instanceof Error ? error.message.split(":")[0] : "";
-      send({ type: "failure", code: /^[A-Z][A-Z0-9_]{0,127}$/u.test(message) ? message : "QUALIFICATION_CLIENT_FAILED" });
+      stopped = true; send({ type: "failure", code: failureCode(error) });
     }
   });
   send({ type: "ready", pid: process.pid, bindingHash: hashObject(binding) });
@@ -49,5 +54,10 @@ function main(): void {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try { main(); }
-  catch { process.exitCode = 1; if (process.connected) process.disconnect(); }
+  catch (error) {
+    const nonce = process.argv[6];
+    if (process.send && process.connected && clientCommandSchema.safeParse({ type: "stop", nonce }).success) {
+      process.send({ type: "failure", nonce, code: failureCode(error) }, () => process.exit(1));
+    } else { process.exitCode = 1; if (process.connected) process.disconnect(); }
+  }
 }

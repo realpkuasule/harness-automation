@@ -55,9 +55,12 @@ export async function runLocalQualification(input: QualificationManifest, inputT
     return { ...target, projectRoot: facts.projectRoot, bindingHash: hashObject(scope.binding), hostId: facts.origin.hostId };
   });
   if (new Set(prepared.map((target) => target.hostId)).size !== 1) throw new Error("QUALIFICATION_LOCAL_HOST_MISMATCH");
-  const clients = new Map<string, ClientProcess>(); const steps: Settlement["steps"] = [];
+  const clients = new Map<string, ClientProcess>(); const steps: Settlement["steps"] = []; const launchRequestedClients: string[] = [];
   try {
-    for (const target of prepared) clients.set(target.clientId, await startClientProcess({ ...target, manifestHash: manifest.manifestHash }));
+    for (const target of prepared) {
+      launchRequestedClients.push(target.clientId);
+      clients.set(target.clientId, await startClientProcess({ ...target, manifestHash: manifest.manifestHash }));
+    }
     for (const step of manifest.execution.steps) steps.push({ stepId: step.stepId, resultHash: await runClientStep(clients.get(step.clientId)!, step.stepId) });
     // No parent holds apply.lock while waiting for a child which needs that same lock.
     for (const client of clients.values()) await settleClientProcess(client);
@@ -75,5 +78,11 @@ export async function runLocalQualification(input: QualificationManifest, inputT
     return { settled: handle, evidence, report: { ...observed,
       execution: { kind: manifest.execution.kind, steps: proof.steps, instances: proof.instances, drainCoverage: "this-run-native-process-groups-only" },
       blockers: observed.blockers.filter((item) => item.code !== "QUALIFICATION_RUNNER_DRAIN_UNPROVEN") } };
-  } catch (error) { clients.forEach(abandonClientProcess); throw error; }
+  } catch (error) {
+    clients.forEach(abandonClientProcess);
+    throw new Error(error instanceof Error ? error.message : "QUALIFICATION_EXECUTION_FAILED", {
+      cause: { error, qualificationProgress: { kind: manifest.execution.kind, steps: structuredClone(steps),
+        launchRequestedClients, readyClients: [...clients.keys()], drainCoverage: "unproven" } },
+    });
+  }
 }

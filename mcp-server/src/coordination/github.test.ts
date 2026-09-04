@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,7 @@ import { collectClientEvidence, evaluateQualificationRun, readVerifiedClientEvid
 import { readSettledQualification, runLocalQualification } from "./qualification.js";
 import { observeQualificationRemote, readQualificationRemote } from "./qualification_remote.js";
 import { applyQualificationCleanup, planQualificationCleanup, recoverQualificationCleanup } from "./qualification_cleanup.js";
+import { startClientProcess } from "./client_process.js";
 
 const nativeHost = vi.hoisted(() => ({ home: "", sourceGroupSizes: [] as number[] }));
 vi.mock("node:child_process", async (original) => {
@@ -89,6 +90,7 @@ if(a.some(x=>['ls-remote','fetch','push'].includes(x))){
   a=a.map(x=>x===${JSON.stringify(endpoint)}?${JSON.stringify(remote)}:x);
 }
 if(a.includes('ls-remote')&&fault.readbackFailure&&fs.existsSync(${JSON.stringify(fired)}))process.exit(1);
+if(a.includes('ls-remote')&&fault.failReadRef&&a.includes(fault.failReadRef))process.exit(1);
 if(deleting&&fault.beforeDeleteHead)cp.execFileSync(${JSON.stringify(realGit)},['--git-dir='+${JSON.stringify(remote)},'update-ref',a.at(-1).slice(1),fault.beforeDeleteHead]);
 const r=cp.spawnSync(${JSON.stringify(realGit)},a,{env:process.env,stdio:['inherit','pipe','pipe']});
 if(deleting&&fault.readbackFailure)fs.writeFileSync(${JSON.stringify(fired)},'deleted');
@@ -100,7 +102,7 @@ function syntheticScope(runId: string, controlRef: string): SyntheticScope {
   const genesis = prepareSyntheticObject("control-genesis", { runId, objectId: "genesis", seconds: 1788480000 });
   return { objects: [genesis], controls: [{ fixtureId: "genesis", ref: controlRef }], publications: [{ fixtureId: "genesis", transactionId: "bootstrap", ref: controlRef, expected: null }] };
 }
-async function supervisedFixture(crossClient = false) {
+function prepareSupervisedFixture(crossClient = false) {
   const f = fixture(); const native = nativeGitFixture(f); const binding = observeCoordinationBinding(f.root, "origin", "42", "git"); const now = Date.now();
   const controlRef = "refs/heads/supervised-control"; const sourceRef = "refs/heads/supervised-source";
   const synthetic = syntheticScope("supervised", controlRef); const source = prepareSyntheticObject("source-fixture", { ...synthetic.objects[0].metadata, objectId: "source" });
@@ -126,7 +128,11 @@ async function supervisedFixture(crossClient = false) {
       { stepId: "init", clientId: "local", operation: "bootstrap", fixtureId: "genesis", transactionId: "bootstrap" },
       { stepId: "source", clientId: sourceClient, operation: "publish-source", fixtureId: "source", transactionId: "source-create" },
     ] } });
-  const targets = clients.map((client, index) => {
+  return { f, native, manifest, projectRoots, source, sourceRef, controlRef, synthetic, sourceClient, now };
+}
+async function supervisedFixture(crossClient = false) {
+  const prepared = prepareSupervisedFixture(crossClient); const { manifest, projectRoots, now } = prepared;
+  const targets = manifest.clients.map((client, index) => {
     const commonDir = client.scope.binding.commonDir; saveQualificationManifest(commonDir, manifest);
     const scope = scopeForClient(manifest, client.clientId); const inputHash = hashObject(scope); const planHash = hashObject({ inputHash });
     const packet = createSemanticApprovalPacket({ planHash, inputHash, producerIdentity: "native-runner-fixture", binding: { planHash, inputDigest: inputHash, contextDigest: inputHash, observedHash: inputHash, policyDigest: inputHash },
@@ -135,7 +141,21 @@ async function supervisedFixture(crossClient = false) {
     return { clientId: client.clientId, projectRoot: projectRoots[index], approvalRef };
   });
   const result = await runLocalQualification(manifest, targets);
-  return { f, native, manifest, targets, result, source, sourceRef, controlRef, synthetic, approvalRef: targets[0].approvalRef, sourceClient };
+  return { ...prepared, targets, result, approvalRef: targets[0].approvalRef };
+}
+function qualificationCli(root: string, ...args: string[]): Promise<{ status: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => execFile(process.execPath, ["--loader", fileURLToPath(new URL("./__fixtures__/native-worker-loader.mjs", import.meta.url)),
+    "--import", fileURLToPath(new URL("./__fixtures__/native-worker-os.mjs", import.meta.url)), "--import", "tsx",
+    fileURLToPath(new URL("../cli.ts", import.meta.url)), "coordination", "qualification", ...args, "--project", root],
+  { encoding: "utf8", timeout: 180_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, HARNESS_FIXTURE_USER_ROOT: nativeHost.home, TSX_DISABLE_CACHE: "1" } },
+  (error, stdout, stderr) => resolve({ status: error ? typeof error.code === "number" ? error.code : 1 : 0, stdout, stderr })));
+}
+function qualificationRequest(prepared: ReturnType<typeof prepareSupervisedFixture>) {
+  const manifest = prepared.manifest;
+  const input = join(prepared.f.bin, "qualification-request.json");
+  writeFileSync(input, JSON.stringify({ manifest: Object.fromEntries(Object.entries(manifest).filter(([key]) => key !== "manifestHash")),
+    targets: manifest.clients.map((client, index) => ({ clientId: client.clientId, projectRoot: prepared.projectRoots[index] })) }));
+  return input;
 }
 afterEach(async () => {
   Object.defineProperty(process, "platform", nativePlatform); vi.unstubAllEnvs(); roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true }));
@@ -144,6 +164,99 @@ afterEach(async () => {
 });
 
 describe("authenticated GitHub merge observation (LOCAL native-command fixtures)", { timeout: 30_000 }, () => {
+  it("keeps the actual worker's startup authorization error instead of replacing it with unexpected exit", async () => {
+    const f = fixture();
+    await expect(startClientProcess({ projectRoot: f.root, approvalRef: "b".repeat(64), manifestHash: "c".repeat(64),
+      clientId: "local", bindingHash: "a".repeat(64) })).rejects.toThrow("HUMAN_APPROVAL_REQUIRED");
+  });
+
+  it("runs the real CLI with native receipts, retryable partial approval and two-ref cleanup, never green qualification", async () => {
+    const p = prepareSupervisedFixture(true); const input = qualificationRequest(p);
+    const before = p.projectRoots.map((root) => git(root, "status", "--porcelain"));
+    const planned = await qualificationCli(p.f.root, "plan", "--input", input);
+    expect(planned.status, planned.stderr).toBe(0); const plan = JSON.parse(planned.stdout);
+    expect(plan).toMatchObject({ approved: false, secretsRead: false, remoteWrites: 0, productionEnabled: false });
+    expect(plan.planPath.startsWith(join(p.f.commonDir, "harness/plans/"))).toBe(true);
+    expect(p.projectRoots.map((root) => git(root, "status", "--porcelain"))).toEqual(before);
+    expect(existsSync(p.f.calls)).toBe(false); expect(existsSync(p.native.trace)).toBe(false);
+    const saved = JSON.parse(readFileSync(plan.planPath, "utf8"));
+    const original = readFileSync(plan.planPath, "utf8");
+    writeFileSync(plan.planPath, JSON.stringify({ ...saved, approved: true }));
+    expect((await qualificationCli(p.f.root, "run", "--plan", plan.planPath)).status).toBe(1);
+    writeFileSync(plan.planPath, original);
+    const request = JSON.parse(readFileSync(input, "utf8")); request.manifest.clients[0].scope.binding.actor = "imposter";
+    const drifted = join(p.f.bin, "drifted-request.json"); writeFileSync(drifted, JSON.stringify(request));
+    const driftResult = await qualificationCli(p.f.root, "plan", "--input", drifted);
+    expect(driftResult.status).toBe(1); expect(driftResult.stderr).toContain("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
+    for (const limit of ["budget", "refs"]) {
+      const limited = JSON.parse(readFileSync(input, "utf8"));
+      if (limit === "budget") limited.manifest.clients[0].scope.maxCleanupAttempts = 1;
+      else limited.manifest.clients[0].scope.refs = [p.controlRef];
+      writeFileSync(drifted, JSON.stringify(limited));
+      const result = await qualificationCli(p.f.root, "plan", "--input", drifted);
+      expect(result.status).toBe(1); expect(result.stderr).toContain("QUALIFICATION_CLEANUP_SCOPE_INSUFFICIENT");
+    }
+    for (const [index, packet] of saved.packets.entries()) expect(() => loadHumanAuthorization(p.manifest.clients[index].scope.binding.commonDir, packet.packet.packetHash)).toThrow("HUMAN_APPROVAL_REQUIRED");
+    const unapproved = await qualificationCli(p.f.root, "run", "--plan", plan.planPath);
+    expect(unapproved.status).toBe(1); expect(unapproved.stderr).toContain("HUMAN_APPROVAL_REQUIRED");
+    const approve = ["approve", "--plan", plan.planPath, "--approve", plan.planHash, "--approved-by", "fixture-human", "--approval-source", "synthetic-explicit-user-message"];
+    const wrong = [...approve]; wrong[4] = "0".repeat(64);
+    expect((await qualificationCli(p.f.root, ...wrong)).status).toBe(1);
+    const secondCommon = p.manifest.clients[1].scope.binding.commonDir;
+    const lock = acquireMutationLock({ projectDir: p.projectRoots[1], commonDir: secondCommon, repository: true });
+    try {
+      const partial = await qualificationCli(p.f.root, ...approve); expect(partial.status).toBe(1);
+      expect(JSON.parse(partial.stdout)).toMatchObject({ executionStatus: "partial", registered: [{ clientId: "local" }], pending: ["other"] });
+    } finally { releaseMutationLock(lock); }
+    const first = loadHumanAuthorization(p.f.commonDir, saved.packets[0].packet.packetHash);
+    const resumed = await qualificationCli(p.f.root, ...approve); expect(resumed.status, resumed.stderr).toBe(0);
+    const changedSource = [...approve]; changedSource[8] = "different-user-message";
+    const changedApproval = await qualificationCli(p.f.root, ...changedSource);
+    expect(changedApproval.status).toBe(1); expect(changedApproval.stderr).toContain("HUMAN_APPROVAL_ALREADY_RECORDED");
+    expect(loadHumanAuthorization(p.f.commonDir, saved.packets[0].packet.packetHash)).toEqual(first);
+    expect(loadHumanAuthorization(secondCommon, saved.packets[1].packet.packetHash).approval.approvedAt).toBe(first.approval.approvedAt);
+    expect(existsSync(p.f.calls)).toBe(false); expect(existsSync(p.native.trace)).toBe(false);
+    const completed = await qualificationCli(p.f.root, "run", "--plan", plan.planPath);
+    expect(completed.status, completed.stderr || completed.stdout).toBe(2);
+    const report = JSON.parse(completed.stdout);
+    expect(report).toMatchObject({ executionStatus: "completed", qualificationStatus: "incomplete", qualified: false, topology: "LOCAL",
+      counts: { commits: 2, writeAttempts: 2, cleanupAttempts: 2 }, requiredCases: [{ id: "dg01-cas", status: "not-run" }],
+      cleanup: [{ status: "deleted", ref: p.controlRef }, { status: "deleted", ref: p.sourceRef }] });
+    expect(JSON.parse(readFileSync(report.reportPath, "utf8"))).toMatchObject({ qualified: false, executionStatus: "completed" });
+    expect(git(p.f.root, "--git-dir=" + p.native.remote, "for-each-ref", "--format=%(refname)")).toBe("");
+    const repeated = await qualificationCli(p.f.root, "run", "--plan", plan.planPath);
+    expect(repeated.status).toBe(1); expect(JSON.parse(repeated.stdout).error).toBe("QUALIFICATION_RUN_ALREADY_STARTED");
+    expect(p.projectRoots.map((root) => git(root, "status", "--porcelain"))).toEqual(before);
+  }, 180_000);
+
+  it.each(["publication", "cleanup"])("retains real asynchronous failure facts without replay (%s)", async (phase) => {
+    const p = prepareSupervisedFixture(); const input = qualificationRequest(p);
+    const planned = await qualificationCli(p.f.root, "plan", "--input", input); expect(planned.status, planned.stderr).toBe(0);
+    const plan = JSON.parse(planned.stdout);
+    const approved = await qualificationCli(p.f.root, "approve", "--plan", plan.planPath, "--approve", plan.planHash, "--approved-by", "fixture-human", "--approval-source", "synthetic-explicit-user-message");
+    expect(approved.status, approved.stderr).toBe(0);
+    writeFileSync(p.native.fault, JSON.stringify(phase === "cleanup" ? { readbackFailure: true } : { failReadRef: p.sourceRef }));
+    const failed = await qualificationCli(p.f.root, "run", "--plan", plan.planPath);
+    expect(failed.status, failed.stderr).toBe(1); const report = JSON.parse(failed.stdout);
+    expect(report).toMatchObject({ executionStatus: "failed", qualified: false, qualificationStatus: "incomplete", cleanup: [] });
+    expect(report.error).toBeTruthy(); expect(failed.stderr).not.toContain("UnhandledPromiseRejection");
+    expect(JSON.parse(readFileSync(report.reportPath, "utf8"))).toEqual(expect.objectContaining({ error: report.error, recovery: report.recovery }));
+    const reference = JSON.parse(approved.stdout).registered[0].approvalRef;
+    if (phase === "publication") {
+      expect(report.execution).toMatchObject({ steps: [{ stepId: "init" }], launchRequestedClients: ["local"], readyClients: ["local"], drainCoverage: "unproven" });
+      expect(git(p.f.root, "--git-dir=" + p.native.remote, "rev-parse", p.controlRef)).toBe(p.synthetic.objects[0].commitSha);
+      expect(loadHumanAuthorization(p.f.commonDir, reference).attempts.some((item) => item.operation === "cleanup")).toBe(false);
+      return;
+    }
+    const state = loadHumanAuthorization(p.f.commonDir, reference); const attempt = state.attempts.find((item) => item.operation === "cleanup")!;
+    expect(attempt.outcome?.status).toBe("unknown");
+    const pushes = () => readFileSync(p.native.trace, "utf8").split("\n").filter((line) => line && JSON.parse(line).argv.includes("push")).length;
+    const count = pushes(); writeFileSync(p.native.fault, "{}");
+    const recovered = await qualificationCli(p.f.root, "recover-cleanup", "--approval", reference, "--attempt", attempt.attemptId);
+    expect(recovered.status, recovered.stderr).toBe(0); expect(JSON.parse(recovered.stdout)).toMatchObject({ status: "applied", attemptId: attempt.attemptId });
+    expect(pushes()).toBe(count); expect(git(p.f.root, "--git-dir=" + p.native.remote, "rev-parse", p.sourceRef)).toBe(p.source.commitSha);
+  }, 180_000);
+
   it.each([false, true])("supervises fixed native publications and exact cleanup without claiming the full DG case (cross-client=%s)", async (crossClient) => {
     const { f, native, manifest, targets, result, source, sourceRef, controlRef, synthetic, approvalRef, sourceClient } = await supervisedFixture(crossClient);
     expect(result.report).toMatchObject({ qualified: false, status: "incomplete", topology: "LOCAL", counts: { commits: 2, writeAttempts: 2, cleanupAttempts: 0 }, countsComplete: true });
