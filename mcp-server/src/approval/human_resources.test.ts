@@ -7,7 +7,7 @@ import { prepareSyntheticObject } from "../coordination/synthetic.js";
 import { prepareQualificationManifest, saveQualificationManifest, scopeForClient } from "../coordination/manifest.js";
 import { CoordinationClock } from "../coordination/clock.js";
 import { createSemanticApprovalPacket } from "./service.js";
-import { closeQualificationWrites, loadHumanAuthorization, qualificationResourceReservations, recordHumanApproval, reserveQualificationResourcesLocked, revokeHumanAuthorization } from "./human.js";
+import { closeQualificationWrites, closeQualificationWritesLocked, loadHumanAuthorization, qualificationResourceReservations, recordHumanApproval, recordQualificationResourceLocked, reserveQualificationResourcesLocked, revokeHumanAuthorization } from "./human.js";
 import { acquireMutationLock, releaseMutationLock } from "../recovery/service.js";
 import { fileHash, hashObject } from "../v2/fs.js";
 import { applyWorkspacePlan, auditWorkspace, planWorkspaceAllocation, planWorkspaceConfiguration, workspaceStatus } from "../worktree/service.js";
@@ -84,6 +84,57 @@ it("reserves the entire bounded resource list once in the original receipt and n
   expect(() => qualificationResourceReservations(commonDir)).toThrow("HUMAN_AUTHORIZATION_RECOVERY_REQUIRED");
 });
 
+it("tracks one resource lifecycle in the original human chain without refunding create-once or inventing ownership", () => {
+  const { scope } = fixture(); const reference = approved(scope); const commonDir = scope.binding.commonDir;
+  const context = { projectDir: commonDir, commonDir, repository: true }; const lock = acquireMutationLock(context);
+  const binding = humanScopeSchema.parse(scope).binding; const source = scope.synthetic.objects[0];
+  const event = (fact: unknown) => recordQualificationResourceLocked(lock, commonDir, reference, "source-a", fact, binding, clock());
+  try {
+    expect(() => event({ type: "create-started" })).toThrow("HUMAN_LOCAL_RESOURCES_NOT_RESERVED");
+    reserveQualificationResourcesLocked(lock, commonDir, reference, binding, clock());
+    expect(() => event({ type: "mkdir-owned", identity: { device: 1, inode: 2, birthtimeMs: 3, parentDevice: 1, parentInode: 4, parentBirthtimeMs: 5 } })).toThrow("HUMAN_LOCAL_RESOURCE_HISTORY_INVALID");
+    const imported = { type: "import-started", commits: [source.commitSha], graphHash: hashObject([source.objectPlanHash]) };
+    expect(() => event({ ...imported, commits: ["b".repeat(40)] })).toThrow("HUMAN_LOCAL_RESOURCE_HISTORY_INVALID");
+    event(imported);
+    expect(() => event(imported)).toThrow("HUMAN_LOCAL_RESOURCE_HISTORY_INVALID");
+    expect(() => event({ type: "create-started" })).toThrow("HUMAN_LOCAL_RESOURCE_HISTORY_INVALID");
+    event({ type: "import-result", status: "imported", evidenceHash: digest }); event({ type: "create-started" });
+    expect(() => event({ type: "create-started" })).toThrow("HUMAN_LOCAL_RESOURCE_HISTORY_INVALID");
+    event({ type: "mkdir-owned", identity: { device: 1, inode: 2, birthtimeMs: 3, parentDevice: 1, parentInode: 4, parentBirthtimeMs: 5 } });
+    expect(() => event({ type: "branch-created", head: "b".repeat(40) })).toThrow("HUMAN_LOCAL_RESOURCE_HISTORY_INVALID");
+    event({ type: "branch-created", head: source.commitSha }); event({ type: "add-started" });
+    event({ type: "ready", gitDir: join(commonDir, "worktrees/fixture"), evidenceHash: digest });
+    expect(() => event({ type: "released", evidenceHash: digest })).toThrow("HUMAN_QUALIFICATION_WRITES_OPEN");
+    closeQualificationWritesLocked(lock, commonDir, reference);
+    event({ type: "retained", reason: "LOCAL_PATH_REPLACED", evidenceHash: digest });
+    expect(qualificationResourceReservations(commonDir)).toEqual([expect.objectContaining({ phase: "ready", status: "retained", resourceId: "source-a" })]);
+    event({ type: "released", evidenceHash: digest });
+    expect(qualificationResourceReservations(commonDir)).toEqual([]);
+    expect(() => event({ type: "create-started" })).toThrow("HUMAN_QUALIFICATION_WRITES_CLOSED");
+    expect(() => reserveQualificationResourcesLocked(lock, commonDir, reference, binding, clock())).toThrow("HUMAN_QUALIFICATION_WRITES_CLOSED");
+    expect(loadHumanAuthorization(commonDir, reference)).toMatchObject({ candidates: [], attempts: [], resourceStates: {
+      "source-a": { phase: "released", createStarted: true, branchCreated: source.commitSha, importResult: "imported" },
+    } });
+  } finally { releaseMutationLock(lock); }
+});
+
+it.each(["failed", "unknown"])("retains an incomplete import without permitting creation or a forged success (%s)", (status) => {
+  const { scope } = fixture(); const reference = approved(scope); const commonDir = scope.binding.commonDir;
+  const lock = acquireMutationLock({ projectDir: commonDir, commonDir, repository: true }); const binding = humanScopeSchema.parse(scope).binding;
+  const event = (fact: unknown) => recordQualificationResourceLocked(lock, commonDir, reference, "source-a", fact, binding, clock());
+  try {
+    reserveQualificationResourcesLocked(lock, commonDir, reference, binding, clock());
+    expect(() => recordQualificationResourceLocked({ ...lock }, commonDir, reference, "source-a", { type: "create-started" }, binding, clock())).toThrow();
+    expect(() => recordQualificationResourceLocked(lock, commonDir, reference, "other", { type: "create-started" }, binding, clock())).toThrow("HUMAN_LOCAL_RESOURCE_SCOPE_REQUIRED");
+    const source = scope.synthetic.objects[0]; event({ type: "import-started", commits: [source.commitSha], graphHash: hashObject([source.objectPlanHash]) });
+    event({ type: "import-result", status, evidenceHash: digest });
+    expect(() => event({ type: "import-result", status: "imported", evidenceHash: digest })).toThrow("HUMAN_LOCAL_RESOURCE_HISTORY_INVALID");
+    expect(() => event({ type: "create-started" })).toThrow("HUMAN_LOCAL_RESOURCE_HISTORY_INVALID");
+    event({ type: "retained", reason: "IMPORT_INCOMPLETE", evidenceHash: digest });
+    expect(qualificationResourceReservations(commonDir)).toEqual([expect.objectContaining({ phase: "reserved", status: "retained" })]);
+  } finally { releaseMutationLock(lock); }
+});
+
 it("shares real worktree path protection, capacity and audit without creating a fixture or a Delivery lease", () => {
   const { root, scope } = fixture(); const commonDir = scope.binding.commonDir;
   const env = { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
@@ -96,6 +147,11 @@ it("shares real worktree path protection, capacity and audit without creating a 
   const before = workspaceStatus(root); scope.localResources.configHash = fileHash(join(root, ".harness/worktree-delivery.json"))!;
   scope.localResources.hostBindingHash = before.hostBinding.hash!;
   expect(preflightQualificationResources(root, scope.localResources).capacity).toMatchObject({ used: 0, available: 1 });
+  execFileSync("git", ["config", "extensions.worktreeConfig", "true"], { cwd: root, env });
+  writeFileSync(join(commonDir, "config.worktree"), "[credential]\n\thelper = synthetic-credential-must-not-copy\n");
+  expect(() => preflightQualificationResources(root, scope.localResources)).toThrow("QUALIFICATION_RESOURCE_CONFIG_UNSUPPORTED");
+  expect(readFileSync(join(commonDir, "config.worktree"), "utf8")).toContain("synthetic-credential-must-not-copy");
+  execFileSync("git", ["config", "--unset", "extensions.worktreeConfig"], { cwd: root, env }); rmSync(join(commonDir, "config.worktree"));
   const protectedScope = structuredClone(scope.localResources); protectedScope.items[0].path = root;
   expect(() => preflightQualificationResources(root, protectedScope)).toThrow("WORKTREE_PROTECTED_PATH");
   expect(() => preflightQualificationResources(root, { ...scope.localResources, configHash: "b".repeat(64) })).toThrow("HUMAN_LOCAL_RESOURCE_POLICY_DRIFT");

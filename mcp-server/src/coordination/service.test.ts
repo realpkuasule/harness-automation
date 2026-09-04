@@ -64,6 +64,22 @@ describe("GitCoordinationStore", { timeout: 20_000 }, () => {
     expect(coordinationStatus(root)).toMatchObject({ configured: false, coordinated: false, result: "CoordinationBackendRequired" });
   });
 
+  it("splits acquire at the shared CAS barrier without allowing copied or cross-service preparations", () => {
+    const { store } = fixture(); const authority = vi.fn();
+    const lifecycle = new CoordinationLifecycleService(store, sampleClock, undefined, authority);
+    const stranger = new CoordinationLifecycleService(store, sampleClock, undefined, authority);
+    const input = { repository: "owner/repo", repositoryId: "R_1", workItem: "github:owner/repo#9", branch: "codex/test", sourceRepositoryId: "R_1", owner: "octo", machine: "machine-a", controlEpochDigest: "a".repeat(64), head: "b".repeat(40), ttlMs: 86_400_000, transactionId: "barrier" };
+    const prepared = lifecycle.prepareAcquire(input);
+    expect(authority).toHaveBeenCalledTimes(1); expect(authority.mock.calls[0][0]).toBe("acquire");
+    expect(store.read(input.workItem).record).toBeNull();
+    expect(() => lifecycle.dispatchAcquire({ ...prepared })).toThrow("COORDINATION_PREPARATION_UNPROVEN");
+    expect(() => stranger.dispatchAcquire(prepared)).toThrow("COORDINATION_PREPARATION_UNPROVEN");
+    const acquired = lifecycle.dispatchAcquire(prepared);
+    expect(acquired.transactionId).toBe("barrier"); expect(store.read(input.workItem).record).toEqual(acquired);
+    expect(() => lifecycle.dispatchAcquire(prepared)).toThrow("COORDINATION_PREPARATION_UNPROVEN");
+    expect(() => new CoordinationLifecycleService(store, sampleClock).prepareAcquire({ ...input, workItem: "github:owner/repo#10" })).toThrow("COORDINATION_OPERATION_AUTHORITY_REQUIRED");
+  });
+
   it("does not let a delayed renewal extend a lease without pre-expiry server evidence", () => {
     const first = lease();
     const pending = reserveRenewal(first, expectedRecord(first), 172_800_000, sampleClock());

@@ -9,7 +9,7 @@ import { CoordinationClock } from "./clock.js";
 import { confirmRenewal, nextLease, observeRenewal, rebindLease, requireWriteLease, reserveRenewal } from "./leases.js";
 import type { GitHubCoordinationReader } from "./github.js";
 import type { CoordinationOperation, OperationAuthority } from "./authority.js";
-import type { CoordinationObservation } from "./store.js";
+import type { CoordinationObservation, CoordinationPreparation } from "./store.js";
 import type { HandoffObservers } from "./handoff.js";
 export { assertExpected, createCoordinationRecord } from "./record.js";
 export { GitCoordinationStore } from "./store.js";
@@ -46,13 +46,24 @@ export function requireEnabledCoordination(root: string): CoordinationConfig {
 
 /** Shared lifecycle composition: CLI and isolated qualification fixtures use these exact CAS paths. */
 export class CoordinationLifecycleService {
+  private readonly acquisitions = new WeakSet<CoordinationPreparation>();
   constructor(private readonly store: GitCoordinationStore, private readonly refreshClock: () => CoordinationClock,
     private readonly provider?: GitHubCoordinationReader, private readonly authority?: OperationAuthority, private readonly handoff?: HandoffObservers) {}
   acquire(input: Parameters<typeof nextLease>[0]): CoordinationRecord {
+    return this.dispatchAcquire(this.prepareAcquire(input));
+  }
+  prepareAcquire(input: Parameters<typeof nextLease>[0]): CoordinationPreparation {
     const current = this.store.read(input.workItem);
     if (current.record) fail("COORDINATION_ALREADY_ACQUIRED");
     const next = nextLease(input, this.refreshClock());
-    return this.confirm(this.apply("acquire", current, next));
+    if (!this.authority) fail("COORDINATION_OPERATION_AUTHORITY_REQUIRED");
+    this.authority("acquire", current, next);
+    const prepared = this.store.prepareCompareAndSwap({ workItem: next.workItem, expectedControlSha: current.controlSha, expected: {}, next });
+    this.acquisitions.add(prepared); return prepared;
+  }
+  dispatchAcquire(prepared: CoordinationPreparation): CoordinationRecord {
+    if (!this.acquisitions.delete(prepared)) fail("COORDINATION_PREPARATION_UNPROVEN");
+    return this.confirm(this.store.dispatchPrepared(prepared));
   }
   rebind(workItem: string, expected: CoordinationExpected, sessionRef: string | undefined, head: string): CoordinationRecord {
     const current = this.store.read(workItem); if (!current.record) fail("COORDINATION_RECORD_ABSENT");

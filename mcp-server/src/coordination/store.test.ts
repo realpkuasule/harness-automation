@@ -92,3 +92,31 @@ it("rejects a bad intermediate tree even when the latest tree returns to valid m
   git(f.remote, ["update-ref", ref, restored]);
   expect(() => f.store.read(f.record.workItem)).toThrow("COORDINATION_TREE_INVALID");
 });
+
+it("prepares two private same-parent CAS candidates and lets Git reject the stale dispatch while preserving another work item", () => {
+  const f = fixture(); const other = createCoordinationRecord({ ...f.record, workItem: "github:owner/repo#2", branch: "codex/two", transactionId: "preserved" });
+  const base = f.store.compareAndSwap({ workItem: other.workItem, expectedControlSha: f.genesis.commitSha, expected: {}, next: other }).candidate.controlSha;
+  const creations: string[] = []; const pushes: Array<{ expected: string | null; head: string; output: string }> = [];
+  const stores = ["winner", "loser"].map(() => new GitCoordinationStore(ref, { ...f.transport, push(...args) {
+    const result = f.transport.push(...args); pushes.push({ head: args[1], expected: args[3], output: result.stdout }); return result;
+  } }, f.beforePush, f.genesis, f.history, (intent) => {
+    roots.push(intent.objectDirectory); return (head) => { expect(head).not.toBeNull(); creations.push(head!); };
+  }));
+  const inputs = stores.map((_, index) => ({ workItem: f.record.workItem, expectedControlSha: base, expected: {},
+    next: createCoordinationRecord({ ...f.record, transactionId: `contender-${index}` }) }));
+  const prepared = stores.map((store, index) => store.prepareCompareAndSwap(inputs[index]));
+  expect(creations).toHaveLength(2); expect(new Set(creations).size).toBe(2); expect(pushes).toEqual([]);
+  expect(() => stores[0].dispatchPrepared({ ...prepared[0] })).toThrow("COORDINATION_PREPARATION_UNPROVEN");
+  expect(() => stores[1].dispatchPrepared(prepared[0])).toThrow("COORDINATION_PREPARATION_UNPROVEN");
+  // Public input mutation after preparation cannot alter its private candidate.
+  inputs[0].next.owner = "mutated-after-prepare";
+  const winner = stores[0].dispatchPrepared(prepared[0]); expect(winner.current.record?.owner).toBe(f.record.owner);
+  expect(() => stores[1].dispatchPrepared(prepared[1])).toThrow("COORDINATION_CAS_CONFLICT");
+  expect(pushes).toHaveLength(2); expect(pushes.every((push) => push.expected === base)).toBe(true);
+  expect(pushes[0].output).toContain("\t"); expect(pushes[1].output).toContain("[rejected]"); expect(pushes[1].output).toContain("stale info");
+  expect(() => stores[0].dispatchPrepared(prepared[0])).toThrow("COORDINATION_PREPARATION_UNPROVEN");
+  expect(() => stores[1].dispatchPrepared(prepared[1])).toThrow("COORDINATION_PREPARATION_UNPROVEN");
+  expect(pushes).toHaveLength(2); expect(creations).toHaveLength(2);
+  expect(f.store.read(other.workItem).record).toEqual(other);
+  expect(f.store.read(f.record.workItem).record?.transactionId).toBe("contender-0");
+});

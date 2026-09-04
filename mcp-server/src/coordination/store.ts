@@ -27,6 +27,7 @@ export interface CoordinationCandidate {
 }
 export interface CoordinationObservation { controlSha: string | null; record: CoordinationRecord | null; }
 export interface CoordinationApplied { candidate: CoordinationCandidate; current: CoordinationObservation; disposition: "current" | "superseded"; }
+export type CoordinationPreparation = Readonly<{ kind: "prepared-coordination-cas" }>;
 export interface CoordinationWriteResult { candidate: CoordinationCandidate; pushed?: GitCommandResult; applied?: CoordinationApplied; error?: string; }
 export type WriteRecorder<T> = ((result: T) => void) & { finish?: () => void };
 export interface CoordinationCommitIntent {
@@ -54,6 +55,7 @@ export class GitCoordinationStore {
         controlRef.split("/").some((part) => !part || part.startsWith(".") || part.endsWith(".lock") || part.endsWith("."))) throw new Error("COORDINATION_CONTROL_REF_INVALID");
   }
   private directory = objectDirectory;
+  private readonly preparations = new WeakMap<CoordinationPreparation, CoordinationCandidate>();
   private entries(directory: string, sha: string): Map<string, { blob: string; record: CoordinationRecord }> {
     if (!SHA.test(sha) || objectGit(directory, ["cat-file", "-t", sha]).trim() !== "commit") throw new Error("COORDINATION_CONTROL_OBJECT_INVALID");
     const raw = objectGit(directory, ["ls-tree", "-rz", "-t", "--full-tree", sha]);
@@ -123,6 +125,11 @@ export class GitCoordinationStore {
     return { candidate, observedHead: current.controlSha };
   }
   compareAndSwap(args: { workItem: string; expectedControlSha: string | null; expected: CoordinationExpected; next: CoordinationRecord }): CoordinationApplied {
+    return this.dispatchPrepared(this.prepareCompareAndSwap(args));
+  }
+  /** Candidate quota is consumed now; no dispatch lock or remote write is held across the barrier. */
+  prepareCompareAndSwap(input: Parameters<GitCoordinationStore["compareAndSwap"]>[0]): CoordinationPreparation {
+    const args = structuredClone(input);
     const directory = this.directory(); let retain = false;
     try {
       const current = this.snapshot(directory, args.workItem);
@@ -149,12 +156,26 @@ export class GitCoordinationStore {
       const written = this.entries(directory, controlSha);
       if (written.size !== current.entries.size + (current.record ? 0 : 1) || [...current.entries].some(([path, value]) => path !== pathFor(args.workItem) && written.get(path)?.blob !== value.blob)) throw new Error("COORDINATION_TREE_PRESERVATION_FAILED");
       const candidate = { controlRef: this.controlRef, expectedControlSha: current.controlSha, controlSha, treeSha, record: args.next, objectDirectory: directory };
+      const handle: CoordinationPreparation = Object.freeze({ kind: "prepared-coordination-cas" });
+      this.preparations.set(handle, candidate); return handle;
+    } finally { if (!retain) rmSync(directory, { recursive: true, force: true }); }
+  }
+  /** Single use and original parent only: the native Git CAS, not a fresh preflight, decides contention. */
+  dispatchPrepared(handle: CoordinationPreparation): CoordinationApplied {
+    const candidate = this.preparations.get(handle);
+    if (!candidate) throw new Error("COORDINATION_PREPARATION_UNPROVEN");
+    this.preparations.delete(handle);
+    const { objectDirectory: directory, controlSha, treeSha, expectedControlSha } = candidate; let retain = true;
+    try {
+      const [tree, parents = ""] = objectGit(directory, ["show", "-s", "--format=%T%n%P", controlSha]).trimEnd().split("\n");
+      if (tree !== treeSha || parents !== expectedControlSha ||
+          this.entries(directory, controlSha).get(pathFor(candidate.record.workItem))?.record.recordHash !== candidate.record.recordHash) throw new Error("COORDINATION_PREPARATION_DRIFT");
       const recordWrite = this.beforePush(candidate);
       let failure: { error: unknown } | undefined;
       try {
         let pushed: GitCommandResult | undefined; let applied: CoordinationApplied;
         try {
-          pushed = this.transport.push(directory, controlSha, this.controlRef, current.controlSha);
+          pushed = this.transport.push(directory, controlSha, this.controlRef, expectedControlSha);
           requireCoordinationPush(pushed, controlSha, this.controlRef);
           recordWrite?.({ candidate, pushed }); // Intermediate evidence; the write lock still covers readback.
           applied = this.recover(candidate);

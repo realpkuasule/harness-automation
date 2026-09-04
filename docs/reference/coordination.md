@@ -17,6 +17,12 @@ Only the selected record changes, using exact-old-SHA Git CAS. A candidate must 
 recorded before push. Unknown write outcomes retain its temporary objects for
 same-transaction recovery; recovery never repeats the push or restores old ownership.
 
+Ordinary acquire uses the same private prepare/dispatch boundaries as the pending
+fixed contention runner. Preparation creates one approved candidate without holding
+a dispatch lock; dispatch can send it only once against the original parent.
+Copied handles, another instance and replay are refused. This internal primitive
+does not expose arbitrary preparation or workspace overrides through the CLI.
+
 History starts from a separately approved empty-tree, parentless metadata-only root
 commit. Its full precomputed bytes, tree/SHA and plan hash bind the history anchor
 along with the repository, endpoint and control ref; success receipts never invent
@@ -195,8 +201,13 @@ simultaneous acquire competition, full case coverage, multiple machines or LIVE
 GitHub qualification.
 
 Managed synthetic workspaces for acquire contention are still being implemented.
-Their scope and read-only admission/capacity accounting are present, but neither
-current CLI execution mode allocates them. A resource descriptor on an existing
+Scope, admission/capacity accounting and the native creation/observation primitive
+are present, but neither current CLI execution mode allocates them. Source import
+and one-time creation are recorded before mutation; partial results retain their
+last proven ownership phase. Creation never checks out project content, copies
+credentials or modifies the original checkout. Fixed fixtures reject enabled
+per-worktree Git configuration rather than copying or changing it.
+A resource descriptor on an existing
 publication profile is rejected. Pending resource reservations remain visible to
 normal worktree status/audit and consume capacity until exact close evidence is
 implemented and recorded; closing a run alone is not resource cleanup.

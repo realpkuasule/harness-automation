@@ -214,7 +214,8 @@ export interface WorkspaceStatus {
   capacity: { limit: number; used: number; available: number };
   worktrees: WorktreeRecord[];
   leases: WorkspaceLease[];
-  qualificationResources?: Array<{ approvalRef: string; resourceId: string; path: string; branch: string; status: "reserved" }>;
+  qualificationResources?: Array<{ approvalRef: string; resourceId: string; path: string; branch: string;
+    phase: "reserved" | "mkdir-owned" | "add-started" | "ready" | "released"; status: "reserved" | "mkdir-owned" | "add-started" | "ready" | "released" | "retained" }>;
   provider: ProviderObservation;
   errors: string[];
   observedHash: string;

@@ -1,11 +1,11 @@
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { planCredentialHostBinding, applyCredentialHostBinding } from "../credentials/host_binding.js";
-import { hashObject, sha256 } from "../v2/fs.js";
+import { fileHash, hashObject, sha256 } from "../v2/fs.js";
 import { acquireMutationLock, releaseMutationLock } from "../recovery/service.js";
 import { createSemanticApprovalPacket } from "../approval/service.js";
 import { closeQualificationWrites, loadHumanAuthorization, recordHumanApproval, type HumanScope } from "../approval/human.js";
@@ -24,6 +24,8 @@ import { readSettledQualification, runLocalQualification } from "./qualification
 import { observeQualificationRemote, readQualificationRemote } from "./qualification_remote.js";
 import { applyQualificationCleanup, planQualificationCleanup, recoverQualificationCleanup } from "./qualification_cleanup.js";
 import { startClientProcess } from "./client_process.js";
+import { applyWorkspacePlan, planWorkspaceConfiguration, workspaceStatus } from "../worktree/service.js";
+import { createQualificationWorkspaceLocked, observeQualificationWorkspace, reserveQualificationWorkspacesLocked } from "../worktree/qualification.js";
 
 const nativeHost = vi.hoisted(() => ({ home: "", sourceGroupSizes: [] as number[], badNonceClient: "" }));
 vi.mock("node:child_process", async (original) => {
@@ -92,6 +94,8 @@ function nativeGitFixture({ root, bin, endpoint }: ReturnType<typeof fixture>) {
 const fs=require('node:fs');const cp=require('node:child_process');let a=process.argv.slice(2);
 const fault=fs.existsSync(${JSON.stringify(fault)})?JSON.parse(fs.readFileSync(${JSON.stringify(fault)},'utf8')):{};
 const deleting=a.includes('push')&&a.at(-1).startsWith(':refs/heads/');
+const adding=a.includes('worktree')&&a.includes('add');
+if(adding&&fault.addFailBefore)process.exit(1);
 if(a.some(x=>['ls-remote','fetch','push'].includes(x))){
   if(!a.includes(${JSON.stringify(endpoint)})||process.env.HARNESS_GIT_TOKEN!=='synthetic-provider-canary')process.exit(2);
   fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({argv:a,global:process.env.GIT_CONFIG_GLOBAL,redirects:process.env.GIT_CONFIG_VALUE_2,hooks:process.env.GIT_CONFIG_VALUE_3})+'\\n');
@@ -104,7 +108,8 @@ if(a.includes('ls-remote')&&fault.failReadRef&&a.includes(fault.failReadRef)){
 if(deleting&&fault.beforeDeleteHead)cp.execFileSync(${JSON.stringify(realGit)},['--git-dir='+${JSON.stringify(remote)},'update-ref',a.at(-1).slice(1),fault.beforeDeleteHead]);
 const r=cp.spawnSync(${JSON.stringify(realGit)},a,{env:process.env,stdio:['inherit','pipe','pipe']});
 if(deleting&&fault.readbackFailure)fs.writeFileSync(${JSON.stringify(fired)},'deleted');
-process.stdout.write(deleting&&fault.dropDeleteOutput||a.includes('push')&&fault.dropPushRef&&a.at(-1).endsWith(':'+fault.dropPushRef)?'':r.stdout??'');process.stderr.write(r.stderr??'');process.exit(r.status??1);
+process.stdout.write(deleting&&fault.dropDeleteOutput||a.includes('push')&&fault.dropPushRef&&a.at(-1).endsWith(':'+fault.dropPushRef)?'':r.stdout??'');process.stderr.write(r.stderr??'');
+process.exit(adding&&fault.addFailAfter||a.includes('update-ref')&&fault.branchResultLost?1:r.status??1);
 `, { mode: 0o700 });
   return { trace, remote, realGit, fault };
 }
@@ -241,6 +246,73 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
       .toMatchObject({ writesClosed: false, candidates: [], attempts: [] });
     expect(existsSync(p.native.trace)).toBe(false);
   });
+
+  it.each(["complete", "add-before", "add-after", "branch-unknown"])("creates approved synthetic worktrees without touching primary content or erasing failure (%s)", (mode) => {
+    const p = prepareSupervisedFixture();
+    git(p.f.root, "symbolic-ref", "HEAD", "refs/heads/main");
+    git(p.f.root, "-c", "core.hooksPath=/dev/null", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "primary");
+    const allowed = join(p.f.bin, "workspaces"); mkdirSync(allowed); const path = join(allowed, "source");
+    const configured = planWorkspaceConfiguration({ projectRoot: p.f.root, mode: "enforced", managementBranch: "main", maxPersistentWorktrees: 1,
+      allowedRoots: [allowed], protectedRoots: [p.f.root, p.f.commonDir, "/"] });
+    applyWorkspacePlan({ projectRoot: p.f.root, planPath: configured.path, approval: configured.plan.planHash });
+    const input = { ...p.manifest }; delete input.execution;
+    input.clients[0].scope.localResources = { authorityRoot: p.f.root, commonDir: p.f.commonDir,
+      configHash: fileHash(join(p.f.root, ".harness/worktree-delivery.json"))!, hostBindingHash: workspaceStatus(p.f.root).hostBinding.hash!,
+      expiresAt: input.expiresAt, cleanupExpiresAt: input.cleanupExpiresAt, maxConcurrent: 1, items: [{ resourceId: "source", clientId: "local",
+        path, branch: p.sourceRef.slice("refs/heads/".length), fixtureId: "source", sourceSha: p.source.commitSha,
+        operations: ["import-source", "create-once", "observe", "close-exact"] }] };
+    const { manifestHash, ...definition } = input; expect(manifestHash).toBe(p.manifest.manifestHash);
+    p.manifest = prepareQualificationManifest(definition);
+    const targets = registerSupervisedFixture(p); const approvalRef = targets[0].approvalRef;
+    const runtime = createQualificationRuntime(p.f.root, approvalRef, p.controlRef); runtime.bootstrap(); runtime.sourceFixture("source");
+    const before = { head: git(p.f.root, "rev-parse", "HEAD"), branch: git(p.f.root, "symbolic-ref", "HEAD"), status: git(p.f.root, "status", "--porcelain"),
+      index: fileHash(join(p.f.commonDir, "index")) };
+    const hookCanary = join(p.f.bin, "hook-must-not-run"); const hooks = join(p.f.bin, "hooks"); mkdirSync(hooks);
+    for (const name of ["reference-transaction", "post-checkout"]) writeFileSync(join(hooks, name), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(hookCanary)},'unexpected');\n`, { mode: 0o700 });
+    git(p.f.root, "config", "core.hooksPath", hooks);
+    writeFileSync(p.native.fault, JSON.stringify(mode === "add-before" ? { addFailBefore: true } : mode === "add-after" ? { addFailAfter: true } : mode === "branch-unknown" ? { branchResultLost: true } : {}));
+    const lock = acquireMutationLock({ projectDir: p.f.root, commonDir: p.f.commonDir, repository: true });
+    try {
+      reserveQualificationWorkspacesLocked(lock, p.f.root, approvalRef, runtime.binding, runtime.provider.serverClock());
+      expect(() => createQualificationWorkspaceLocked({ ...lock }, p.f.root, approvalRef, "source")).toThrow();
+      if (mode === "complete") {
+        const created = createQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source");
+        expect(created).toMatchObject({ path, head: p.source.commitSha, commonDir: p.f.commonDir, assets: { entries: [] } });
+      } else expect(() => createQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source")).toThrow(mode === "branch-unknown" ? "QUALIFICATION_RESOURCE_BRANCH_CREATE_FAILED" : "QUALIFICATION_RESOURCE_ADD_FAILED");
+      expect(() => createQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source")).toThrow("HUMAN_LOCAL_RESOURCE_CREATE_ALREADY_STARTED");
+      const phase = mode === "add-before" ? "add-started" : mode === "branch-unknown" ? "mkdir-owned" : "ready";
+      expect(loadHumanAuthorization(p.f.commonDir, approvalRef)).toMatchObject({ resourceStates: { source: { phase, createStarted: true, importResult: "imported" } } });
+      expect(workspaceStatus(p.f.root)).toMatchObject({ leases: [], capacity: { used: 1, available: 0 }, qualificationResources: [{ status: phase }] });
+      if (phase === "ready") {
+        expect(readdirSync(path)).toEqual([".git"]);
+        const registration = observeQualificationWorkspace(p.f.root, approvalRef, "source").gitDir;
+        if (!existsSync(join(registration, "refs"))) mkdirSync(join(registration, "refs"));
+        writeFileSync(join(registration, "refs", "unexpected"), "preserve nested metadata");
+        expect(() => observeQualificationWorkspace(p.f.root, approvalRef, "source")).toThrow("QUALIFICATION_RESOURCE_METADATA_DRIFT");
+        rmSync(join(registration, "refs", "unexpected")); rmdirSync(join(registration, "refs"));
+        writeFileSync(join(registration, "refs"), "not a directory");
+        expect(() => observeQualificationWorkspace(p.f.root, approvalRef, "source")).toThrow("QUALIFICATION_RESOURCE_METADATA_DRIFT");
+        rmSync(join(registration, "refs")); mkdirSync(join(registration, "refs"));
+        writeFileSync(join(registration, "private-notes"), "preserve registration content");
+        expect(() => observeQualificationWorkspace(p.f.root, approvalRef, "source")).toThrow("QUALIFICATION_RESOURCE_METADATA_DRIFT");
+        expect(readFileSync(join(registration, "private-notes"), "utf8")).toBe("preserve registration content"); rmSync(join(registration, "private-notes"));
+        writeFileSync(join(path, "untracked"), "preserve");
+        expect(() => observeQualificationWorkspace(p.f.root, approvalRef, "source")).toThrow("QUALIFICATION_RESOURCE_ASSETS_RETAINED");
+        expect(readFileSync(join(path, "untracked"), "utf8")).toBe("preserve"); rmSync(join(path, "untracked"));
+        mkdirSync(join(path, "empty-directory"));
+        expect(() => observeQualificationWorkspace(p.f.root, approvalRef, "source")).toThrow("QUALIFICATION_RESOURCE_ASSETS_RETAINED");
+        expect(readdirSync(join(path, "empty-directory"))).toEqual([]); rmdirSync(join(path, "empty-directory"));
+        renameSync(path, `${path}-moved`); mkdirSync(path); writeFileSync(join(path, ".git"), readFileSync(join(`${path}-moved`, ".git")));
+        expect(() => observeQualificationWorkspace(p.f.root, approvalRef, "source")).toThrow("QUALIFICATION_RESOURCE_IDENTITY_UNPROVEN");
+      } else expect(readdirSync(path)).toEqual([]);
+      if (mode === "branch-unknown") expect(loadHumanAuthorization(p.f.commonDir, approvalRef).resourceStates!.source.branchCreated).toBeUndefined();
+      expect(existsSync(hookCanary)).toBe(false);
+    } finally { releaseMutationLock(lock); }
+    expect({ head: git(p.f.root, "rev-parse", "HEAD"), branch: git(p.f.root, "symbolic-ref", "HEAD"), status: git(p.f.root, "status", "--porcelain"), index: fileHash(join(p.f.commonDir, "index")) }).toEqual(before);
+    expect(loadHumanAuthorization(p.f.commonDir, approvalRef).candidates).toHaveLength(2);
+    expect(loadHumanAuthorization(p.f.commonDir, approvalRef).attempts).toHaveLength(2);
+    expect(existsSync(join(p.f.root, ".harness/coordination.json"))).toBe(false);
+  }, 90_000);
 
   it("runs the real CLI with native receipts, retryable partial approval and two-ref cleanup, never green qualification", async () => {
     const p = prepareSupervisedFixture(true); const input = qualificationRequest(p);

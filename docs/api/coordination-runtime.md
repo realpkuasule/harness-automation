@@ -76,6 +76,12 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
   bootstrap/source publication invokes them consecutively; fixed same-SHA workers
   prepare independently before ordered sends. No dispatch lock spans supervisor
   waiting, and the private preparation cannot be serialized, swapped or replayed.
+- Store CAS and lifecycle acquire also share prepare/dispatch boundaries. A
+  preparation owns its copied proposal and original parent, reserves candidate
+  quota but no network attempt, and is single-use within the original instance.
+  Dispatch rechecks retained objects and the original native authority/Broker
+  guards; it does not change parents or preempt the actual Git stale rejection.
+  The fixed two-client acquire execution profile is not yet wired in.
 - `coordination/same_sha.ts` verifies real candidate/attempt facts and the narrow
   read-only rejected-recovery operation. The supervisor checks both prepared
   receipts before sending, verifies update/no-op outcomes, closes ordinary writes,
@@ -92,9 +98,19 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
   reserves the entire local batch under `apply.lock`; status/audit and normal
   allocation include those reservations. Closure/revocation do not refund them,
   and damaged receipt/LKG evidence is an error, not zero occupied capacity.
-  This is a prerequisite only: native resource creation/close and acquire profile
-  execution are not yet exposed. Existing publication profiles reject resource
-  descriptors instead of silently ignoring them.
+  `approval/human_resources.ts` now owns only pure event schemas/reduction; the
+  original human ledger records import/create starts, positive ownership, partial
+  progress and release/retain facts. The native creation primitive imports verified
+  approved bytes, exclusively creates a directory, records exact-absent branch
+  creation and uses non-force `worktree add --no-checkout`. Original checkout
+  HEAD/index/files stay unchanged. Unknown creation results never confer ownership;
+  even a fully observed registration after a nonzero add still preserves failure.
+  Read-only observation rechecks directory identity, Git backlinks, exact synthetic
+  head, all workspace assets and the original bounded registration metadata.
+  Native close, scoped workspace runtime and acquire profile execution are still
+  pending. Existing publication profiles reject resource descriptors instead of
+  silently allocating them. Per-worktree configuration is explicitly unsupported
+  for these fixed fixtures; Harness does not copy or rewrite it.
 
 Artifact inventory uses Node's package search paths, not dependency execution.
 Type-only packages, hidden/redirected package exports and dependencies sharing a
