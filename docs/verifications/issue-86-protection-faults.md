@@ -6,8 +6,8 @@ removes Harness state, uses an empty HOME and offline dependencies, then runs
 baseline → one mechanical fault → restored for every listed case.
 
 Each case is valid only when baseline and restored pass and the mutant fails
-the named test. The JSON report records the candidate SHA, exact patch hash,
-argv, sanitized execution hashes and one of `correctly-caught`, `survived`,
+the one named test with its predefined assertion evidence. The JSON report records the candidate SHA, exact patch hash,
+argv, structured Vitest result, sanitized execution hashes and one of `correctly-caught`, `survived`,
 `invalid-injection`, or `unable-to-execute`. Only `correctly-caught` is
 acceptance evidence; a timeout, dependency error, skipped test, or a different
 failed test is not a caught protection.
