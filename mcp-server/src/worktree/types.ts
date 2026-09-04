@@ -214,6 +214,7 @@ export interface WorkspaceStatus {
   capacity: { limit: number; used: number; available: number };
   worktrees: WorktreeRecord[];
   leases: WorkspaceLease[];
+  qualificationResources?: Array<{ approvalRef: string; resourceId: string; path: string; branch: string; status: "reserved" }>;
   provider: ProviderObservation;
   errors: string[];
   observedHash: string;

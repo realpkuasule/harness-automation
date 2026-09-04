@@ -44,6 +44,7 @@ const outcomeSchema = z.object({
   push: z.object({ status: z.number().int().nullable(), stdout: z.string().max(64 * 1024), error: z.string().max(8192).nullable() }).strict().optional(),
 }).strict();
 const eventSchema = z.union([approvalSchema,
+  z.object({ kind: z.literal("qualification-resources-reserved"), reservedAt: timestamp }).strict(),
   z.object({ kind: z.literal("candidate-reserved"), candidate: candidateSchema }).strict(),
   z.object({ kind: z.literal("candidate-result"), result: candidateResultSchema }).strict(),
   z.object({ kind: z.literal("reserved"), attempt: attemptSchema }).strict(),
@@ -61,6 +62,7 @@ type HumanEvent = z.infer<typeof eventSchema>;
 export interface HumanAuthorization {
   approval: Approval; attempts: Array<Attempt & { outcome?: Outcome }>;
   candidates: Array<Candidate & { result?: CandidateResult }>; revoked: boolean; writesClosed: boolean;
+  resourcesReservedAt?: string;
 }
 
 /** Static reservations are charged even if a child is never created, fails or is revoked. */
@@ -144,6 +146,7 @@ function history(commonDir: string, approvalRef: string, repairTail: boolean): H
   const events = readReceiptChain(key);
   if (!events.length) throw new Error("HUMAN_APPROVAL_REQUIRED");
   let approval: Approval | undefined; const attempts: HumanAuthorization["attempts"] = []; const candidates: HumanAuthorization["candidates"] = []; let revoked = false; let writesClosed = false;
+  let resourcesReservedAt: string | undefined;
   for (const item of events) {
     const parsed = eventSchema.safeParse(item.snapshot); if (!parsed.success) throw new Error("HUMAN_HISTORY_INVALID");
     const event = parsed.data;
@@ -154,7 +157,11 @@ function history(commonDir: string, approvalRef: string, repairTail: boolean): H
       checkHumanScope(event.scope); assertQualificationManifestScope(commonDir, event.scope); approval = event;
     } else {
       if (!approval) throw new Error("HUMAN_HISTORY_INVALID");
-      if (event.kind === "candidate-reserved") {
+      if (event.kind === "qualification-resources-reserved") {
+        if (revoked || writesClosed || resourcesReservedAt || approval.scope.kind !== "qualification-run" || !approval.scope.manifest ||
+            !approval.scope.localResources || Date.parse(event.reservedAt) >= Date.parse(approval.scope.localResources.expiresAt)) throw new Error("HUMAN_HISTORY_INVALID");
+        resourcesReservedAt = event.reservedAt;
+      } else if (event.kind === "candidate-reserved") {
         if (revoked || writesClosed || candidates.some((candidate) => candidate.candidateId === event.candidate.candidateId)) throw new Error("HUMAN_HISTORY_INVALID");
         checkCandidateQuota(approval.scope, attempts, candidates); checkPublicationQuota(approval.scope, candidates, event.candidate); assertHumanCandidateScope(approval.scope, event.candidate); candidates.push(event.candidate);
       } else if (event.kind === "candidate-result") {
@@ -184,7 +191,7 @@ function history(commonDir: string, approvalRef: string, repairTail: boolean): H
     const tail = events.at(-1)!;
     appendLkgRecord({ ...key, appliedReceiptEventHash: tail.eventHash, planHash: approval.packet.planHash, observedHash: tail.snapshotHash });
   }
-  return { approval, attempts, candidates, revoked, writesClosed };
+  return { approval, attempts, candidates, revoked, writesClosed, ...(resourcesReservedAt ? { resourcesReservedAt } : {}) };
 }
 function append(commonDir: string, packet: SemanticApprovalPacket, snapshot: HumanEvent): void {
   const key = { root: commonDir, domain: DOMAIN, transactionId: packet.packetHash };
@@ -383,4 +390,30 @@ export function closeQualificationWritesLocked(lock: MutationLock, commonDir: st
   if (scope.kind !== "qualification-run" || !scope.manifest) throw new Error("QUALIFICATION_MANIFEST_REQUIRED");
   if (!state.writesClosed) append(commonDir, state.approval.packet, { kind: "qualification-writes-closed", runId: scope.runId, manifest: scope.manifest });
   return history(commonDir, approvalRef, false);
+}
+
+/** Read-only projection of the original human chain; no Delivery lease or second resource ledger. */
+export function qualificationResourceReservations(commonDir: string) {
+  return listReceiptTransactions({ root: commonDir, domain: DOMAIN }).flatMap((approvalRef) => {
+    const state = loadHumanAuthorization(commonDir, approvalRef); const scope = state.approval.scope;
+    if (scope.kind !== "qualification-run" || !scope.localResources || !state.resourcesReservedAt) return [];
+    return scope.localResources.items.map((resource) => ({ ...resource, approvalRef, reservedAt: state.resourcesReservedAt!,
+      status: "reserved" as const, authorityRoot: scope.localResources!.authorityRoot }));
+  });
+}
+
+/** Accounting only. Native workspace admission checks capacity/path policy before calling under the same lock. */
+export function reserveQualificationResourcesLocked(lock: MutationLock, commonDir: string, approvalRef: string,
+  observed: HumanScopeBinding, clock: CoordinationClock): void {
+  assertMutationLock({ projectDir: commonDir, commonDir, repository: true }, lock);
+  const state = history(commonDir, approvalRef, true); const scope = state.approval.scope;
+  if (scope.kind !== "qualification-run" || !scope.manifest || !scope.localResources) throw new Error("HUMAN_LOCAL_RESOURCE_SCOPE_REQUIRED");
+  if (state.revoked || hashObject(bindingSchema.parse(observed)) !== hashObject(scope.binding)) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
+  assertHumanWritesOpen(commonDir, state);
+  if (state.resourcesReservedAt) throw new Error("HUMAN_LOCAL_RESOURCES_ALREADY_RESERVED");
+  const existing = qualificationResourceReservations(commonDir);
+  if (scope.localResources.items.some((item) => existing.some((other) => item.path === other.path || item.branch === other.branch))) throw new Error("HUMAN_LOCAL_RESOURCE_ALREADY_RESERVED");
+  const bounds = clock.requireBefore(scope.localResources.expiresAt);
+  append(commonDir, state.approval.packet, { kind: "qualification-resources-reserved", reservedAt: new Date(Math.floor(bounds.lowerMs)).toISOString() });
+  clock.requireBefore(scope.localResources.expiresAt);
 }

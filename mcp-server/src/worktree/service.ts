@@ -76,6 +76,7 @@ import {
 } from "./config.js";
 import { resolveRepositoryContext, runGit, runGitCommand, runGitToFile } from "../repository/git.js";
 import { createSemanticApprovalPacket, reviewSemanticApprovalWithHistory, type ApprovalActionKind } from "../approval/service.js";
+import { qualificationResourceReservations } from "../approval/human.js";
 import { acquireMutationLock, inspectRecoveryState, releaseMutationLock, relocateMutationLock, requireMutationAllowed, type MutationLock } from "../recovery/service.js";
 import {
   appendLkgRecord,
@@ -568,27 +569,27 @@ function leaseStateObservation(
   }));
 }
 
-export function workspaceStatus(
-  projectRoot: string,
-  options: {
-    adoptionSafe?: boolean;
-    providerWorkItems?: string[];
-    providerObservation?: ProviderObservation;
-  } = {},
-): WorkspaceStatus {
+/** Shared local safety facts; never resolves Provider credentials or changes project tracking. */
+export function workspaceLocalInventory(projectRoot: string, adoptionSafe = false) {
   const root = repositoryRoot(projectRoot);
   const commonDir = gitCommonDir(root);
   const loadedConfig = loadConfig(root);
   const hostBinding = loadHostBinding(root, commonDir, loadedConfig.legacyBinding);
   const loadedLeases = leases(commonDir);
-  const observedWorktrees = worktrees(root, options.adoptionSafe);
+  const observedWorktrees = worktrees(root, adoptionSafe);
   const topology = observedTopology(root, commonDir, loadedConfig.config, hostBinding, observedWorktrees);
-  const provider = options.providerObservation ?? observeProvider(
-      root,
-      loadedConfig.config,
-      loadedLeases.values,
-      options.providerWorkItems,
-    );
+  const qualificationResources = qualificationResourceReservations(commonDir);
+  const used = loadedLeases.values.length + qualificationResources.length;
+  return { root, commonDir, loadedConfig, hostBinding, loadedLeases, observedWorktrees, topology, qualificationResources,
+    capacity: { limit: loadedConfig.config.maxPersistentWorktrees, used, available: Math.max(0, loadedConfig.config.maxPersistentWorktrees - used) } };
+}
+
+export function workspaceStatus(
+  projectRoot: string,
+  options: { adoptionSafe?: boolean; providerWorkItems?: string[]; providerObservation?: ProviderObservation } = {},
+): WorkspaceStatus {
+  const { root, commonDir, loadedConfig, hostBinding, loadedLeases, observedWorktrees, topology, qualificationResources, capacity } = workspaceLocalInventory(projectRoot, options.adoptionSafe);
+  const provider = options.providerObservation ?? observeProvider(root, loadedConfig.config, loadedLeases.values, options.providerWorkItems);
   const bindingError = loadedConfig.configured &&
     loadedConfig.config.mode === "enforced" &&
     !hostBinding.configured
@@ -625,6 +626,7 @@ export function workspaceStatus(
       };
     }),
     leases: loadedLeases.values,
+    ...(qualificationResources.length ? { qualificationResources } : {}),
     topology,
     allowedRootState: hostBinding.topology
       ? directoryState(hostBinding.topology.persistentWorktreeRoot)
@@ -644,13 +646,10 @@ export function workspaceStatus(
     config: loadedConfig.config,
     hostBinding,
     topology,
-    capacity: {
-      limit: loadedConfig.config.maxPersistentWorktrees,
-      used: loadedLeases.values.length,
-      available: Math.max(0, loadedConfig.config.maxPersistentWorktrees - loadedLeases.values.length),
-    },
+    capacity,
     worktrees: observedWorktrees,
     leases: loadedLeases.values,
+    ...(qualificationResources.length ? { qualificationResources } : {}),
     provider,
     errors,
     observedHash: hashObject(observed),
@@ -841,9 +840,9 @@ export function auditWorkspace(projectRoot: string): WorkspaceAudit {
         : "A lease targets a protected root.",
       protectedPaths));
   }
-  add(result(status, "workspace.capacity-budget", status.leases.length <= status.config.maxPersistentWorktrees,
-    `${status.leases.length}/${status.config.maxPersistentWorktrees} persistent leases are present.`,
-    status.leases.length <= status.config.maxPersistentWorktrees ? [] : status.leases.map((lease) => lease.path)));
+  add(result(status, "workspace.capacity-budget", status.capacity.used <= status.config.maxPersistentWorktrees,
+    `${status.capacity.used}/${status.config.maxPersistentWorktrees} delivery leases and qualification reservations are present.`,
+    status.capacity.used <= status.config.maxPersistentWorktrees ? [] : [...status.leases, ...(status.qualificationResources ?? [])].map((item) => item.path)));
   add(result(status, "workspace.lease-ttl", staleLeases.length === 0,
     staleLeases.length === 0 ? "Every active lease is within its heartbeat TTL." : "One or more leases exceeded their heartbeat TTL.",
     staleLeases.map((lease) => `${lease.workItem}: heartbeat=${lease.heartbeatAt}`)));
@@ -945,7 +944,7 @@ function savePlan(root: string, draft: WorkspacePlan): { plan: WorkspacePlan; pa
   return { plan: draft, path };
 }
 
-function validateBranch(root: string, branch: string): void {
+export function validateBranch(root: string, branch: string): void {
   if (!branch || branch.startsWith("-")) throw new Error("WORKTREE_BRANCH_INVALID");
   git(root, ["check-ref-format", "--branch", branch]);
 }
@@ -965,7 +964,7 @@ function branchContainsWorkItemId(branch: string, id: string): boolean {
   return new RegExp(`(?:^|[/._-])${escaped}(?=$|[/._-])`, "u").test(branch);
 }
 
-function validateTarget(binding: WorktreeHostBinding, target: string): string {
+export function validateTarget(binding: WorktreeHostBinding, target: string): string {
   if (!isAbsolute(target)) throw new Error("WORKTREE_PATH_MUST_BE_ABSOLUTE");
   rejectTraversal(target);
   const resolved = canonicalPath(target);
@@ -1505,6 +1504,7 @@ export function planWorkspaceAllocation(args: {
   }
   if (!derived && !args.path) throw new Error("WORKTREE_PATH_REQUIRED");
   const target = validateTarget(status.hostBinding, derived ?? args.path!);
+  if (status.qualificationResources?.some((item) => samePath(item.path, target) || item.branch === args.branch)) throw new Error("WORKTREE_QUALIFICATION_RESOURCE_RESERVED");
   if (existsSync(target)) throw new Error(`WORKTREE_PATH_EXISTS: ${target}`);
   if (status.leases.some((lease) => lease.workItem === workItem)) {
     throw new Error(`DUPLICATE_WORK_ITEM_LEASE: ${workItem}`);
@@ -1515,7 +1515,7 @@ export function planWorkspaceAllocation(args: {
   if (status.worktrees.some((worktree) => worktree.branch === args.branch)) {
     throw new Error(`BRANCH_ALREADY_CHECKED_OUT: ${args.branch}`);
   }
-  if (status.leases.length >= status.config.maxPersistentWorktrees) {
+  if (status.capacity.used >= status.config.maxPersistentWorktrees) {
     throw new Error(`WORKTREE_CAPACITY_EXCEEDED: ${status.config.maxPersistentWorktrees}`);
   }
   const startPoint = args.startPoint ?? "HEAD";
@@ -1662,6 +1662,8 @@ function adoptionOperation(
   }
   const items = normalizedAdoptionInputs(input);
   assertUniqueAdoptionInputs(items);
+  // Adoption snapshots serialize exact Delivery leases; do not absorb in-flight qualification resources.
+  if (status.qualificationResources?.length) throw new Error("WORKTREE_QUALIFICATION_RESOURCES_ACTIVE");
   const afterCapacity = status.leases.length + items.length;
   if (afterCapacity > status.config.maxPersistentWorktrees) {
     throw new Error(`WORKTREE_CAPACITY_EXCEEDED: ${status.config.maxPersistentWorktrees}`);
@@ -2150,6 +2152,7 @@ export function planWorkspaceRebind(args: {
   if (lease.branch === args.branch) {
     throw new Error(`WORKTREE_REBIND_NOOP: ${args.workItem} already uses ${args.branch}`);
   }
+  if (status.qualificationResources?.some((item) => item.branch === args.branch || samePath(item.path, lease.path))) throw new Error("WORKTREE_QUALIFICATION_RESOURCE_RESERVED");
   if (status.leases.some((item) => item.workItem !== lease.workItem && item.branch === args.branch)) {
     throw new Error(`DUPLICATE_WORKTREE_BRANCH: ${args.branch}`);
   }

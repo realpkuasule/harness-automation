@@ -186,3 +186,10 @@ same-SHA update, no-op rejection, unique attribution and fresh-process rejection
 assertions are reported as passed. This controlled interleaving does not prove
 simultaneous acquire competition, full case coverage, multiple machines or LIVE
 GitHub qualification.
+
+Managed synthetic workspaces for acquire contention are still being implemented.
+Their scope and read-only admission/capacity accounting are present, but neither
+current CLI execution mode allocates them. A resource descriptor on an existing
+publication profile is rejected. Pending resource reservations remain visible to
+normal worktree status/audit and consume capacity until exact close evidence is
+implemented and recorded; closing a run alone is not resource cleanup.

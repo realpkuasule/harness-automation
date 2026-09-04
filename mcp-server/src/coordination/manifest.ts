@@ -45,8 +45,14 @@ export function prepareQualificationManifest(input: QualificationManifestInput):
       value.synthetic.objects.some((plan) => plan.metadata.runId !== value.runId)) invalid();
   const publications = new Map<string, Array<{ clientId: string; transactionId: string }>>();
   const allocations = new Set<string>();
+  const localPaths = new Set<string>();
   for (const client of value.clients) {
     const scope = client.scope; checkHumanScope(scope);
+    for (const resource of scope.localResources?.items ?? []) {
+      const key = hashObject([scope.binding.hostId, resource.path]);
+      if (resource.clientId !== client.clientId || localPaths.has(key)) invalid();
+      localPaths.add(key);
+    }
     if (scope.runId !== value.runId || scope.binding.repository !== value.repository || scope.binding.repositoryId !== value.repositoryId ||
         scope.binding.endpointHash !== value.endpointHash || scope.refs.some((name) => !value.refs.includes(name)) ||
         Date.parse(scope.expiresAt) > Date.parse(value.expiresAt) || Date.parse(scope.cleanupExpiresAt) > Date.parse(value.cleanupExpiresAt) ||
@@ -73,6 +79,8 @@ export function prepareQualificationManifest(input: QualificationManifestInput):
     if (value.clients.reduce((sum, client) => sum + client.scope[field], 0) > value[field]) invalid();
   }
   const negative = value.sameShaPublicationNegativeControl;
+  // Existing publication profiles allocate no workspaces. The future acquire profile owns that explicit capability.
+  if (value.execution && value.clients.some((client) => client.scope.localResources)) throw new Error("QUALIFICATION_LOCAL_RESOURCE_EXECUTION_UNSUPPORTED");
   if (negative && (!value.requiredCases.includes(negative.caseId) ||
       new Set(negative.publications.map((item) => item.clientId)).size !== 2 || new Set(negative.publications.map((item) => item.transactionId)).size !== 2 ||
       !value.synthetic.publications.some((item) => item.fixtureId === negative.fixtureId && item.ref === negative.ref && item.expected === negative.expected))) invalid();

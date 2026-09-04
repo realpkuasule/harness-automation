@@ -80,6 +80,16 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
   `qualification_cases.ts` retains the full fixed per-group assertion inventory;
   neither a manifest nor a passed subset can delete missing coverage or grant
   production authority.
+- Qualification `localResources` bind exact source fixtures, new paths/branches,
+  authority/common-dir, local policy hashes, finite windows and capacity. The
+  admission primitive shares worktree-delivery's path rules and local inventory,
+  without invoking a Provider or copying credentials. One existing human receipt
+  reserves the entire local batch under `apply.lock`; status/audit and normal
+  allocation include those reservations. Closure/revocation do not refund them,
+  and damaged receipt/LKG evidence is an error, not zero occupied capacity.
+  This is a prerequisite only: native resource creation/close and acquire profile
+  execution are not yet exposed. Existing publication profiles reject resource
+  descriptors instead of silently ignoring them.
 
 Artifact inventory uses Node's package search paths, not dependency execution.
 Type-only packages, hidden/redirected package exports and dependencies sharing a

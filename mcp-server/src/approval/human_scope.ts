@@ -1,4 +1,4 @@
-import { isAbsolute } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { z } from "zod";
 import { hashObject } from "../v2/fs.js";
 import { harnessArtifactSchema } from "../repository/artifact.js";
@@ -26,11 +26,23 @@ const expectation = z.object({ recordHash: digest, generation: z.number().int().
 const workItemSchema = coordinationRecordSchema.shape.workItem;
 const allocationSchema = z.object({ allocationId: text, workItem: workItemSchema, controlRef: ref, sourceRef: ref, genesisSha: sha,
   maxCommits: count, maxWriteAttempts: count }).strict();
+const canonicalAbsolute = text.refine((value) => isAbsolute(value) && resolve(value) === value && !value.split("/").includes(".."));
+export const qualificationResourceSchema = z.object({
+  resourceId: text, clientId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u), path: canonicalAbsolute,
+  branch: coordinationRecordSchema.shape.branch, fixtureId: text, sourceSha: sha,
+  operations: z.tuple([z.literal("import-source"), z.literal("create-once"), z.literal("observe"), z.literal("close-exact")]),
+}).strict();
+export const qualificationResourcesSchema = z.object({
+  authorityRoot: canonicalAbsolute, commonDir: canonicalAbsolute, configHash: digest, hostBindingHash: digest,
+  expiresAt: timestamp, cleanupExpiresAt: timestamp, maxConcurrent: z.number().int().min(1).max(32),
+  items: z.array(qualificationResourceSchema).min(1).max(32),
+}).strict();
 export const humanScopeSchema = z.discriminatedUnion("kind", [
   z.object({ ...fields, kind: z.literal("qualification-run"), runId: text,
     refs: z.array(ref).min(1).max(32), operations: z.array(z.enum(["create", "cas"])).min(1).max(2),
     maxCommits: count, maxWriteAttempts: count, maxCleanupAttempts: count, cleanupExpiresAt: timestamp,
     takeoverAllocations: z.array(allocationSchema).max(32).optional(),
+    localResources: qualificationResourcesSchema.optional(),
     synthetic: syntheticScopeSchema.optional(),
     manifest: z.object({ manifestHash: digest, clientId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u) }).strict().optional(),
   }).strict(),
@@ -57,6 +69,13 @@ export function checkHumanScope(scope: HumanScope): void {
   if (scope.kind === "qualification-run" && (new Set(scope.refs).size !== scope.refs.length || new Set(scope.operations).size !== scope.operations.length ||
       scope.maxWriteAttempts < 1 || scope.maxCommits < 1 || Date.parse(scope.cleanupExpiresAt) < Date.parse(scope.expiresAt))) throw new Error("HUMAN_SCOPE_INVALID");
   if (scope.kind === "qualification-run") {
+    const resources = scope.localResources;
+    if (resources && (resources.commonDir !== scope.binding.commonDir || resources.items.length > resources.maxConcurrent ||
+        Date.parse(resources.expiresAt) > Date.parse(scope.expiresAt) || Date.parse(resources.cleanupExpiresAt) > Date.parse(scope.cleanupExpiresAt) ||
+        Date.parse(resources.cleanupExpiresAt) < Date.parse(resources.expiresAt) ||
+        ["resourceId", "path", "branch"].some((field) => new Set(resources.items.map((item) => item[field as "resourceId" | "path" | "branch"])).size !== resources.items.length) ||
+        resources.items.some((item) => !scope.refs.includes(`refs/heads/${item.branch}`) ||
+          !scope.synthetic?.objects.some((object) => object.kind === "source-fixture" && object.metadata.objectId === item.fixtureId && object.commitSha === item.sourceSha)))) throw new Error("HUMAN_LOCAL_RESOURCE_SCOPE_INVALID");
     const allocations = scope.takeoverAllocations ?? [];
     if (new Set(allocations.map((value) => value.allocationId)).size !== allocations.length ||
         allocations.some((value) => !value.workItem.startsWith(`github:${scope.binding.repository}#`) ||
