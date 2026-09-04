@@ -53,6 +53,7 @@ import type {
   DeliveryProfile,
   DomainProfile,
   EnforcementResult,
+  EvalNegativeControl,
   FileOperation,
   Intake,
   LegacyEvalSnapshotMigration,
@@ -2064,6 +2065,46 @@ export interface TrustedCommandResult {
   exitCode: number | null;
   output: string;
   outputSha256: string;
+  negativeReport?: NegativeControlReport;
+  validationError?: string;
+}
+
+interface NegativeControlReport {
+  schemaVersion: "evaluation-negative-report/1";
+  suiteId: string;
+  fixture: string;
+  executed: Array<{ id: string; status: "failed" }>;
+  failures: Array<{ assertionId: string; category: string }>;
+}
+
+function exactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  return Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
+function negativeControlReport(
+  stdout: string,
+  stderr: string,
+  suiteId: string,
+  control: EvalNegativeControl,
+): { report?: NegativeControlReport; error?: string } {
+  if (!control.expectedReport) return { error: "EVAL_NEGATIVE_REPORT_REQUIRED" };
+  if (stderr !== "") return { error: "EVAL_NEGATIVE_STDERR_UNEXPECTED" };
+  let value: unknown;
+  try { value = JSON.parse(stdout); } catch { return { error: "EVAL_NEGATIVE_REPORT_INVALID" }; }
+  if (!value || typeof value !== "object" || Array.isArray(value) || !exactKeys(value as Record<string, unknown>, ["schemaVersion", "suiteId", "fixture", "executed", "failures"])) {
+    return { error: "EVAL_NEGATIVE_REPORT_INVALID" };
+  }
+  const report = value as Record<string, unknown>;
+  if (report.schemaVersion !== "evaluation-negative-report/1" || report.suiteId !== suiteId || report.fixture !== control.fixture ||
+      !Array.isArray(report.executed) || !Array.isArray(report.failures)) return { error: "EVAL_NEGATIVE_REPORT_MISMATCH" };
+  const executed = report.executed;
+  const failures = report.failures;
+  if (executed.length !== 1 || failures.length !== 1 || !executed.every((item) => item && typeof item === "object" && !Array.isArray(item) &&
+      exactKeys(item as Record<string, unknown>, ["id", "status"]) && (item as Record<string, unknown>).id === control.expectedReport!.testId &&
+      (item as Record<string, unknown>).status === "failed") || !failures.every((item) => item && typeof item === "object" && !Array.isArray(item) &&
+      exactKeys(item as Record<string, unknown>, ["assertionId", "category"]) && (item as Record<string, unknown>).assertionId === control.expectedReport!.assertionId &&
+      (item as Record<string, unknown>).category === control.expectedReport!.category)) return { error: "EVAL_NEGATIVE_TARGET_NOT_OBSERVED" };
+  return { report: value as NegativeControlReport };
 }
 
 function executableOnPath(command: string): boolean {
@@ -2193,6 +2234,7 @@ function runTrustedCommand(
   mode: "session" | "commit" | "ci",
   expectedExitCode = 0,
   timeoutMs?: number,
+  negative?: { suiteId: string; control: EvalNegativeControl },
 ): TrustedCommandResult {
   if (!executableAvailable(command[0], root)) {
     return {
@@ -2227,8 +2269,10 @@ function runTrustedCommand(
     };
   }
   const gofmtDirty = id === "go:format" && output.length > 0;
-  const passed = result.status === expectedExitCode && !gofmtDirty;
-  return { id, command, status: passed ? "passed" : "failed", exitCode: result.status, output, outputSha256 };
+  const evidence = negative ? negativeControlReport(stdout, stderr, negative.suiteId, negative.control) : {};
+  const passed = result.status === expectedExitCode && !gofmtDirty && !evidence.error;
+  return { id, command, status: passed ? "passed" : "failed", exitCode: result.status, output, outputSha256,
+    ...(evidence.report ? { negativeReport: evidence.report } : {}), ...(evidence.error ? { validationError: evidence.error } : {}) };
 }
 
 export function runTrustedChecks(args: {
@@ -2395,7 +2439,7 @@ export function runTrustedChecks(args: {
           requirementIds: (suite.traceability ?? []).map((trace) => trace.requirementId),
           ruleIds: (suite.traceability ?? []).flatMap((trace) => trace.ruleIds),
           positive: runTrustedCommand(root, `eval:${suite.id}`, suite.command, args.mode, 0, args.commandTimeoutMs),
-          negative: contract.schemaVersion === "1.1" && suite.negativeControl
+          negative: contract.schemaVersion === "1.2" && suite.negativeControl
             ? runTrustedCommand(
                 root,
                 `eval-negative:${suite.id}`,
@@ -2403,6 +2447,7 @@ export function runTrustedChecks(args: {
                 args.mode,
                 suite.negativeControl.expectedExitCode,
                 args.commandTimeoutMs,
+                { suiteId: suite.id, control: suite.negativeControl },
               )
             : null,
         }));
@@ -2413,7 +2458,7 @@ export function runTrustedChecks(args: {
     );
     const negativeFailed = suites.some((suite) => suite.negative?.status === "failed");
     const passing = suites.length > 0 && suites.every((suite) => suite.positive.status === "passed");
-    const enforced = contractVersion === "1.1" && suites.length > 0 && suites.every((suite) => suite.negative?.status === "passed");
+    const enforced = contractVersion === "1.2" && suites.length > 0 && suites.every((suite) => suite.negative?.status === "passed");
     const available = !unavailable;
     const status = unavailable
       ? "blocked" as const
@@ -2443,6 +2488,8 @@ export function runTrustedChecks(args: {
           status: suite.negative.status,
           exitCode: suite.negative.exitCode,
           outputSha256: suite.negative.outputSha256,
+          report: suite.negative.negativeReport ?? null,
+          validationError: suite.negative.validationError ?? null,
         },
       })),
       error: contractError,

@@ -1,6 +1,6 @@
 {
   "$schema": "../docs/api/eval-contract-v1.schema.json",
-  "schemaVersion": "1.1",
+  "schemaVersion": "1.2",
   "suites": [
     {
       "id": "npm-release-worktree-policy",
@@ -54,7 +54,12 @@
       "negativeControl": {
         "command": ["node", "evals/run_npm_release_policy.mjs", "evals/fixtures/known-bad-npm-release-policy.md"],
         "fixture": "evals/fixtures/known-bad-npm-release-policy.md",
-        "expectedExitCode": 1
+        "expectedExitCode": 1,
+        "expectedReport": {
+          "testId": "npm-release-worktree-policy",
+          "assertionId": "npm-release-policy-required-strings",
+          "category": "required-string-missing"
+        }
       }
     }
   ]

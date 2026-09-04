@@ -139,6 +139,11 @@ export interface EvalNegativeControl {
   command: string[];
   fixture: string;
   expectedExitCode: number;
+  expectedReport?: {
+    testId: string;
+    assertionId: string;
+    category: string;
+  };
 }
 
 export interface EvalSuite {
@@ -163,7 +168,7 @@ export interface EvalSuite {
 
 export interface EvalContract {
   $schema?: string;
-  schemaVersion: "1.0" | "1.1";
+  schemaVersion: "1.0" | "1.1" | "1.2";
   suites: EvalSuite[];
 }
 

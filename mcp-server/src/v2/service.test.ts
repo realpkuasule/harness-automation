@@ -88,24 +88,26 @@ function hardenedEvaluationContract(root: string, positiveExitCode = 0, negative
   write(root, "evals/baselines/adoption.json", "{\"score\":0}\n");
   write(root, "evals/fixtures/known-bad.json", "{\"bad\":true}\n");
   write(root, "evals/runner-manifest.json", "{\"runner\":\"node\"}\n");
+  write(root, "evals/run-negative.mjs", `process.stdout.write(JSON.stringify({ schemaVersion: "evaluation-negative-report/1", suiteId: "representative-quality", fixture: "evals/fixtures/known-bad.json", executed: [{ id: "representative-quality", status: "failed" }], failures: [{ assertionId: "representative-quality-gate", category: "fixture-violation" }] })); process.exit(${negativeExitCode});\n`);
   write(root, "evals/evals.json", JSON.stringify({
-    schemaVersion: "1.1",
+    schemaVersion: "1.2",
     suites: [{
       id: "representative-quality",
       kind: "capability",
       owner: "owner",
       description: "Representative project behavior.",
       command: ["node", "-e", `process.exit(${positiveExitCode})`],
-      runnerSources: ["evals/runner-manifest.json"],
+      runnerSources: ["evals/runner-manifest.json", "evals/run-negative.mjs"],
       tasks: ["evals/tasks.jsonl"],
       traceability: [{ requirementId: "PRD-AI-004", ruleIds: ["representative-quality-gate"] }],
       baseline: { origin: "adoption", score: 0, trials: 1, evidence: "evals/baselines/adoption.json" },
       target: { metric: "pass-at-1", threshold: 1, trials: 1 },
       graders: [{ id: "outcome-test", kind: "code", role: "gate" }],
       negativeControl: {
-        command: ["node", "-e", `process.exit(${negativeExitCode})`],
+        command: ["node", "evals/run-negative.mjs"],
         fixture: "evals/fixtures/known-bad.json",
         expectedExitCode: 1,
+        expectedReport: { testId: "representative-quality", assertionId: "representative-quality-gate", category: "fixture-violation" },
       },
     }],
   }));
@@ -943,7 +945,7 @@ describe("v2 plan/apply/check/rollback", () => {
     });
     expect(planned.plan.commands).toEqual(expect.arrayContaining([
       ["node", "-e", "process.exit(0)"],
-      ["node", "-e", "process.exit(1)"],
+      ["node", "evals/run-negative.mjs"],
     ]));
     applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
 
@@ -976,7 +978,9 @@ describe("v2 plan/apply/check/rollback", () => {
       requirementIds: ["PRD-AI-004"],
       ruleIds: ["representative-quality-gate"],
       positive: { command: ["node", "-e", "process.exit(0)"], status: "passed", exitCode: 0 },
-      negative: { command: ["node", "-e", "process.exit(1)"], status: "passed", exitCode: 1 },
+      negative: { command: ["node", "evals/run-negative.mjs"], status: "passed", exitCode: 1,
+        report: { schemaVersion: "evaluation-negative-report/1", suiteId: "representative-quality", fixture: "evals/fixtures/known-bad.json",
+          executed: [{ id: "representative-quality", status: "failed" }], failures: [{ assertionId: "representative-quality-gate", category: "fixture-violation" }] } },
     });
     expect(JSON.stringify(receipt)).not.toContain("stdout");
     expect(JSON.stringify(receipt)).not.toContain("stderr");
@@ -1055,6 +1059,26 @@ describe("v2 plan/apply/check/rollback", () => {
     const ci = runTrustedChecks({ projectRoot: root, mode: "ci" });
     expect(ci.ok).toBe(false);
     expect(ci.evaluations).toMatchObject({ status: "blocked", passing: exitCode === 0, enforced: false });
+  });
+
+  it.each([
+    ["unrelated assertion", "JSON.stringify({ schemaVersion: 'evaluation-negative-report/1', suiteId: 'representative-quality', fixture: 'evals/fixtures/known-bad.json', executed: [{ id: 'representative-quality', status: 'failed' }], failures: [{ assertionId: 'other-assertion', category: 'fixture-violation' }] })", "EVAL_NEGATIVE_TARGET_NOT_OBSERVED"],
+    ["target words in an ordinary log", "'representative-quality representative-quality-gate fixture-violation'", "EVAL_NEGATIVE_REPORT_INVALID"],
+    ["no executed target", "JSON.stringify({ schemaVersion: 'evaluation-negative-report/1', suiteId: 'representative-quality', fixture: 'evals/fixtures/known-bad.json', executed: [], failures: [{ assertionId: 'representative-quality-gate', category: 'fixture-violation' }] })", "EVAL_NEGATIVE_TARGET_NOT_OBSERVED"],
+  ])("rejects a same-exit negative control with %s", (_name, output, validationError) => {
+    const root = temporaryProject();
+    approvedSources(root);
+    hardenedEvaluationContract(root);
+    write(root, "evals/run-negative.mjs", `process.stdout.write(${output}); process.exit(1);\n`);
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    const planned = planProject({ projectRoot: root, profile: "custom", stacks: ["typescript"], qualityProfiles: ["eval-driven-development"] });
+    applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+
+    const ci = runTrustedChecks({ projectRoot: root, mode: "ci" });
+    expect(ci.evaluations).toMatchObject({ available: true, status: "failing", enforced: false, passing: true });
+    const receipt = JSON.parse(readFileSync(join(root, String(ci.evaluations.receiptPath)), "utf8"));
+    expect(receipt.suites[0].negative).toMatchObject({ exitCode: 1, validationError, outputSha256: expect.stringMatching(/^[a-f0-9]{64}$/u), report: null });
   });
 
   it.each([
@@ -1809,7 +1833,7 @@ describe("v2 project governance upgrade", () => {
       historicalContinuity: "unavailable",
       historicalEvalSources: expect.arrayContaining([expect.objectContaining({ path: "evals/evals.json" })]),
       currentApprovedEvalSources: expect.arrayContaining([expect.objectContaining({ path: "evals/evals.json" })]),
-      candidateEvaluations: expect.objectContaining({ schemaVersion: "1.1" }),
+      candidateEvaluations: expect.objectContaining({ schemaVersion: "1.2" }),
       affectedSuites: [{ suiteId: "representative-quality", requirementIds: ["PRD-AI-004"], ruleIds: ["representative-quality-gate"] }],
     });
     expect(readFileSync(join(root, ".harness/policy.yaml"), "utf8")).toBe(legacyPolicy);
@@ -1850,7 +1874,7 @@ describe("v2 project governance upgrade", () => {
       now: new Date("2026-01-02T00:00:02Z"),
     });
     const migratedPolicy = JSON.parse(readFileSync(join(root, ".harness/policy.yaml"), "utf8"));
-    expect(migratedPolicy.evaluations).toMatchObject({ schemaVersion: "1.1" });
+    expect(migratedPolicy.evaluations).toMatchObject({ schemaVersion: "1.2" });
     const receipt = JSON.parse(readFileSync(join(root, `.harness/changes/${planned.plan!.id}/change.json`), "utf8"));
     expect(receipt).toMatchObject({
       appliedAt: "2026-01-02T00:00:02.000Z",

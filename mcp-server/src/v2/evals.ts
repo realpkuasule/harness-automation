@@ -60,6 +60,13 @@ const negativeControlSchema = z.object({
   fixture: repositoryPath,
   expectedExitCode: z.number().int().min(1).max(255),
 }).strict();
+const verifiedNegativeControlSchema = negativeControlSchema.extend({
+  expectedReport: z.object({
+    testId: z.string().regex(ID),
+    assertionId: z.string().regex(ID),
+    category: z.string().regex(ID),
+  }).strict(),
+}).strict();
 const legacySuiteSchema = z.object({
   ...suiteFields,
   baseline: baselineSchema.extend({ origin: z.enum(["pre-implementation", "adoption"]).optional() }).strict(),
@@ -85,7 +92,11 @@ const hardenedContractSchema = z.object({
   schemaVersion: z.literal("1.1"),
   suites: z.array(hardenedSuiteSchema).min(1),
 }).strict();
-const contractSchema = z.union([legacyContractSchema, hardenedContractSchema]);
+const verifiedContractSchema = hardenedContractSchema.extend({
+  schemaVersion: z.literal("1.2"),
+  suites: z.array(hardenedSuiteSchema.extend({ negativeControl: verifiedNegativeControlSchema })).min(1),
+}).strict();
+const contractSchema = z.union([legacyContractSchema, hardenedContractSchema, verifiedContractSchema]);
 
 export function evaluationSourcePaths(root: string): string[] {
   const output: string[] = [];
