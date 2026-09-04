@@ -123,12 +123,12 @@ function durableMkdir(path: string): void {
 }
 
 /** Write a receipt exactly once and make both file and parent directory durable. */
-export function durableWriteOnce(path: string, content: string): void {
+export function durableWriteOnce(path: string, content: string, mode = 0o666): void {
   const directoryPath = dirname(path);
   durableMkdir(directoryPath);
   const stagingDirectory = dirname(directoryPath);
   const temporary = join(stagingDirectory, `.${basename(path)}.harness-${process.pid}-${randomUUID()}.tmp`);
-  const descriptor = openSync(temporary, "wx");
+  const descriptor = openSync(temporary, "wx", mode);
   try {
     try {
       writeFileSync(descriptor, content, "utf8");

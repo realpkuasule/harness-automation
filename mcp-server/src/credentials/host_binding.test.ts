@@ -1,20 +1,27 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { hostname, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hashObject } from "../v2/fs.js";
 import { readLkgChain } from "../receipt/service.js";
-import { CREDENTIAL_HOST_BINDING_PATH, applyCredentialHostBinding, loadCredentialHostBinding, macOSKeychainResolver, planCredentialHostBinding, type CredentialBindingPlan, type CredentialHostBinding } from "./host_binding.js";
+import { CREDENTIAL_HOST_BINDING_PATH, applyCredentialHostBinding, loadCredentialHostBinding, macOSKeychainResolver, planCredentialHostBinding, type CredentialBindingInput, type CredentialBindingPlan } from "./host_binding.js";
+import { applyHostIdentity, requireHostIdentity } from "./host_identity.js";
 
+const nativeHost = vi.hoisted(() => ({ home: "" }));
+vi.mock("node:os", async (original) => ({ ...await original<typeof import("node:os")>(), homedir: () => {
+  if (!nativeHost.home) throw new Error("FIXTURE_HOST_REQUIRED");
+  return nativeHost.home;
+} }));
 const roots: string[] = [];
 const endpointHash = "a".repeat(64);
 const expected = { repository: "owner/repo", repositoryId: "R_1", endpointHash };
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "credential-binding-"))); roots.push(root);
-  const binding: Omit<CredentialHostBinding, "bindingHash"> = {
-    schemaVersion: "credential-host-binding/1.0", commonDir: root, hostId: hostname(), ...expected,
-    credentials: [{ id: "keychain:test", purpose: "git-transport", hostId: hostname(), repository: "owner/repo", identity: "octo", scopes: ["contents:read"], expiresAt: "2099-01-01T00:00:00.000Z", envVar: "HARNESS_GIT_TOKEN", keychainService: "svc", keychainAccount: "acct" }],
+  nativeHost.home = join(root, "user"); mkdirSync(nativeHost.home);
+  const binding: CredentialBindingInput = {
+    schemaVersion: "credential-host-binding/1.0", commonDir: root, ...expected,
+    credentials: [{ id: "keychain:test", purpose: "git-transport", repository: "owner/repo", identity: "octo", scopes: ["contents:read"], expiresAt: "2099-01-01T00:00:00.000Z", envVar: "HARNESS_GIT_TOKEN", keychainService: "svc", keychainAccount: "acct" }],
   };
   return { root, binding, path: join(root, CREDENTIAL_HOST_BINDING_PATH) };
 }
@@ -24,9 +31,22 @@ function writeProjection(path: string, value: unknown) {
   writeFileSync(path, JSON.stringify(value), { mode: 0o600 });
 }
 function apply(root: string, plan: CredentialBindingPlan) { return applyCredentialHostBinding(root, plan, plan.planHash); }
+function applyInChild(root: string, plan: CredentialBindingPlan): Promise<number | null> {
+  const source = new URL("./host_binding.ts", import.meta.url).href;
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", new URL("./__fixtures__/host-os.mjs", import.meta.url).href, "--import", "tsx", "--input-type=module", "-e", `import {applyCredentialHostBinding as apply} from ${JSON.stringify(source)};try{const p=JSON.parse(process.argv[2]);apply(process.argv[1],p,p.planHash);}catch{process.exitCode=1;}`, root, JSON.stringify(plan)], { stdio: "ignore", env: { ...process.env, HARNESS_FIXTURE_USER_ROOT: nativeHost.home } });
+    child.once("error", reject); child.once("exit", resolve);
+  });
+}
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })); });
 
 describe("credential host binding", () => {
+  it("does not confuse installations with the same hostname and repository path", () => {
+    const { root, binding } = fixture();
+    apply(root, planCredentialHostBinding(root, binding));
+    nativeHost.home = join(root, "other-user-state"); mkdirSync(nativeHost.home);
+    expect(() => loadCredentialHostBinding(root, expected)).toThrow();
+  });
   it("requires an approved receipt and loads the exact current binding privately", () => {
     const { root, binding, path } = fixture();
     writeProjection(path, { ...binding, bindingHash: hashObject(binding) });
@@ -128,14 +148,25 @@ describe("credential host binding", () => {
     const { root, binding } = fixture();
     const first = planCredentialHostBinding(root, binding);
     const second = planCredentialHostBinding(root, { ...binding, credentials: [{ ...binding.credentials[0], keychainAccount: "competitor" }] });
-    const source = new URL("./host_binding.ts", import.meta.url).href;
-    const run = (plan: CredentialBindingPlan) => new Promise<number | null>((resolve, reject) => {
-      const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `import {applyCredentialHostBinding as apply} from ${JSON.stringify(source)};try{const p=JSON.parse(process.argv[2]);apply(process.argv[1],p,p.planHash);}catch{process.exitCode=1;}`, root, JSON.stringify(plan)], { stdio: "ignore" });
-      child.once("error", reject); child.once("exit", resolve);
-    });
-    expect((await Promise.all([run(first), run(second)])).sort()).toEqual([0, 1]);
+    expect((await Promise.all([applyInChild(root, first), applyInChild(root, second)])).sort()).toEqual([0, 1]);
     expect(lkg(root)).toHaveLength(1);
     expect(loadCredentialHostBinding(root, expected).bindingHash).toBe(lkg(root)[0].observedHash);
+  });
+
+  it("allows only one installation identity when separate repositories register concurrently", async () => {
+    const { root, binding } = fixture();
+    const other = join(root, "other-repo"); mkdirSync(other);
+    const first = planCredentialHostBinding(root, binding);
+    const second = planCredentialHostBinding(other, { ...binding, commonDir: other });
+    expect(first.binding.hostId).not.toBe(second.binding.hostId);
+    const result = await Promise.all([applyInChild(root, first), applyInChild(other, second)]);
+    expect([...result].sort()).toEqual([0, 1]);
+    expect(lkg(root).length + lkg(other).length).toBe(1);
+    const loser = result[0] === 1 ? root : other;
+    const retry = planCredentialHostBinding(loser, { ...binding, commonDir: loser });
+    expect(retry.binding.hostId).toBe(requireHostIdentity());
+    apply(loser, retry);
+    expect(lkg(root).length + lkg(other).length).toBe(2);
   });
 
   it("rejects mismatched refs and stale resolvers before reading the keychain", () => {
@@ -143,18 +174,54 @@ describe("credential host binding", () => {
     const plan = planCredentialHostBinding(root, binding); apply(root, plan);
     const resolver = macOSKeychainResolver(loadCredentialHostBinding(root, expected));
     if (process.platform !== "darwin") {
-      expect(() => resolver.resolve(binding.credentials[0])).toThrow("CREDENTIAL_OS_ADAPTER_UNAVAILABLE"); return;
+      expect(() => resolver.resolve(plan.binding.credentials[0])).toThrow("CREDENTIAL_OS_ADAPTER_UNAVAILABLE"); return;
     }
     const bin = join(root, "bin"); mkdirSync(bin);
     const marker = join(root, "keychain-reads");
     const tool = join(bin, "security");
     writeFileSync(tool, `#!${process.execPath}\nrequire('node:fs').appendFileSync(${JSON.stringify(marker)},'read\\n');process.stdout.write('synthetic-only\\n');\n`, { mode: 0o700 });
     vi.stubEnv("PATH", bin);
-    expect(resolver.resolve(binding.credentials[0]).secret).toBe("synthetic-only");
-    expect(() => resolver.resolve({ ...binding.credentials[0], hostId: "wrong-host" })).toThrow();
+    expect(resolver.resolve(plan.binding.credentials[0]).secret).toBe("synthetic-only");
+    expect(() => resolver.resolve({ ...plan.binding.credentials[0], hostId: "wrong-host" })).toThrow();
     expect(readFileSync(marker, "utf8")).toBe("read\n");
     apply(root, planCredentialHostBinding(root, { ...binding, credentials: [{ ...binding.credentials[0], keychainAccount: "replacement" }] }));
-    expect(() => resolver.resolve(binding.credentials[0])).toThrow();
+    expect(() => resolver.resolve(plan.binding.credentials[0])).toThrow();
     expect(readFileSync(marker, "utf8")).toBe("read\n");
+  });
+
+  it("creates identity only on exact apply, recovers interrupted creation, and reuses it across repos", () => {
+    const { root, binding } = fixture();
+    const plan = planCredentialHostBinding(root, binding);
+    expect(() => requireHostIdentity()).toThrow("HOST_IDENTITY_UNREGISTERED");
+    expect(existsSync(join(nativeHost.home, ".harness-automation"))).toBe(false);
+    expect(() => applyCredentialHostBinding(root, plan, "bad")).toThrow();
+    expect(existsSync(plan.hostIdentity.path)).toBe(false);
+    // Simulate a crash after the approved identity write but before repository receipts.
+    applyHostIdentity(plan.hostIdentity, plan.planHash);
+    expect(statSync(plan.hostIdentity.path).mode & 0o777).toBe(0o600);
+    expect(statSync(join(plan.hostIdentity.path, "..")).mode & 0o777).toBe(0o700);
+    apply(root, plan);
+    const secondRepo = join(root, "second-repo"); mkdirSync(secondRepo);
+    const second = planCredentialHostBinding(secondRepo, { ...binding, commonDir: secondRepo });
+    expect(second.binding.hostId).toBe(plan.binding.hostId);
+    apply(secondRepo, second);
+    // Hostname is only a display label; repository registration uses the persisted UUID.
+    expect(loadCredentialHostBinding(secondRepo, expected).hostId).toBe(requireHostIdentity());
+  });
+
+  it("requires new approval after identity loss and rejects unsafe or relocated identity state", () => {
+    const { root, binding } = fixture();
+    const plan = planCredentialHostBinding(root, binding); apply(root, plan);
+    rmSync(plan.hostIdentity.path);
+    expect(() => loadCredentialHostBinding(root, expected)).toThrow("HOST_IDENTITY_UNREGISTERED");
+    expect(() => apply(root, plan)).toThrow("HOST_IDENTITY_UNREGISTERED");
+    const replacement = planCredentialHostBinding(root, binding); apply(root, replacement);
+    expect(replacement.binding.hostId).not.toBe(plan.binding.hostId);
+    chmodSync(replacement.hostIdentity.path, 0o644);
+    expect(() => loadCredentialHostBinding(root, expected)).toThrow("HOST_IDENTITY_STATE_UNSAFE");
+    chmodSync(replacement.hostIdentity.path, 0o600);
+    rmSync(replacement.hostIdentity.path);
+    symlinkSync(join(root, "missing-identity"), replacement.hostIdentity.path);
+    expect(() => planCredentialHostBinding(root, binding)).toThrow("HOST_IDENTITY_STATE_UNSAFE");
   });
 });

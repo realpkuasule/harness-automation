@@ -1,5 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { hostname, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, expect, it } from "vitest";
@@ -14,14 +14,15 @@ it("registers only an exact approved plan through the actual CLI without reading
   expect(spawnSync("git", ["remote", "add", "origin", endpoint], { cwd: root }).status).toBe(0);
   const input = join(root, "input.json");
   const commonDir = join(root, ".git");
-  writeFileSync(input, JSON.stringify({ schemaVersion: "credential-host-binding/1.0", commonDir, hostId: hostname(), repository: "owner/repo", repositoryId: "42", endpointHash: sha256(endpoint), credentials: [{ id: "keychain:cli", purpose: "git-transport", hostId: hostname(), repository: "owner/repo", identity: "octo", scopes: ["contents:read"], expiresAt: "2099-01-01T00:00:00.000Z", envVar: "HARNESS_GIT_TOKEN", keychainService: "no-real-secret", keychainAccount: "fixture" }] }));
+  writeFileSync(input, JSON.stringify({ schemaVersion: "credential-host-binding/1.0", commonDir, repository: "owner/repo", repositoryId: "42", endpointHash: sha256(endpoint), credentials: [{ id: "keychain:cli", purpose: "git-transport", repository: "owner/repo", identity: "octo", scopes: ["contents:read"], expiresAt: "2099-01-01T00:00:00.000Z", envVar: "HARNESS_GIT_TOKEN", keychainService: "no-real-secret", keychainAccount: "fixture" }] }));
   const cli = resolve("src/cli.ts");
-  const run = (...args: string[]) => spawnSync(process.execPath, ["--import", "tsx", cli, "credentials", ...args, "--project", root], { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }, encoding: "utf8", timeout: 20_000 });
+  const run = (...args: string[]) => spawnSync(process.execPath, ["--import", new URL("./__fixtures__/host-os.mjs", import.meta.url).href, "--import", "tsx", cli, "credentials", ...args, "--project", root], { env: { ...process.env, HARNESS_FIXTURE_USER_ROOT: root, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }, encoding: "utf8", timeout: 20_000 });
   const planned = run("plan", "--input", input); expect(planned.status, planned.stderr).toBe(0);
   const output = JSON.parse(planned.stdout);
   expect(output.approval.risk).toBe("protected");
   const path = join(commonDir, "harness/credentials/host-binding.json");
   expect(existsSync(path)).toBe(false);
+  expect(existsSync(output.plan.hostIdentity.path)).toBe(false);
   const rejected = run("apply", "--plan", output.planPath, "--approve", "bad"); expect(rejected.status).toBe(1);
   expect(existsSync(path)).toBe(false);
   const applied = run("apply", "--plan", output.planPath, "--approve", output.plan.planHash);

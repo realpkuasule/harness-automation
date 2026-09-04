@@ -7,6 +7,7 @@ import { atomicWrite, fileHash, safePath, hashObject } from "../v2/fs.js";
 import { appendLkgRecord, appendReceiptEvent, readReceiptChain, readLkgChain } from "../receipt/service.js";
 import { acquireMutationLock, releaseMutationLock } from "../recovery/service.js";
 import type { CredentialRef, CredentialResolver } from "./service.js";
+import { applyHostIdentity, hostIdentityPlanSchema, proposeHostIdentity, requireHostIdentity, type HostIdentityPlan } from "./host_identity.js";
 
 export const CREDENTIAL_HOST_BINDING_PATH = "harness/credentials/host-binding.json";
 
@@ -14,17 +15,22 @@ export interface CredentialHostBinding {
   schemaVersion: "credential-host-binding/1.0";
   commonDir: string;
   hostId: string;
+  hostLabel: string;
   repository: string;
   repositoryId: string;
   endpointHash: string;
   credentials: Array<CredentialRef & { keychainService: string; keychainAccount: string }>;
   bindingHash: string;
 }
+export type CredentialBindingInput = Omit<CredentialHostBinding, "bindingHash" | "hostId" | "hostLabel" | "credentials"> & {
+  credentials: Array<Omit<CredentialHostBinding["credentials"][number], "hostId">>;
+};
 export interface CredentialBindingPlan {
   schemaVersion: "credential-binding-plan/1.0";
   beforeHash: string | null;
   beforeLkgHash: string | null;
   worktreeBindingHash: string | null;
+  hostIdentity: HostIdentityPlan;
   createdAt: string;
   expiresAt: string;
   binding: CredentialHostBinding;
@@ -34,19 +40,23 @@ export interface CredentialBindingPlan {
 const DOMAIN = "credential-binding";
 const text = z.string().min(1).max(512).refine((value) => !/[\x00-\x1f\x7f]/u.test(value));
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
-const credential = z.object({
+const credentialFields = {
   id: text, purpose: z.enum(["git-transport", "github-api", "github-admin", "reviewer"]),
-  hostId: text, repository: text, identity: text, scopes: z.array(text).max(64),
+  repository: text, identity: text, scopes: z.array(text).max(64),
   expiresAt: z.string().datetime(), envVar: text, keychainService: text, keychainAccount: text,
-}).strict().refine((ref) => ref.envVar === ({ "git-transport": "HARNESS_GIT_TOKEN", "github-api": "GH_TOKEN", "github-admin": "GH_TOKEN", reviewer: "HARNESS_REVIEWER_TOKEN" })[ref.purpose]);
+};
+const inputCredential = z.object(credentialFields).strict();
+const credential = inputCredential.extend({ hostId: z.string().uuid() }).refine((ref) => ref.envVar === ({ "git-transport": "HARNESS_GIT_TOKEN", "github-api": "GH_TOKEN", "github-admin": "GH_TOKEN", reviewer: "HARNESS_REVIEWER_TOKEN" })[ref.purpose]);
 const bindingSchema = z.object({
-  schemaVersion: z.literal("credential-host-binding/1.0"), commonDir: text, hostId: text,
+  schemaVersion: z.literal("credential-host-binding/1.0"), commonDir: text, hostId: z.string().uuid(), hostLabel: text,
   repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u), repositoryId: text,
   endpointHash: digest, credentials: z.array(credential).min(1).max(32), bindingHash: digest,
 }).strict();
+const inputSchema = bindingSchema.omit({ bindingHash: true, hostId: true, hostLabel: true, credentials: true }).extend({ credentials: z.array(inputCredential).min(1).max(32) });
 const planSchema = z.object({
   schemaVersion: z.literal("credential-binding-plan/1.0"), beforeHash: digest.nullable(),
   beforeLkgHash: digest.nullable(), worktreeBindingHash: digest.nullable(),
+  hostIdentity: hostIdentityPlanSchema,
   createdAt: z.string().datetime(), expiresAt: z.string().datetime(), binding: bindingSchema, planHash: digest,
 }).strict();
 
@@ -70,7 +80,7 @@ function checkedBinding(commonDir: string, input: unknown, current = true): Cred
   const parsed = bindingSchema.safeParse(input);
   if (!parsed.success) throw new Error("CREDENTIAL_HOST_BINDING_INVALID");
   const binding = parsed.data;
-  if (binding.commonDir !== realpathSync(commonDir) || (current && binding.hostId !== hostname()) ||
+  if (binding.commonDir !== realpathSync(commonDir) ||
       binding.bindingHash !== hashObject(withoutHash(binding)) ||
       new Set(binding.credentials.map((ref) => ref.id)).size !== binding.credentials.length ||
       binding.credentials.some((ref) => ref.repository !== binding.repository || ref.hostId !== binding.hostId || (current && Date.parse(ref.expiresAt) <= Date.now()))) {
@@ -81,7 +91,7 @@ function checkedBinding(commonDir: string, input: unknown, current = true): Cred
 
 function checkedPlan(commonDir: string, input: unknown, current = true): CredentialBindingPlan {
   const parsed = planSchema.safeParse(input);
-  if (!parsed.success || parsed.data.planHash !== hashObject(withoutPlanHash(parsed.data))) throw new Error("CREDENTIAL_BINDING_PLAN_STALE");
+  if (!parsed.success || parsed.data.planHash !== hashObject(withoutPlanHash(parsed.data)) || parsed.data.hostIdentity.hostId !== parsed.data.binding.hostId) throw new Error("CREDENTIAL_BINDING_PLAN_STALE");
   checkedBinding(commonDir, parsed.data.binding, current);
   return parsed.data;
 }
@@ -113,14 +123,20 @@ function writeProjection(commonDir: string, binding: CredentialHostBinding): voi
   atomicWrite(path, `${JSON.stringify(binding, null, 2)}\n`); chmodSync(path, 0o600);
 }
 
-export function planCredentialHostBinding(commonDir: string, binding: Omit<CredentialHostBinding, "bindingHash">): CredentialBindingPlan {
-  const complete: CredentialHostBinding = { ...binding, bindingHash: "" }; complete.bindingHash = hashObject(withoutHash(complete));
+export function planCredentialHostBinding(commonDir: string, input: CredentialBindingInput): CredentialBindingPlan {
+  const parsed = inputSchema.safeParse(input);
+  if (!parsed.success) throw new Error("CREDENTIAL_HOST_BINDING_INVALID");
+  const hostIdentity = proposeHostIdentity();
+  const complete: CredentialHostBinding = { ...parsed.data, hostId: hostIdentity.hostId, hostLabel: hostname(),
+    credentials: parsed.data.credentials.map((ref) => ({ ...ref, hostId: hostIdentity.hostId })), bindingHash: "" };
+  complete.bindingHash = hashObject(withoutHash(complete));
   checkedBinding(commonDir, complete);
   const now = Date.now();
   const plan: CredentialBindingPlan = {
     schemaVersion: "credential-binding-plan/1.0", beforeHash: fileHash(privateProjection(commonDir)),
     beforeLkgHash: authority(commonDir)?.lkg.recordHash ?? null,
     worktreeBindingHash: fileHash(statePath(commonDir, "harness/worktree-delivery/host-binding.json")),
+    hostIdentity,
     createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 15 * 60_000).toISOString(),
     binding: complete, planHash: "",
   };
@@ -137,6 +153,7 @@ export function applyCredentialHostBinding(commonDir: string, plan: CredentialBi
     const path = privateProjection(commonDir);
     const projectionHash = fileHash(path);
     if (current?.plan.planHash === plan.planHash) {
+      if (requireHostIdentity() !== plan.binding.hostId) throw new Error("CREDENTIAL_HOST_BINDING_INVALID");
       if (projectionHash !== null && projectionHash !== plan.beforeHash && hashObject(JSON.parse(readFileSync(path, "utf8"))) !== hashObject(plan.binding)) throw new Error("CREDENTIAL_BINDING_PLAN_STALE");
       writeProjection(commonDir, plan.binding); return plan.binding;
     }
@@ -144,6 +161,7 @@ export function applyCredentialHostBinding(commonDir: string, plan: CredentialBi
     if (Date.parse(plan.createdAt) > now || Date.parse(plan.expiresAt) <= now || Date.parse(plan.expiresAt) - Date.parse(plan.createdAt) > 15 * 60_000 ||
         plan.beforeHash !== projectionHash || plan.beforeLkgHash !== (current?.lkg.recordHash ?? null) ||
         plan.worktreeBindingHash !== fileHash(statePath(commonDir, "harness/worktree-delivery/host-binding.json"))) throw new Error("CREDENTIAL_BINDING_PLAN_STALE");
+    applyHostIdentity(plan.hostIdentity, plan.planHash);
     for (const relative of [`harness/receipts/${DOMAIN}`, `harness/lkg/${DOMAIN}`]) {
       const directory = statePath(commonDir, relative); mkdirSync(directory, { recursive: true, mode: 0o700 }); chmodSync(directory, 0o700);
     }
@@ -158,7 +176,7 @@ export function loadCredentialHostBinding(commonDir: string, expected: { reposit
   const current = authority(commonDir);
   if (!current) throw new Error("CREDENTIAL_HOST_BINDING_UNCONFIGURED");
   const binding = checkedBinding(commonDir, current.plan.binding);
-  if (binding.repository !== expected.repository || binding.repositoryId !== expected.repositoryId || binding.endpointHash !== expected.endpointHash ||
+  if (binding.hostId !== requireHostIdentity() || binding.repository !== expected.repository || binding.repositoryId !== expected.repositoryId || binding.endpointHash !== expected.endpointHash ||
       (existsSync(path) && hashObject(JSON.parse(readFileSync(path, "utf8"))) !== hashObject(binding))) throw new Error("CREDENTIAL_HOST_BINDING_INVALID");
   return binding;
 }
