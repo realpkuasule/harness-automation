@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { atomicWrite, canonicalJson, durableWriteOnce, hashObject, prettyJson, readJson, safePath } from "../v2/fs.js";
 
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -87,6 +87,18 @@ function receiptDirectory(key: ReceiptKey): string {
   assertIdentifier(key.domain, "RECEIPT_DOMAIN");
   assertIdentifier(key.transactionId, "RECEIPT_TRANSACTION_ID");
   return safePath(key.root, `${key.stateDirectory ?? "harness"}/receipts/${key.domain}/${key.transactionId}/events`);
+}
+
+/** Includes durable receipts whose LKG append has not completed. Callers still validate each chain. */
+export function listReceiptTransactions(args: Pick<ReceiptKey, "root" | "stateDirectory" | "domain">): string[] {
+  assertIdentifier(args.domain, "RECEIPT_DOMAIN");
+  const directory = safePath(args.root, `${args.stateDirectory ?? "harness"}/receipts/${args.domain}`);
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory).sort().map((name) => {
+    assertIdentifier(name, "RECEIPT_TRANSACTION_ID");
+    if (!lstatSync(safePath(directory, name)).isDirectory()) fail("RECEIPT_CHAIN_TAMPERED");
+    return name;
+  });
 }
 
 function lkgDirectory(args: Pick<ReceiptKey, "root" | "stateDirectory" | "domain">): string {

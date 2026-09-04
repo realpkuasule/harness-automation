@@ -6,9 +6,9 @@ import type { CoordinationClock } from "./clock.js";
 import type { CoordinationCandidate, CoordinationCommitIntent, CoordinationWriteResult, GitCoordinationStore } from "./store.js";
 import type { CoordinationWriteIntent } from "./transport.js";
 
-/** Fixed qualification composition, not production enablement. Observers are supplied by the native runner. */
-export function qualificationGuards(commonDir: string, approvalRef: string, observeBinding: () => HumanScopeBinding, refreshClock: () => CoordinationClock,
-  held?: MutationLock, assertCandidate?: (intent: CoordinationCommitIntent) => void) {
+/** Fixed human-authorized qualification/takeover paths, not a general production write permission. */
+export function humanCoordinationGuards(commonDir: string, approvalRef: string, observeBinding: () => HumanScopeBinding, refreshClock: () => CoordinationClock,
+  held?: MutationLock, assertCandidate?: (intent: CoordinationCommitIntent) => void, scopeKind: "qualification-run" | "takeover" = "qualification-run") {
   // Explicit borrowing only: the enclosing handoff owns and releases this exact handle.
   const reserveCandidate = held ? reserveCandidateQuotaLocked.bind(null, held) : reserveCandidateQuota;
   const recordCandidate = held ? recordCandidateResultLocked.bind(null, held) : recordCandidateResult;
@@ -17,7 +17,7 @@ export function qualificationGuards(commonDir: string, approvalRef: string, obse
   let active: { candidate: CoordinationCandidate; intent: CoordinationCommitIntent; attempted: boolean; attemptId?: string } | undefined;
   function authorization() {
     const state = loadHumanAuthorization(commonDir, approvalRef);
-    if (state.approval.scope.kind !== "qualification-run") throw new Error("COORDINATION_QUALIFICATION_SCOPE_REQUIRED");
+    if (state.approval.scope.kind !== scopeKind) throw new Error("COORDINATION_HUMAN_SCOPE_REQUIRED");
     return state;
   }
   return {
@@ -65,9 +65,9 @@ export function qualificationGuards(commonDir: string, approvalRef: string, obse
 }
 
 /** Unknown writes are recovered from exact remote history, even after ticket expiry; never replayed. */
-export function recoverQualificationWrite(commonDir: string, approvalRef: string, attemptId: string, store: GitCoordinationStore) {
+export function recoverHumanCoordinationWrite(commonDir: string, approvalRef: string, attemptId: string, store: GitCoordinationStore) {
   const state = loadHumanAuthorization(commonDir, approvalRef);
-  if (state.approval.scope.kind !== "qualification-run") throw new Error("COORDINATION_QUALIFICATION_SCOPE_REQUIRED");
+  if (!["qualification-run", "takeover"].includes(state.approval.scope.kind)) throw new Error("COORDINATION_HUMAN_SCOPE_REQUIRED");
   const attempt = state.attempts.find((item) => item.attemptId === attemptId);
   const candidate = state.candidates.find((item) => item.candidateId === attempt?.candidateId);
   if (!attempt || !candidate || !attempt.head || candidate.result?.status !== "created" || candidate.result.head !== attempt.head || attempt.operation === "cleanup" || attempt.outcome?.status === "rejected") throw new Error("COORDINATION_RECOVERY_REQUIRED");

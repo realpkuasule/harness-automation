@@ -10,19 +10,22 @@ import type { CoordinationTransport } from "./store.js";
 import type { CoordinationRecord } from "./types.js";
 import type { HandoffSourceProof, HandoffTargetAcceptance } from "./handoff_record.js";
 import { assertCoordinationWorkspace } from "./authority.js";
+import { assertInspectableWorkspace } from "../repository/assets.js";
 
 const env = () => ({ PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" });
-const git = (root: string, args: string[], allowFailure = false) => runGit(root,
-  ["--no-optional-locks", "--no-replace-objects", "-c", "core.fsmonitor=false", ...args], { env: env(), allowFailure }).trim();
+const git = (root: string, args: string[]) => runGit(root,
+  ["--no-optional-locks", "--no-replace-objects", "-c", "core.fsmonitor=false", ...args], { env: env() }).trim();
 
 function workspace(context: RepositoryContext, record: CoordinationRecord, assets: boolean) {
   if (hashObject(resolveRepositoryContext(context.projectDir)) !== hashObject(context)) throw new Error("COORDINATION_WORKSPACE_BINDING_MISMATCH");
   const head = assertCoordinationWorkspace(context.projectDir, record);
   if (assets) {
     // Do not run project filters or call hidden index/submodule assets clean.
-    if (git(context.projectDir, ["config", "--get-regexp", "^filter\\..*\\.(clean|smudge|process)$"], true) ||
-        git(context.projectDir, ["ls-files", "--stage", "-z"]).split("\0").some((line) => line.startsWith("160000 ")) ||
-        git(context.projectDir, ["ls-files", "-v", "-z"]).split("\0").some((line) => /^[a-zS]/u.test(line))) throw new Error("COORDINATION_TRANSFER_ASSETS_UNSUPPORTED");
+    try { assertInspectableWorkspace(context.projectDir); }
+    catch (error) {
+      if (error instanceof Error && error.message === "WORKSPACE_ASSETS_UNSUPPORTED") throw new Error("COORDINATION_TRANSFER_ASSETS_UNSUPPORTED");
+      throw error;
+    }
     if (git(context.projectDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none"])) throw new Error("COORDINATION_TRANSFER_EVIDENCE_INSUFFICIENT");
   }
   return head;

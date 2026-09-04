@@ -69,3 +69,30 @@ installation, workspace HEAD and host-independent control epoch, reserves candid
 and attempt budgets before their side effects, and recovers unknown outcomes without
 replay. Full qualification/production CLI composition is still pending; metadata
 reads and descriptive scopes do not establish production enablement.
+
+Human-approved takeover now uses the same candidate/attempt receipt mechanism.
+Its exact scope includes the old six-field expectation/control SHA, target
+workspace/branch/HEAD/identity/epoch, structured asset risk, and a bounded new lease.
+The target observer records content hashes (not contents), staged index identity,
+dirty/untracked/ignored assets and actual source-ref divergence. Missing objects,
+unsupported filters/submodules/hidden index flags, truncated observations and
+inventory limits fail explicitly; failures never become zero asset counts. The
+current inventory limit is 4,096 entries / 128 MiB of file content. A missing local
+copy of the remote source commit requires authenticated retrieval before planning.
+
+The source machine is explicitly **not observed**, not inferred offline or clean.
+Takeover preserves all old assets/history, removes superseded handoff/renewal data,
+increments generation once and fixes the new deadline before candidate creation.
+An unknown applied write can be recovered after approval expiry without another
+push or a new deadline. Ready loses its prior-generation authority and returns to
+Active. MergeArmed requires prior verified disarming; Prepared/Draft currently
+require the pending Delivery mapping observer. Terminal records cannot reopen.
+
+Isolated takeover uses an explicitly approved child scope from a fixed allocation
+in its qualification run. Parent ordinary quotas permanently subtract all such
+allocations. Each allocation can register only one child, including across a crash
+between the durable receipt and LKG append. Revocation/expiry stops new writes but
+does not prevent result recording or read-only recovery. This is local static
+budget allocation, not a cross-machine shared counter. Native command fixtures
+exercise the registered Broker/Git composition; real credential access, complete
+DG-01 LIVE qualification, production adoption and CLI assembly remain separate.

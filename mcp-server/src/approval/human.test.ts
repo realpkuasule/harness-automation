@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
 import { hashObject } from "../v2/fs.js";
 import { CoordinationClock } from "../coordination/clock.js";
+import { controlEpochDigest } from "../coordination/authority.js";
+import { listReceiptTransactions } from "../receipt/service.js";
 import { createSemanticApprovalPacket } from "./service.js";
 import { loadHumanAuthorization, recordCandidateResult, recordHumanApproval, recordWriteOutcome, reserveCandidateQuota, reserveWriteAttempt, revokeHumanAuthorization, type HumanScope, type HumanScopeBinding } from "./human.js";
 
@@ -18,21 +20,41 @@ const binding = { commonDir: "/fixture-not-registered", repository: "owner/repo"
 const scope: HumanScope = { kind: "qualification-run", binding, expiresAt: "2026-09-04T05:00:00.000Z", cleanupExpiresAt: "2026-09-04T06:00:00.000Z",
   runId: "bounded-run", refs: [ref], operations: ["create", "cas"], maxCommits: 2, maxWriteAttempts: 2, maxCleanupAttempts: 1 };
 function clock(date = "Fri, 04 Sep 2026 04:00:00 GMT") { const value = new CoordinationClock(() => ({ monotonicMs: 0, wallMs: 0 })); value.observe(date, value.start()); return value; }
-function fixture(input: HumanScope = scope) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "human-approval-"))); roots.push(root);
+function fixture(input: HumanScope = scope, existingRoot?: string) {
+  const root = existingRoot ?? realpathSync(mkdtempSync(join(tmpdir(), "human-approval-"))); if (!existingRoot) roots.push(root);
   input = { ...input, binding: { ...input.binding, commonDir: root } };
+  if (input.kind === "takeover") {
+    const assetRisk = { ...input.assetRisk, target: { ...input.assetRisk.target, workspace: root, commonDir: root } };
+    input = { ...input, targetWorkspace: root, assetRisk, assetRiskHash: hashObject(assetRisk) };
+  }
   const scopeHash = hashObject(input); const planHash = hashObject({ scopeHash });
   const packet = createSemanticApprovalPacket({ planHash, inputHash: scopeHash, producerIdentity: "test-producer",
     binding: { planHash, inputDigest: scopeHash, contextDigest: digest, observedHash: digest, policyDigest: digest },
     actions: [{ id: input.kind, kind: "permission-change", protected: true, summary: "Explicit bounded test scope", before: "unapproved", after: scopeHash, reversible: true, recovery: "Keep assets and recover observations without repeating writes." }] });
   const approval = { packet, scope: input, approvedBy: "human-fixture", approvedAt: "2026-09-04T03:00:00.000Z", source: { kind: "explicit-human" as const, messageHash: digest } };
-  return { root, packet, approval, binding: input.binding, register: () => recordHumanApproval(root, approval, planHash) };
+  return { root, packet, approval, binding: input.binding, register: () => recordHumanApproval(root, approval, planHash, clock()) };
+}
+function takeoverScope(bound: HumanScopeBinding): Extract<HumanScope, { kind: "takeover" }> {
+  const assetRisk = { schemaVersion: "takeover-risk/1" as const, target: { workspace: bound.commonDir, commonDir: bound.commonDir,
+    actor: bound.actor, hostId: bound.hostId, branch: "fixture", head, assets: { indexHash: digest, entries: [] },
+    handling: "retain-all-assets" as const, uniqueCommits: 0, unpushedCommits: 0, remoteOnlyCommits: 0 },
+  remote: { repositoryId: bound.repositoryId, endpointHash: digest, ref: "refs/heads/fixture", head },
+  source: { kind: "not-observed" as const, reason: "source-machine-not-accessed" as const },
+  risks: ["source-assets-unknown", "external-writers-not-fenced", "old-assets-retained", "not-zero-loss-transfer"] as ["source-assets-unknown", "external-writers-not-fenced", "old-assets-retained", "not-zero-loss-transfer"] };
+  return { kind: "takeover", binding: bound, expiresAt: scope.expiresAt, workItem: "github:owner/repo#1", controlRef: ref, expectedControlSha: head,
+    expected: { recordHash: digest, generation: 1, owner: "old", machine: "old-host", lastObservedHead: head, controlEpochDigest: digest },
+    targetOwner: bound.actor, targetHostId: bound.hostId, newEpochDigest: controlEpochDigest(bound.controlEpoch),
+    assetRisk, assetRiskHash: hashObject(assetRisk), transactionId: "takeover-1", maxCommits: 2, maxWriteAttempts: 2,
+    targetWorkspace: bound.commonDir, targetBranch: "fixture", targetHead: head, sourceRepositoryId: bound.repositoryId,
+    newLease: { ttlMs: 60_000, notAfter: "2026-09-04T05:30:00.000Z" } };
 }
 const request = { transactionId: "transaction-1", operation: "create" as const, ref, head, expected: null };
 const intent = { transactionId: request.transactionId, parentSha: null, treeSha: head, recordHash: digest, commitMetadataHash: digest, objectDirectory: "/unit-producer-no-objects" };
 function created(root: string, approvalRef: string, observed: HumanScopeBinding, transactionId = request.transactionId) {
   // Unit-level producer metadata only; the Store tests exercise real commit creation ordering.
-  const candidate = reserveCandidateQuota(root, approvalRef, observed, { ...intent, transactionId }, clock());
+  const scope = loadHumanAuthorization(root, approvalRef).approval.scope;
+  const candidate = reserveCandidateQuota(root, approvalRef, observed, { ...intent, transactionId,
+    parentSha: scope.kind === "takeover" ? scope.expectedControlSha : null }, clock());
   recordCandidateResult(root, approvalRef, { candidateId: candidate.candidateId, status: "created", head, evidenceHash: digest });
   return candidate;
 }
@@ -128,13 +150,11 @@ describe("fixed-purpose human authorization receipts", () => {
 
   it("binds takeover to one exact transaction and leaves adopted-config runtime outside the expired enable ticket", () => {
     const productionBinding = { ...binding, controlEpoch: { ...binding.controlEpoch, mode: "production" as const } };
-    const takeover: HumanScope = { kind: "takeover", binding: productionBinding, expiresAt: scope.expiresAt, workItem: "github:owner/repo#1", controlRef: ref, expectedControlSha: head,
-      expected: { recordHash: digest, generation: 1, owner: "old", machine: "old-host", lastObservedHead: head, controlEpochDigest: digest },
-      targetOwner: binding.actor, targetHostId: binding.hostId, newEpochDigest: digest, assetRiskHash: digest, transactionId: "takeover-1", maxWriteAttempts: 2 };
+    const takeover = takeoverScope(productionBinding);
     const first = fixture(takeover); const approvalRef = first.register();
-    created(first.root, approvalRef, first.binding);
+    expect(() => created(first.root, approvalRef, first.binding)).toThrow("HUMAN_WRITE_SCOPE_MISMATCH");
     created(first.root, approvalRef, first.binding, "takeover-1");
-    expect(() => reserveWriteAttempt(first.root, approvalRef, first.binding, { ...request, operation: "cas", expected: head }, clock())).toThrow("HUMAN_WRITE_SCOPE_MISMATCH");
+    expect(() => reserveWriteAttempt(first.root, approvalRef, first.binding, { ...request, operation: "cas", expected: head }, clock())).toThrow("HUMAN_CANDIDATE_UNPROVEN");
     const attempt = reserveWriteAttempt(first.root, approvalRef, first.binding, { ...request, operation: "cas", expected: head, transactionId: "takeover-1" }, clock());
     recordWriteOutcome(first.root, approvalRef, { attemptId: attempt.attemptId, status: "applied", evidenceHash: digest });
     expect(() => reserveWriteAttempt(first.root, approvalRef, first.binding, { ...attempt, attemptId: undefined }, clock())).toThrow("HUMAN_WRITE_BUDGET_EXHAUSTED");
@@ -144,5 +164,60 @@ describe("fixed-purpose human authorization receipts", () => {
     expect(() => reserveWriteAttempt(second.root, enabledRef, second.binding, request, clock("Fri, 04 Sep 2026 05:00:00 GMT"))).toThrow("COORDINATION_LEASE_WINDOW_EXHAUSTED");
     // Loading history is always read-only; ongoing production authority must come from a separate validated adoption receipt.
     expect(loadHumanAuthorization(second.root, enabledRef).approval.scope.kind).toBe("production-enable");
+  });
+
+  it("permanently subtracts static child allocations and rejects mismatched or duplicate child approval", () => {
+    const allocation = { allocationId: "takeover-slot", workItem: "github:owner/repo#1", controlRef: ref, sourceRef: "refs/heads/fixture", genesisSha: head, maxCommits: 2, maxWriteAttempts: 2 };
+    const parent = fixture({ ...scope, refs: [ref, allocation.sourceRef], maxCommits: 3, maxWriteAttempts: 3, takeoverAllocations: [allocation] });
+    const parentRef = parent.register(); created(parent.root, parentRef, parent.binding);
+    const first = reserveWriteAttempt(parent.root, parentRef, parent.binding, request, clock());
+    recordWriteOutcome(parent.root, parentRef, { attemptId: first.attemptId, status: "applied", evidenceHash: digest });
+    expect(() => created(parent.root, parentRef, parent.binding)).toThrow("HUMAN_COMMIT_BUDGET_EXHAUSTED");
+    expect(() => reserveWriteAttempt(parent.root, parentRef, parent.binding, request, clock())).toThrow("HUMAN_WRITE_BUDGET_EXHAUSTED");
+    const childScope = { ...takeoverScope(parent.binding), qualification: { parentApprovalRef: parentRef, runId: scope.runId, allocationId: allocation.allocationId, genesisSha: head } };
+    for (const changed of [ { ...childScope, maxCommits: 3 }, { ...childScope, qualification: { ...childScope.qualification, genesisSha: "c".repeat(40) } } ]) {
+      expect(() => fixture(changed, parent.root).register()).toThrow("HUMAN_PARENT_SCOPE_MISMATCH");
+    }
+    const child = fixture(childScope, parent.root); const childRef = child.register(); expect(child.register()).toBe(childRef);
+    expect(() => fixture({ ...childScope, transactionId: "another-ticket" }, parent.root).register()).toThrow("HUMAN_ALLOCATION_ALREADY_BOUND");
+    revokeHumanAuthorization(parent.root, childRef, "unused but not refundable");
+    expect(() => fixture({ ...childScope, transactionId: "replacement" }, parent.root).register()).toThrow("HUMAN_ALLOCATION_ALREADY_BOUND");
+    expect(() => created(parent.root, parentRef, parent.binding)).toThrow("HUMAN_COMMIT_BUDGET_EXHAUSTED");
+  });
+
+  it("retains allocation ownership across an unindexed approval and permits fact recovery after parent revocation", () => {
+    const allocation = { allocationId: "recover-slot", workItem: "github:owner/repo#1", controlRef: ref, sourceRef: "refs/heads/fixture", genesisSha: head, maxCommits: 2, maxWriteAttempts: 2 };
+    const parent = fixture({ ...scope, refs: [ref, allocation.sourceRef], maxCommits: 3, maxWriteAttempts: 3, takeoverAllocations: [allocation] }); const parentRef = parent.register();
+    const child = fixture({ ...takeoverScope(parent.binding), qualification: { parentApprovalRef: parentRef, runId: scope.runId, allocationId: allocation.allocationId, genesisSha: head } }, parent.root);
+    const childRef = child.register(); rmSync(join(parent.root, "harness/lkg/approval-human/records/000000000002.json"));
+    expect(() => fixture({ ...child.approval.scope, transactionId: "duplicate" } as HumanScope, parent.root).register()).toThrow("HUMAN_AUTHORIZATION_RECOVERY_REQUIRED");
+    expect(child.register()).toBe(childRef); created(parent.root, childRef, parent.binding, "takeover-1");
+    const attempt = reserveWriteAttempt(parent.root, childRef, parent.binding, { ...request, operation: "cas", expected: head, transactionId: "takeover-1" }, clock());
+    recordWriteOutcome(parent.root, childRef, { attemptId: attempt.attemptId, status: "unknown", evidenceHash: digest });
+    revokeHumanAuthorization(parent.root, parentRef, "parent revoked");
+    expect(loadHumanAuthorization(parent.root, childRef).attempts[0].outcome?.status).toBe("unknown");
+    recordWriteOutcome(parent.root, childRef, { attemptId: attempt.attemptId, status: "applied", evidenceHash: digest });
+    expect(() => created(parent.root, childRef, parent.binding, "takeover-1")).toThrow("HUMAN_PARENT_REVOKED");
+    expect(() => reserveWriteAttempt(parent.root, childRef, parent.binding, { ...request, operation: "cas", expected: head, transactionId: "takeover-1" }, clock())).toThrow("HUMAN_PARENT_REVOKED");
+  });
+
+  it("allows only one process to bind a child and stops new child actions after the parent's time window", async () => {
+    const allocation = { allocationId: "race-slot", workItem: "github:owner/repo#1", controlRef: ref, sourceRef: "refs/heads/fixture", genesisSha: head, maxCommits: 2, maxWriteAttempts: 2 };
+    const parent = fixture({ ...scope, refs: [ref, allocation.sourceRef], maxCommits: 3, maxWriteAttempts: 3, takeoverAllocations: [allocation] }); const parentRef = parent.register();
+    const childScope = { ...takeoverScope(parent.binding), qualification: { parentApprovalRef: parentRef, runId: scope.runId, allocationId: allocation.allocationId, genesisSha: head } };
+    const children = [fixture(childScope, parent.root), fixture({ ...childScope, transactionId: "other" }, parent.root)];
+    const source = new URL("./human.ts", import.meta.url).href; const clockSource = new URL("../coordination/clock.ts", import.meta.url).href;
+    const run = (child: typeof children[number]) => new Promise<number | null>((resolve, reject) => {
+      const script = `import {recordHumanApproval} from ${JSON.stringify(source)};import {CoordinationClock} from ${JSON.stringify(clockSource)};try{const c=new CoordinationClock(()=>({monotonicMs:0,wallMs:0}));c.observe('Fri, 04 Sep 2026 04:00:00 GMT',c.start());const a=JSON.parse(process.argv[2]);recordHumanApproval(process.argv[1],a,a.packet.planHash,c);}catch{process.exitCode=1;}`;
+      const processChild = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script, parent.root, JSON.stringify(child.approval)], { stdio: "ignore" });
+      processChild.once("error", reject); processChild.once("exit", resolve);
+    });
+    expect((await Promise.all(children.map(run))).sort()).toEqual([0, 1]);
+    const references = listReceiptTransactions({ root: parent.root, domain: "approval-human" }); expect(references).toHaveLength(2);
+    const childRef = references.find((value) => value !== parentRef)!; const childScopeActual = loadHumanAuthorization(parent.root, childRef).approval.scope;
+    if (childScopeActual.kind !== "takeover") throw new Error("fixture child missing");
+    expect(() => reserveCandidateQuota(parent.root, childRef, parent.binding, { ...intent, parentSha: head, transactionId: childScopeActual.transactionId },
+      clock("Fri, 04 Sep 2026 05:00:00 GMT"))).toThrow("COORDINATION_LEASE_WINDOW_EXHAUSTED");
+    expect(loadHumanAuthorization(parent.root, childRef).candidates).toEqual([]);
   });
 });

@@ -4,11 +4,13 @@ import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { hashObject } from "../v2/fs.js";
 import { acquireMutationLock, assertMutationLock, releaseMutationLock, type MutationLock } from "../recovery/service.js";
-import { appendLkgRecord, appendReceiptEvent, readLkgChain, readReceiptChain } from "../receipt/service.js";
+import { appendLkgRecord, appendReceiptEvent, listReceiptTransactions, readLkgChain, readReceiptChain } from "../receipt/service.js";
 import { validSemanticApprovalPacket, type SemanticApprovalPacket } from "./service.js";
 import type { CoordinationClock } from "../coordination/clock.js";
 import { harnessArtifactSchema } from "../repository/artifact.js";
-import { controlEpochSchema } from "../coordination/authority.js";
+import { controlEpochDigest, controlEpochSchema } from "../coordination/authority.js";
+import { takeoverRiskSchema } from "../coordination/takeover_record.js";
+import { coordinationRecordSchema } from "../coordination/record.js";
 
 const DOMAIN = "approval-human";
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -27,17 +29,24 @@ const bindingSchema = z.object({
 }).strict();
 const fields = { binding: bindingSchema, expiresAt: timestamp };
 const expectation = z.object({ recordHash: digest, generation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), owner: text, machine: text, lastObservedHead: sha, controlEpochDigest: digest }).strict();
+const workItemSchema = coordinationRecordSchema.shape.workItem;
+const allocationSchema = z.object({ allocationId: text, workItem: workItemSchema, controlRef: ref, sourceRef: ref, genesisSha: sha,
+  maxCommits: count, maxWriteAttempts: count }).strict();
 export const humanScopeSchema = z.discriminatedUnion("kind", [
   z.object({ ...fields, kind: z.literal("qualification-run"), runId: text,
     refs: z.array(ref).min(1).max(32), operations: z.array(z.enum(["create", "cas"])).min(1).max(2),
     maxCommits: count, maxWriteAttempts: count, maxCleanupAttempts: count, cleanupExpiresAt: timestamp,
+    takeoverAllocations: z.array(allocationSchema).max(32).optional(),
   }).strict(),
   z.object({ ...fields, kind: z.literal("production-enable"), configBeforeHash: digest.nullable(), configAfterHash: digest,
     controlRef: ref, genesisSha: sha, genesisTree: sha, qualificationEvidenceHash: digest, maxBootstrapAttempts: count,
   }).strict(),
-  z.object({ ...fields, kind: z.literal("takeover"), workItem: z.string().regex(/^github:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9][0-9]*$/u), controlRef: ref, expectedControlSha: sha,
+  z.object({ ...fields, kind: z.literal("takeover"), workItem: workItemSchema, controlRef: ref, expectedControlSha: sha,
     expected: expectation, targetOwner: text, targetHostId: z.string().uuid(), newEpochDigest: digest,
-    assetRiskHash: digest, transactionId: text, maxWriteAttempts: count,
+    targetWorkspace: z.string().refine(isAbsolute), targetBranch: coordinationRecordSchema.shape.branch, targetHead: sha, sourceRepositoryId: text,
+    newLease: z.object({ ttlMs: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), notAfter: timestamp }).strict(),
+    assetRisk: takeoverRiskSchema, assetRiskHash: digest, transactionId: text, maxCommits: count, maxWriteAttempts: count,
+    qualification: z.object({ parentApprovalRef: digest, runId: text, allocationId: text, genesisSha: sha }).strict().optional(),
   }).strict(),
 ]);
 export type HumanScope = z.infer<typeof humanScopeSchema>;
@@ -83,13 +92,63 @@ export interface HumanAuthorization {
 
 function checkScope(scope: HumanScope): void {
   if (scope.binding.controlEpoch.coordinationConfigDigest !== scope.binding.configHash ||
-      (scope.kind === "qualification-run") !== (scope.binding.controlEpoch.mode === "isolated-qualification")) throw new Error("HUMAN_SCOPE_INVALID");
+      (scope.kind === "qualification-run" || scope.kind === "takeover" && scope.qualification !== undefined) !==
+        (scope.binding.controlEpoch.mode === "isolated-qualification")) throw new Error("HUMAN_SCOPE_INVALID");
   if (scope.kind === "qualification-run" && (new Set(scope.refs).size !== scope.refs.length || new Set(scope.operations).size !== scope.operations.length ||
       scope.maxWriteAttempts < 1 || scope.maxCommits < 1 || Date.parse(scope.cleanupExpiresAt) < Date.parse(scope.expiresAt))) throw new Error("HUMAN_SCOPE_INVALID");
-  if (scope.kind === "takeover" && (!scope.workItem.startsWith(`github:${scope.binding.repository}#`) ||
-      !Number.isSafeInteger(Number(scope.workItem.split("#")[1])) ||
-      scope.targetOwner !== scope.binding.actor || scope.targetHostId !== scope.binding.hostId || scope.maxWriteAttempts < 1)) throw new Error("HUMAN_SCOPE_INVALID");
+  if (scope.kind === "qualification-run") {
+    const allocations = scope.takeoverAllocations ?? [];
+    if (new Set(allocations.map((value) => value.allocationId)).size !== allocations.length ||
+        allocations.some((value) => !value.workItem.startsWith(`github:${scope.binding.repository}#`) ||
+          !Number.isSafeInteger(Number(value.workItem.split("#")[1])) || !scope.refs.includes(value.controlRef) ||
+          !scope.refs.includes(value.sourceRef) || value.controlRef === value.sourceRef || value.maxCommits < 1 || value.maxWriteAttempts < 1) ||
+        allocations.reduce((sum, value) => sum + value.maxCommits, 0) > scope.maxCommits ||
+        allocations.reduce((sum, value) => sum + value.maxWriteAttempts, 0) > scope.maxWriteAttempts) throw new Error("HUMAN_SCOPE_INVALID");
+  }
+  if (scope.kind === "takeover") {
+    const { target, remote } = scope.assetRisk;
+    if (!scope.workItem.startsWith(`github:${scope.binding.repository}#`) || !Number.isSafeInteger(Number(scope.workItem.split("#")[1])) ||
+        scope.targetOwner !== scope.binding.actor || scope.targetHostId !== scope.binding.hostId || scope.maxWriteAttempts < 1 || scope.maxCommits < 1 ||
+        scope.newEpochDigest !== controlEpochDigest(scope.binding.controlEpoch) || scope.assetRiskHash !== hashObject(scope.assetRisk) ||
+        target.workspace !== scope.targetWorkspace || target.commonDir !== scope.binding.commonDir || target.actor !== scope.targetOwner || target.hostId !== scope.targetHostId ||
+        target.branch !== scope.targetBranch || target.head !== scope.targetHead || remote.repositoryId !== scope.sourceRepositoryId ||
+        remote.endpointHash !== scope.binding.endpointHash || remote.ref !== `refs/heads/${scope.targetBranch}` || remote.ref === scope.controlRef) throw new Error("HUMAN_SCOPE_INVALID");
+  }
   if (scope.kind === "production-enable" && scope.configAfterHash !== scope.binding.configHash) throw new Error("HUMAN_SCOPE_INVALID");
+}
+
+/** Static reservations are charged even if a child is never created, fails or is revoked. */
+function ordinaryLimit(scope: Extract<HumanScope, { kind: "qualification-run" }>, field: "maxCommits" | "maxWriteAttempts"): number {
+  return scope[field] - (scope.takeoverAllocations ?? []).reduce((sum, value) => sum + value[field], 0);
+}
+
+function parentAuthorization(commonDir: string, scope: HumanScope): HumanAuthorization | undefined {
+  if (scope.kind !== "takeover" || !scope.qualification) return;
+  const parent = loadHumanAuthorization(commonDir, scope.qualification.parentApprovalRef); const run = parent.approval.scope;
+  if (run.kind !== "qualification-run") throw new Error("HUMAN_PARENT_SCOPE_MISMATCH");
+  const allocation = run.takeoverAllocations?.find((value) => value.allocationId === scope.qualification!.allocationId);
+  if (!allocation || hashObject(run.binding) !== hashObject(scope.binding) || run.runId !== scope.qualification.runId ||
+      allocation.workItem !== scope.workItem || allocation.controlRef !== scope.controlRef || allocation.sourceRef !== `refs/heads/${scope.targetBranch}` ||
+      allocation.genesisSha !== scope.qualification.genesisSha || scope.maxCommits > allocation.maxCommits || scope.maxWriteAttempts > allocation.maxWriteAttempts ||
+      Date.parse(scope.expiresAt) > Date.parse(run.expiresAt) || Date.parse(scope.newLease.notAfter) > Date.parse(run.cleanupExpiresAt)) throw new Error("HUMAN_PARENT_SCOPE_MISMATCH");
+  return parent;
+}
+
+function requireParentActive(commonDir: string, scope: HumanScope, clock?: CoordinationClock): void {
+  const parent = parentAuthorization(commonDir, scope); if (!parent) return;
+  if (parent.revoked) throw new Error("HUMAN_PARENT_REVOKED");
+  if (!clock) throw new Error("COORDINATION_SERVER_TIME_UNPROVEN");
+  clock.requireBefore(parent.approval.scope.expiresAt);
+}
+
+function requireAllocationUnused(commonDir: string, scope: HumanScope): void {
+  if (scope.kind !== "takeover" || !scope.qualification) return;
+  // ponytail: scan durable approvals on rare registration; no second index/ledger or permanent history-size cap.
+  for (const reference of listReceiptTransactions({ root: commonDir, domain: DOMAIN })) {
+    const existing = loadHumanAuthorization(commonDir, reference).approval.scope;
+    if (existing.kind === "takeover" && existing.qualification?.parentApprovalRef === scope.qualification.parentApprovalRef &&
+        existing.qualification.allocationId === scope.qualification.allocationId) throw new Error("HUMAN_ALLOCATION_ALREADY_BOUND");
+  }
 }
 
 function packetApprovesScope(approval: Approval): boolean {
@@ -120,7 +179,7 @@ function history(commonDir: string, approvalRef: string, repairTail: boolean): H
       if (!approval) throw new Error("HUMAN_HISTORY_INVALID");
       if (event.kind === "candidate-reserved") {
         if (revoked || candidates.some((candidate) => candidate.candidateId === event.candidate.candidateId)) throw new Error("HUMAN_HISTORY_INVALID");
-        checkCandidateQuota(approval.scope, attempts, candidates); candidates.push(event.candidate);
+        checkCandidateQuota(approval.scope, attempts, candidates); checkCandidateScope(approval.scope, event.candidate); candidates.push(event.candidate);
       } else if (event.kind === "candidate-result") {
         const candidate = candidates.find((value) => value.candidateId === event.result.candidateId);
         if (!candidate || (candidate.result && candidate.result.status !== "unknown") || (event.result.status === "created") !== (event.result.head !== null)) throw new Error("HUMAN_HISTORY_INVALID");
@@ -156,7 +215,7 @@ function locked<T>(commonDir: string, operation: (lock: MutationLock) => T): T {
 }
 
 /** Invoked by the explicit approval command; a Reviewer verdict or caller-created JSON is not an approvalRef. */
-export function recordHumanApproval(commonDir: string, input: Omit<Approval, "kind" | "schemaVersion" | "scopeHash">, approvedPlanHash: string): string {
+export function recordHumanApproval(commonDir: string, input: Omit<Approval, "kind" | "schemaVersion" | "scopeHash">, approvedPlanHash: string, clock?: CoordinationClock): string {
   const approval = approvalSchema.parse({ ...input, kind: "approved", schemaVersion: "human-authorization/1.0", scopeHash: hashObject(input.scope) });
   checkScope(approval.scope);
   if (approvedPlanHash !== approval.packet.planHash || !packetApprovesScope(approval) || approval.scope.binding.commonDir !== realpathSync(commonDir) || Date.parse(approval.approvedAt) >= Date.parse(approval.scope.expiresAt)) throw new Error("HUMAN_APPROVAL_REQUIRED");
@@ -165,15 +224,22 @@ export function recordHumanApproval(commonDir: string, input: Omit<Approval, "ki
     if (existing.length) {
       const current = history(commonDir, approval.packet.packetHash, true);
       if (hashObject(current.approval) !== hashObject(approval) || current.revoked) throw new Error("HUMAN_APPROVAL_ALREADY_RECORDED");
-    } else append(commonDir, approval.packet, approval);
+    } else {
+      requireParentActive(commonDir, approval.scope, clock); requireAllocationUnused(commonDir, approval.scope);
+      append(commonDir, approval.packet, approval);
+    }
     return approval.packet.packetHash;
   });
 }
 
 function checkCandidateQuota(scope: HumanScope, attempts: HumanAuthorization["attempts"], candidates: HumanAuthorization["candidates"]): void {
   if (attempts.some((attempt) => !attempt.outcome || attempt.outcome.status === "unknown") || candidates.some((candidate) => !candidate.result || candidate.result.status === "unknown")) throw new Error("HUMAN_WRITE_OUTCOME_UNRESOLVED");
-  const maximum = scope.kind === "qualification-run" ? scope.maxCommits : scope.kind === "production-enable" ? 1 : scope.maxWriteAttempts;
+  if (scope.kind === "takeover" && attempts.some((attempt) => attempt.outcome?.status === "applied")) throw new Error("HUMAN_WRITE_BUDGET_EXHAUSTED");
+  const maximum = scope.kind === "qualification-run" ? ordinaryLimit(scope, "maxCommits") : scope.kind === "production-enable" ? 1 : scope.maxCommits;
   if (candidates.length >= maximum) throw new Error("HUMAN_COMMIT_BUDGET_EXHAUSTED");
+}
+function checkCandidateScope(scope: HumanScope, intent: Pick<Candidate, "transactionId" | "parentSha">): void {
+  if (scope.kind === "takeover" && (intent.transactionId !== scope.transactionId || intent.parentSha !== scope.expectedControlSha)) throw new Error("HUMAN_WRITE_SCOPE_MISMATCH");
 }
 
 /** Must precede commit-tree, including candidates that lose a CAS or never get dispatched. */
@@ -186,7 +252,9 @@ export function reserveCandidateQuotaLocked(lock: MutationLock, commonDir: strin
   assertMutationLock({ projectDir: commonDir, commonDir, repository: true }, lock);
   const state = history(commonDir, approvalRef, true);
   if (state.revoked || hashObject(bindingSchema.parse(observed)) !== hashObject(state.approval.scope.binding)) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
+  requireParentActive(commonDir, state.approval.scope, clock);
   checkCandidateQuota(state.approval.scope, state.attempts, state.candidates);
+  checkCandidateScope(state.approval.scope, intent);
   const bounds = clock.requireBefore(state.approval.scope.expiresAt);
   const candidate = candidateSchema.parse({ ...intent, candidateId: randomUUID(), reservedAt: new Date(Math.floor(bounds.lowerMs)).toISOString() });
   append(commonDir, state.approval.packet, { kind: "candidate-reserved", candidate });
@@ -200,7 +268,8 @@ export function recordCandidateResultLocked(lock: MutationLock, commonDir: strin
   assertMutationLock({ projectDir: commonDir, commonDir, repository: true }, lock);
   const result = candidateResultSchema.parse(input);
   if ((result.status === "created") !== (result.head !== null)) throw new Error("HUMAN_CANDIDATE_RESULT_INVALID");
-  const state = history(commonDir, approvalRef, true); const candidate = state.candidates.find((value) => value.candidateId === result.candidateId);
+  const state = history(commonDir, approvalRef, true); parentAuthorization(commonDir, state.approval.scope);
+  const candidate = state.candidates.find((value) => value.candidateId === result.candidateId);
   if (!candidate) throw new Error("HUMAN_CANDIDATE_UNKNOWN");
   if (candidate.result && hashObject(candidate.result) === hashObject(result)) return;
   if (candidate.result && candidate.result.status !== "unknown") throw new Error("HUMAN_CANDIDATE_RESULT_FINAL");
@@ -218,7 +287,7 @@ function checkAttempt(scope: HumanScope, attempts: HumanAuthorization["attempts"
   if (scope.kind === "qualification-run") {
     if (!scope.refs.includes(request.ref) || (!cleanup && !scope.operations.includes(request.operation as "create" | "cas"))) throw new Error("HUMAN_WRITE_SCOPE_MISMATCH");
     const used = attempts.filter((attempt) => (attempt.operation === "cleanup") === cleanup).length;
-    if (used >= (cleanup ? scope.maxCleanupAttempts : scope.maxWriteAttempts)) throw new Error("HUMAN_WRITE_BUDGET_EXHAUSTED");
+    if (used >= (cleanup ? scope.maxCleanupAttempts : ordinaryLimit(scope, "maxWriteAttempts"))) throw new Error("HUMAN_WRITE_BUDGET_EXHAUSTED");
     if (cleanup) {
       const owned = attempts.filter((attempt) => attempt.ref === request.ref && attempt.outcome?.status === "applied").at(-1);
       if (!owned || owned.head !== request.expected) throw new Error("HUMAN_CLEANUP_OWNERSHIP_UNPROVEN");
@@ -242,6 +311,15 @@ export function reserveWriteAttemptLocked(lock: MutationLock, commonDir: string,
   assertMutationLock({ projectDir: commonDir, commonDir, repository: true }, lock);
   const state = history(commonDir, approvalRef, true);
   if (state.revoked || hashObject(bindingSchema.parse(observed)) !== hashObject(state.approval.scope.binding)) throw new Error("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
+  requireParentActive(commonDir, state.approval.scope, clock);
+  if (request.operation === "cleanup" && state.approval.scope.kind === "qualification-run" && state.approval.scope.takeoverAllocations?.length) {
+    for (const reference of listReceiptTransactions({ root: commonDir, domain: DOMAIN })) {
+      const child = loadHumanAuthorization(commonDir, reference);
+      if (child.approval.scope.kind === "takeover" && child.approval.scope.qualification?.parentApprovalRef === approvalRef &&
+          (child.attempts.some((attempt) => !attempt.outcome || attempt.outcome.status === "unknown") ||
+           child.candidates.some((candidate) => !candidate.result || candidate.result.status === "unknown"))) throw new Error("HUMAN_WRITE_OUTCOME_UNRESOLVED");
+    }
+  }
   const expiresAt = request.operation === "cleanup" && state.approval.scope.kind === "qualification-run" ? state.approval.scope.cleanupExpiresAt : state.approval.scope.expiresAt;
   const bounds = clock.requireBefore(expiresAt);
   const candidateId = request.candidateId ?? (request.operation === "cleanup" ? null : state.candidates.find((candidate) => candidate.result?.head === request.head && candidate.transactionId === request.transactionId)?.candidateId ?? null);
@@ -259,7 +337,8 @@ export function recordWriteOutcome(commonDir: string, approvalRef: string, input
 export function recordWriteOutcomeLocked(lock: MutationLock, commonDir: string, approvalRef: string, input: Outcome): void {
   assertMutationLock({ projectDir: commonDir, commonDir, repository: true }, lock);
   const outcome = outcomeSchema.parse(input);
-  const state = history(commonDir, approvalRef, true); const attempt = state.attempts.find((value) => value.attemptId === outcome.attemptId);
+  const state = history(commonDir, approvalRef, true); parentAuthorization(commonDir, state.approval.scope);
+  const attempt = state.attempts.find((value) => value.attemptId === outcome.attemptId);
   if (!attempt) throw new Error("HUMAN_WRITE_ATTEMPT_UNKNOWN");
   if (attempt.outcome && hashObject(attempt.outcome) === hashObject(outcome)) return;
   if (attempt.outcome && attempt.outcome.status !== "unknown") throw new Error("HUMAN_WRITE_OUTCOME_FINAL");

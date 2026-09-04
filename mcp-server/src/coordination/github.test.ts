@@ -8,7 +8,8 @@ import { hashObject, sha256 } from "../v2/fs.js";
 import { acquireMutationLock, releaseMutationLock } from "../recovery/service.js";
 import { createSemanticApprovalPacket } from "../approval/service.js";
 import { loadHumanAuthorization, recordHumanApproval, type HumanScope } from "../approval/human.js";
-import { createQualificationRuntime, observeCoordinationBinding } from "./runtime.js";
+import { createQualificationRuntime, createTakeoverRuntime, observeCoordinationBinding } from "./runtime.js";
+import { observeTakeoverRisk } from "./takeover.js";
 import { GitHubCoordinationReader } from "./github.js";
 import { GitHubCoordinationTransport, type CoordinationWriteIntent } from "./transport.js";
 import { CoordinationLifecycleService, GitCoordinationStore } from "./service.js";
@@ -30,8 +31,9 @@ function git(root: string, ...args: string[]): string { return execFileSync("git
 function fixture() {
   // Exercise the macOS resolver on every CI host; only this test process's OS boundary is synthetic.
   Object.defineProperty(process, "platform", { ...nativePlatform, value: "darwin" });
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "coordination-provider-"))); roots.push(root);
-  nativeHost.home = join(root, "user"); mkdirSync(nativeHost.home);
+  const container = realpathSync(mkdtempSync(join(tmpdir(), "coordination-provider-"))); roots.push(container);
+  const root = join(container, "project"); mkdirSync(root);
+  nativeHost.home = join(container, "user"); mkdirSync(nativeHost.home);
   vi.stubEnv("GIT_CONFIG_GLOBAL", "/dev/null"); vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
   git(root, "init", "--quiet"); const endpoint = "https://github.com/owner/repo.git"; git(root, "remote", "add", "origin", endpoint);
   const commonDir = join(root, ".git");
@@ -41,7 +43,7 @@ function fixture() {
       { id: "git", purpose: "git-transport", repository: "owner/repo", identity: "octo", scopes: ["contents:write"], expiresAt: "2099-01-01T00:00:00.000Z", envVar: "HARNESS_GIT_TOKEN", keychainService: "synthetic", keychainAccount: "git-fixture" },
     ] });
   applyCredentialHostBinding(commonDir, plan, plan.planHash);
-  const bin = join(root, "bin"); mkdirSync(bin); const calls = join(root, "calls.jsonl"); const response = join(root, "response.json");
+  const bin = join(container, "bin"); mkdirSync(bin); const calls = join(bin, "calls.jsonl"); const response = join(bin, "response.json");
   writeFileSync(join(bin, "security"), `#!${process.execPath}\nprocess.stdout.write('synthetic-provider-canary');\n`, { mode: 0o700 });
   writeFileSync(join(bin, "gh"), `#!${process.execPath}\nconst fs=require('node:fs');const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(a)+'\\n');if(process.env.GH_TOKEN!=='synthetic-provider-canary'||a[a.indexOf('--hostname')+1]!=='github.com')process.exit(2);const p=a.at(-1);const input=JSON.parse(fs.readFileSync(${JSON.stringify(response)},'utf8'));const body=p==='user'?{login:input.actor??'octo'}:p==='repos/owner/repo'?{full_name:'owner/repo',id:input.repoId??42}:input.pr;const date=input.date??new Date().toUTCString();process.stdout.write('HTTP/2 200\\nDate: '+date+'\\n\\n'+JSON.stringify(body));\n`, { mode: 0o700 });
   vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH}`);
@@ -52,10 +54,10 @@ function fixture() {
   return { root, commonDir, plan, calls, record, pr, respond, provider, bin, endpoint };
 }
 function nativeGitFixture({ root, bin, endpoint }: ReturnType<typeof fixture>) {
-  const remote = join(root, "remote.git"); git(root, "init", "--bare", "--quiet", "--template=", remote);
-  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim(); const trace = join(root, "git-transport.jsonl");
+  const remote = join(bin, "remote.git"); git(root, "init", "--bare", "--quiet", "--template=", remote);
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim(); const trace = join(bin, "git-transport.jsonl");
   writeFileSync(join(bin, "git"), `#!${process.execPath}\nconst fs=require('node:fs');const cp=require('node:child_process');let a=process.argv.slice(2);if(a.some(x=>['ls-remote','fetch','push'].includes(x))){if(!a.includes(${JSON.stringify(endpoint)})||process.env.HARNESS_GIT_TOKEN!=='synthetic-provider-canary')process.exit(2);fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({argv:a,global:process.env.GIT_CONFIG_GLOBAL,redirects:process.env.GIT_CONFIG_VALUE_2,hooks:process.env.GIT_CONFIG_VALUE_3})+'\\n');a=a.map(x=>x===${JSON.stringify(endpoint)}?${JSON.stringify(remote)}:x);}const r=cp.spawnSync(${JSON.stringify(realGit)},a,{env:process.env,stdio:['inherit','pipe','pipe']});process.stdout.write(r.stdout??'');process.stderr.write(r.stderr??'');process.exit(r.status??1);\n`, { mode: 0o700 });
-  return { trace, remote };
+  return { trace, remote, realGit };
 }
 afterEach(() => { Object.defineProperty(process, "platform", nativePlatform); vi.unstubAllEnvs(); roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })); });
 
@@ -187,4 +189,48 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
     expect(() => createQualificationRuntime(f.root, approvalRef, controlRef)).toThrow("HUMAN_AUTHORIZATION_BINDING_MISMATCH");
     expect(readFileSync(trace, "utf8")).toBe(before);
   });
+
+  it("composes an exact takeover sub-ticket through registered native Broker/Git adapters without production adoption", () => {
+    const f = fixture(); const native = nativeGitFixture(f); const controlRef = "refs/heads/takeover-native";
+    git(f.root, "checkout", "-b", f.record.branch);
+    git(f.root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "LOCAL source fixture");
+    const head = git(f.root, "rev-parse", "HEAD");
+    // LOCAL setup is separate from the bounded native operations under test, never a claimed LIVE fixture run.
+    execFileSync(native.realGit, ["push", native.remote, `HEAD:refs/heads/${f.record.branch}`], { cwd: f.root, stdio: "pipe" });
+    const binding = observeCoordinationBinding(f.root, "origin", "42", "git"); const now = Date.now();
+    function approve(scope: HumanScope) {
+      const inputHash = hashObject(scope); const planHash = hashObject({ inputHash });
+      const packet = createSemanticApprovalPacket({ planHash, inputHash, producerIdentity: "native-fixture",
+        binding: { planHash, inputDigest: inputHash, contextDigest: inputHash, observedHash: inputHash, policyDigest: inputHash },
+        actions: [{ id: scope.kind, kind: "permission-change", protected: true, summary: "LOCAL native takeover fixture", before: null, after: inputHash, reversible: false, recovery: "Retain assets" }] });
+      return recordHumanApproval(f.commonDir, { scope, packet, approvedBy: "fixture-human", approvedAt: new Date(now).toISOString(),
+        source: { kind: "explicit-human", messageHash: inputHash } }, planHash, f.provider.serverClock());
+    }
+    const run: Extract<HumanScope, { kind: "qualification-run" }> = { kind: "qualification-run", binding, runId: "native-seed", refs: [controlRef, `refs/heads/${f.record.branch}`],
+      operations: ["create", "cas"], maxCommits: 1, maxWriteAttempts: 1, maxCleanupAttempts: 1,
+      expiresAt: new Date(now + 3600_000).toISOString(), cleanupExpiresAt: new Date(now + 7200_000).toISOString() };
+    const seeded = createQualificationRuntime(f.root, approve(run), controlRef);
+    const initial = seeded.lifecycle.acquire({ repository: binding.repository, repositoryId: binding.repositoryId, workItem: f.record.workItem,
+      branch: f.record.branch, sourceRepositoryId: binding.repositoryId, owner: binding.actor, machine: binding.hostId,
+      controlEpochDigest: controlEpochDigest(binding.controlEpoch), head, ttlMs: 120_000 });
+    const current = seeded.store.read(initial.workItem);
+    const parent = approve({ ...run, runId: "native-takeover", maxCommits: 2, maxWriteAttempts: 2, takeoverAllocations: [{ allocationId: "one",
+      workItem: initial.workItem, controlRef, sourceRef: `refs/heads/${initial.branch}`, genesisSha: current.controlSha!, maxCommits: 1, maxWriteAttempts: 1 }] });
+    const context = { projectDir: f.root, commonDir: f.commonDir, repository: true }; let held = acquireMutationLock(context);
+    let risk: ReturnType<typeof observeTakeoverRisk>;
+    try { risk = observeTakeoverRisk(context, held, initial, new GitHubCoordinationTransport(f.root, "origin", "42", "git"), binding); }
+    finally { releaseMutationLock(held); }
+    const child = approve({ kind: "takeover", binding, expiresAt: run.expiresAt, workItem: initial.workItem, controlRef, expectedControlSha: current.controlSha!,
+      expected: expectedRecord(initial) as Extract<HumanScope, { kind: "takeover" }>["expected"], targetOwner: binding.actor, targetHostId: binding.hostId,
+      targetWorkspace: f.root, targetBranch: initial.branch, targetHead: head, sourceRepositoryId: binding.repositoryId, newEpochDigest: controlEpochDigest(binding.controlEpoch),
+      newLease: { ttlMs: 120_000, notAfter: new Date(now + 3600_000).toISOString() }, assetRisk: risk!, assetRiskHash: hashObject(risk!),
+      transactionId: "native-takeover-once", maxCommits: 1, maxWriteAttempts: 1,
+      qualification: { parentApprovalRef: parent, runId: "native-takeover", allocationId: "one", genesisSha: current.controlSha! } });
+    held = acquireMutationLock(context);
+    try { expect(createTakeoverRuntime(f.root, child, held).takeover()).toMatchObject({ generation: 2, owner: binding.actor, machine: binding.hostId }); }
+    finally { releaseMutationLock(held); }
+    const receipt = loadHumanAuthorization(f.commonDir, child);
+    expect(receipt.candidates).toHaveLength(1); expect(receipt.attempts).toHaveLength(1); expect(receipt.attempts[0].outcome?.status).toBe("applied");
+    expect(readFileSync(native.trace, "utf8")).not.toContain("synthetic-provider-canary");
+  }, 90_000);
 });

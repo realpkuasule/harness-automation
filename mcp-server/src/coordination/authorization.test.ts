@@ -7,7 +7,7 @@ import { createSemanticApprovalPacket } from "../approval/service.js";
 import { loadHumanAuthorization, recordHumanApproval, type HumanScope } from "../approval/human.js";
 import { hashObject } from "../v2/fs.js";
 import { localHistory, localTransport } from "./__fixtures__/transport.js";
-import { qualificationGuards, recoverQualificationWrite } from "./authorization.js";
+import { humanCoordinationGuards, recoverHumanCoordinationWrite } from "./authorization.js";
 import { CoordinationClock } from "./clock.js";
 import { createCoordinationRecord } from "./record.js";
 import { GitCoordinationStore, type CoordinationCandidate } from "./store.js";
@@ -31,7 +31,7 @@ function fixture() {
     actions: [{ id: scope.kind, kind: "permission-change", protected: true, summary: "LOCAL fixture only", before: null, after: inputHash, reversible: true, recovery: "Retain unknown objects" }] });
   const approvalRef = recordHumanApproval(root, { packet, scope, approvedBy: "fixture-human", approvedAt: "2026-09-04T03:00:00.000Z", source: { kind: "explicit-human", messageHash: digest } }, planHash);
   const clock = () => { const value = new CoordinationClock(() => ({ monotonicMs: 0, wallMs: 0 })); value.observe("Fri, 04 Sep 2026 04:00:00 GMT", value.start()); return value; };
-  let observed = bound; const guards = qualificationGuards(root, approvalRef, () => observed, clock);
+  let observed = bound; const guards = humanCoordinationGuards(root, approvalRef, () => observed, clock);
   const transport = localTransport(root, remote); let pushes = 0; let genesis = ""; let candidate: CoordinationCandidate | undefined;
   const store = new GitCoordinationStore(controlRef, { ...transport, push(directory, head, ref, expected) {
     guards.authorizeWrite({ ...binding, ref, head, expected }); pushes++;
@@ -65,9 +65,9 @@ it("records unknown instead of Applied when a successful push lacks authenticate
   expect(f.store.recover(f.candidate()).disposition).toBe("current"); expect(f.pushes()).toBe(1);
   expect(f.state().attempts[0].outcome?.status).toBe("unknown");
   const attemptId = f.state().attempts[0].attemptId;
-  expect(recoverQualificationWrite(f.root, f.approvalRef, attemptId, f.store).disposition).toBe("current");
+  expect(recoverHumanCoordinationWrite(f.root, f.approvalRef, attemptId, f.store).disposition).toBe("current");
   expect(f.state().attempts[0].outcome?.status).toBe("applied");
-  recoverQualificationWrite(f.root, f.approvalRef, attemptId, f.store);
+  recoverHumanCoordinationWrite(f.root, f.approvalRef, attemptId, f.store);
   expect(f.pushes()).toBe(1); expect(f.state().attempts).toHaveLength(1); expect(f.state().candidates).toHaveLength(1);
 });
 

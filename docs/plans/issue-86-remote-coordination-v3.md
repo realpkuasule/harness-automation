@@ -554,7 +554,67 @@ CLI 只传操作意图、精确预期值、工作区选择和 approvalRef，不�
    篡改拒绝；源 not-observed 经精确批准可行但不声称 offline；旧 handoff 保留历史且
    新代可解析；terminal 拒绝；未知结果不重发/不续期；隔离票不获得生产权限。
 
+**takeover 的 lifecycleState 不作无依据的统一重置。** 依据成果01 §7 的进入/保持
+条件，旧 Admitted 保留 Admitted；Prepared/Active/Draft 仅在新目标分别重新证明
+交付原子映射、当前写者环境/租约复核、唯一真实 Draft PR 及其 mapping 时保留原态。
+缺少相应能力或事实则不执行 takeover、保持 Blocked，不猜测降回 Admitted，也不
+因新租约已生成就自动宣称宿主切换或 PR 状态成立。依据成果03 §6.1、成果04 §5.1，
+owner/generation 本身属于 Ready 绑定，因此每次 takeover 都使旧 Ready 证据失效，
+即使 targetHead 不变；旧 Ready 在目标环境/新租约复核成立后，以同次接管 CAS 退回
+**Active**（采用成果01 §10.2 明确允许的 Active/Draft 中较小的 Active 路径），不
+额外转换/新建 Draft PR，不重用旧验收、review 或布防资格；再次 Ready 走 D-05。
+旧 MergeArmed 必须先走成果04 D-06/D-08 的 exact PR/旧 Ready Head 撤防、readback
+及 CAS，期间保持 `MergeArmed + Disarming + Blocked` 和写冻结；未接入该能力则
+阻断，不先换代再撤防。撤防收敛后才基于新的精确记录生成/消费 takeover 批准，旧
+expected 票不可自动刷新。Provider 已证明合并则进入 Integrated，不再接管；
+Integrated/Closing/Closed/Abandoned 一律不重开写租约。成功换代仍按上文删除新
+记录中的旧 handoff/renewal，完整历史保留，不放宽旧字段的 generation 一致性。
+
 本节只定义实现和测试合同，不登记真实批准、修改凭据、接管现有工作或启用生产。
+
+#### 5.5.1 隔离 takeover 的静态分额
+
+1. qualification-run scope 可选 `takeoverAllocations`，每项固定唯一 allocationId、
+   workItem、controlRef/sourceRef、exact genesisSha 及 maxCommits/maxWriteAttempts。
+   refs 必须属于父票，workItem/source 映射须匹配同一获批仓库；子操作仅为 takeover
+   的 control-ref CAS，sourceRef 是观察绑定，不额外授予 source 写入。genesis 使用
+   已批准的精确锚点，初次运行可按 §6.1 预计算，不为取得该字段提前生成 commit。
+2. 父票 maxCommits/maxWriteAttempts 定义为该票连同全部分额的总上限；普通操作
+   可用额永久等于总额减去所有 allocation 上限之和，批准时即检查非负与安全整数。
+   bootstrap/source fixtures 消耗普通额度，必须预留充足；未登记、未使用、失败或
+   撤销的分额均不返还，也不转给别的 child。无 allocations 时原语义不变。子票明确
+   maxCommits 与 maxWriteAttempts 两个独立上限，不再用写尝试数替代 commit 数；
+   每项可小于分额但不可大于，差额仍不回流。cleanup 预算只留在父票原有单独字段。
+3. 子 takeover scope 固定引用 parentApprovalRef/runId/allocationId，且具有自己
+   独立的显式人类批准及 §5.5 全部精确字段；父票预留不等于批准任意接管。父子必须
+   匹配同一真实 binding/canonical common-dir、隔离 epoch、ref/genesis/workItem
+   与 source branch；子票 expiresAt 不晚于父票普通写有效期，新租约 notAfter 不晚于
+   父运行 cleanupExpiresAt。禁止转委托或再分额，不借子票切换机器、凭据或实现。
+4. 子票首次登记在同一 apply.lock 下：验证父票/分额与子票批准，扫描既有
+   approval-human receipt/LKG 中对该 parentApprovalRef/allocationId 的占用，再
+   追加这一张 child 的原生批准事件。该事件本身就是分额占用证据，不另给父链追加
+   第二份必须原子提交的占用事件。相同 child approvalRef/完整 scope 的恢复可幂等；
+   另一张票即使上一张已撤销、过期或未用也拒绝。占用扫描必须包括已耐久写入但 LKG
+   tail 尚未补齐的批准事件，不能只查成功索引；扫描/链验证不完整不能认定未占用，
+   应恢复原链。复用现有存储安全检查，不新建索引账本或以累计历史条数上限永久拒绝。
+5. 父/子历史的纯加载与“现在可否执行新动作”分开。子票登记、候选预留及每次实际
+   dispatch 都重验父子未撤销、当前有效期、binding 和分额关系；父撤销或普通写过期
+   即阻止新的子动作。不能只在 child 登记时检查父票，或因父票后来撤销/过期而把
+   已有历史判成非法。已经发生的 candidate/outcome 事实仍可写回原回执，unknown
+   可只读恢复；这些不补发许可、不退款、不重放网络写。缺失或损坏的父历史仍是恢复
+   缺口，不能通过忽略父关系授权。受限历史修复不绕过正常锁及证据校验。
+6. 同一分额只能消费到唯一 child 的候选/attempt 链，沿用一项未解决尝试限制。
+   cleanup 由父运行原定责任端在原 cleanup 时间/额度内执行，须核验 child 在内的
+   已知赢家及同 ref 的未收敛写入，不能只查父票自己的最后一次成功；有未知在途结果
+   则保留资产。父撤销阻止新的网络清理，不能将 cleanup 当作撤销后的隐含豁免；父普通
+   写窗口到期后，仅其原已批准、尚有效的独立 cleanup 窗口允许精确清理。
+7. 本层仅证明同一 common-dir 内的有限静态分配，不声称跨机器共享计数器。完整
+   资格 manifest 后续固定各端父票/全部分额和清理责任，总量逐项相加；不同主机不能
+   各复制同一总预算后声称仍共享该上限。本次实现不需要跨机预算服务或新后台。
+8. 验收覆盖：父普通额扣除全部预留；失败/撤销不返还；超额与错 binding/ref/genesis
+   拒绝；两个进程登记同一 allocation 仅一个成功；批准事件已落盘而 LKG 未完成时
+   不产生第二 child；父到期/撤销后新候选/dispatch 拒绝而历史及 unknown 恢复可读；
+   child 结果可被唯一清理者核验且未知结果禁止删除。这里仅补实施约束，不登记任何票。
 
 ## 6. 可调用入口及资格门
 
@@ -616,6 +676,62 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
    与当前实现/资格/凭据，再重验实时租约、冻结和操作条件，调用实际 handler；
    不继续消费过期的资格运行票或把一次 enable Apply 票当永久写 token。takeover
    仍消费其专用人工批准。此顺序仅约束实现，不执行任何真实登记、授权或生产启用。
+
+#### 6.1.1 Genesis/bootstrap 的最小接口
+
+1. 正式 control genesis 固定为**空树、无父节点的 metadata-only root commit**，
+   不包含业务 record；元数据只在固定 commit headers/message 中。提供纯
+   `prepareGenesisObject(fixedMetadata): SyntheticObjectPlan`，冻结 objectFormat、
+   空树原始字节/tree SHA、完整 commit 字节及其 SHA-256/exact Git SHA、固定作者/
+   committer/时间/消息和 objectPlanHash。采用固定编码及 metadata 白名单，拒绝额外
+   headers、签名或任意 payload；消息可绑定预先确定的 runId/objectId，但不能引用
+   含自身 SHA 的最终 manifest/approval hash 形成循环。计划期只计算，不写 commit
+   对象；Git 命令不带 `-w`。执行时不重新取墙钟、作者或换行格式。
+2. qualification-run 的清单/scope 以及 production-enable 的批准内容必须保存或
+   哈希绑定上述完整可重建 descriptor，关联 exact repo/endpoint/controlRef 与
+   transactionId；只给 genesisSha/tree 而无可核验字节/metadata 不足以 bootstrap。
+   合成源对象同样列入清单。普通父票额度承担 genesis/source fixture，各生成一次
+   commit 对象占一个 candidate slot，首条业务记录另占一个，不能借 bootstrap 名义
+   免计，也不动已预留给 takeover child 的额度；生产 bootstrap 消费其唯一获批
+   genesis candidate 和有限网络尝试。配额不足必须发生在 commit 对象物化之前。
+3. 在现有 GitCoordinationStore 增加窄 `bootstrap(approvedGenesis)` 用例，参数只
+   由既有批准 loader 解析，仍用同一 bare 对象帮助函数、Broker/transport、candidate/
+   attempt 回执和 exact-absent push。流程为验证批准与真实身份/不存在事实 → 耐久
+   预留 candidate → 物化固定树/commit → 重算并核验字节/SHA → 预留 attempt → push
+   → readback/历史验证；不制造空 Work Item、generation=0 或虚假 recordHash。
+   原生普通 compareAndSwap/acquire 不再以 `initialize=true` 绕过此流程；ref 缺失
+   即报告 bootstrap required，不代建 root。首次业务提交只有一个父节点，即 genesis；
+   后续均按现有 exact tip CAS 追加，不能把业务 record 作为另一个无父 genesis。
+4. Store.entries 只在受信 anchor 的 exact genesis SHA/tree、无父节点及完整对象
+   验证全部成立时接受零条目；任意其他 commit 的空树、未知路径/模式仍拒绝。读取
+   genesis 返回 `{controlSha: genesisSha, record: null}`，不是 ref absent。
+   history anchor 补齐 genesisTree/objectPlanHash（以及既有 repo/endpoint/ref 绑定），
+   从已批准 descriptor 取得，而非从“bootstrap 已标 applied”的回执反推，否则首次
+   readback 会自锁。冷验证核验 exact genesis，之后沿现有单父增量验证；检查点不得
+   把空树例外扩散到非 genesis。无批准 anchor 仍失败，不凭项目 JSON 或当前 tip 认领。
+5. 同一 commit intent/candidate/receipt 用严格 subject 判别
+   `coordination-record | control-genesis | source-fixture`：record 分支保持其
+   Work Item/recordHash；另两类绑定 objectPlanHash/fixtureId，不伪造 record 或把
+   任意 hash 填进 recordHash。沿用既有 reserveCandidate/result、reserveAttempt/
+   outcome 与同锁 Locked 入口，所有 subject 的授权规则穷尽匹配，未知 kind 拒绝。
+   bootstrap readback 可证明 exact genesis 当前存在或处于当前完整合法历史中，
+   但不签发写租约，也不把竞争输家的拒绝改写为本次创建成功。远端已存在且无本次
+   在途记录时不盲推/自动 adoption；unknown 只恢复原候选/事务，不重造对象或退回 ref。
+6. source fixture 使用一个窄 `runApprovedSourceFixture(fixtureId)` 入口，复用同一
+   私有对象物化/精确 push 帮助函数及预算 guard，不另建 Store/账本，也不放宽 control
+   的 entries/history。固定 descriptor 只允许空树合成 commit；父节点只能为空或
+   清单内已批准的 source-fixture SHA，完整可达图不能含项目源码或 control 历史。
+   它只能写清单中独立的临时 sourceRef、expected/candidate SHA 和有限操作；调用者
+   不能传任意 ref/父节点/字节/命令，生产-enable 和普通 lifecycle 路径不具有此能力。
+   从隔离 bare 中推送，禁止复制项目 object database/alternates。源 ref 的读回验证
+   exact 合成对象图，不拿 control record validator 冒充验证，也不授予交付分支写权。
+7. 沿用一次性 candidate/attempt 及已知所有权清理：bootstrap/source object 的
+   unknown 保留证据，readback 验证的是实际字节/父树/身份，不是仅比较 descriptor
+   自报值；清理按原批准 exact SHA，来源不明或仍有未收敛写入则保留。必需验收：
+   预计算与物化字节/SHA 一致；批准前无 commit 对象；额度耗尽不生成对象；合法空
+   genesis 可读且首 acquire 为其单父子提交；非 genesis 空树/源码祖先/任意 source
+   ref 或 payload 拒绝；两端 bootstrap 竞争/中断只读恢复不重复计数、不改变 verdict；
+   正常 acquire 不隐式 bootstrap，源 fixture 不被当成 control genesis 或业务 record。
 
 ## 7. 施工顺序与最小证据
 
