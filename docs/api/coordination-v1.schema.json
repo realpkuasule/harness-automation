@@ -38,12 +38,33 @@
         "proofHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
       }
     },
+    "integration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pullRequestNumber", "pullRequestId", "integratedSourceHead", "integratedCommit", "headRef", "headRepositoryId", "baseRef", "baseRepositoryId", "mergedAt", "observedAt", "observer", "hostId", "credentialBindingHash", "evidenceHash"],
+      "properties": {
+        "pullRequestNumber": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "pullRequestId": { "type": "string", "minLength": 1 },
+        "integratedSourceHead": { "type": "string", "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" },
+        "integratedCommit": { "type": "string", "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" },
+        "headRef": { "type": "string", "minLength": 1 },
+        "headRepositoryId": { "type": "string", "minLength": 1 },
+        "baseRef": { "type": "string", "minLength": 1 },
+        "baseRepositoryId": { "type": "string", "minLength": 1 },
+        "mergedAt": { "type": "string", "format": "date-time" },
+        "observedAt": { "type": "string", "minLength": 1 },
+        "observer": { "type": "string", "minLength": 1 },
+        "hostId": { "type": "string", "minLength": 1 },
+        "credentialBindingHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "evidenceHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
     "closeOwnerGeneration": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
     "transactionId": { "type": "string", "minLength": 1 },
     "recordHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
   },
   "$comment": "Runtime additionally enforces Git branch syntax, control-character and text-size limits, work-item/repository identity, safe issue numbers, canonical recordHash, ordered timestamps, renewal transaction/expiry consistency, and matching terminal closeOwnerGeneration. Shape validation alone does not prove ownership, authorization, or server time.",
   "allOf": [
+    { "if": { "properties": { "lifecycleState": { "const": "Integrated" } } }, "then": { "required": ["integration"] } },
     {
       "if": { "properties": { "lifecycleState": { "enum": ["Integrated", "Closing", "Closed", "Abandoned"] } } },
       "then": { "required": ["closeOwnerGeneration"], "properties": { "expiresAt": { "type": "null" } }, "not": { "anyOf": [{ "required": ["renewal"] }, { "required": ["renewalConfirmation"] }] } },

@@ -15,6 +15,23 @@ export interface RenewalProof {
   proofHash: string;
 }
 
+export interface MergeEvidence {
+  pullRequestNumber: number;
+  pullRequestId: string;
+  integratedSourceHead: string;
+  integratedCommit: string;
+  headRef: string;
+  headRepositoryId: string;
+  baseRef: string;
+  baseRepositoryId: string;
+  mergedAt: string;
+  observedAt: string;
+  observer: string;
+  hostId: string;
+  credentialBindingHash: string;
+  evidenceHash: string;
+}
+
 export interface CoordinationRecord {
   schemaVersion: typeof COORDINATION_SCHEMA_VERSION;
   repository: string;
@@ -33,6 +50,7 @@ export interface CoordinationRecord {
   lifecycleState: CoordinationLifecycle;
   renewal?: { transactionId: string; proposedExpiresAt: string; reservedAt: string };
   renewalConfirmation?: RenewalProof;
+  integration?: MergeEvidence;
   closeOwnerGeneration?: number;
   transactionId: string;
   recordHash: string;

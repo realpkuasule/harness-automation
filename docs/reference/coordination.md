@@ -30,5 +30,15 @@ now require these bounds; pending renewal retains the old expiry and grants no
 write permission. Renewal stores a timely readback proof before confirming its
 new expiry without changing generation. A confirmation may finish after the old
 expiry only with that prior proof, before the proposed expiry, and against the
-same exact reservation. Provider clock/CLI assembly and the full handoff protocol
+same exact reservation. Production CLI assembly and the full handoff protocol
 are still pending; LOCAL handler tests do not constitute LIVE lease qualification.
+
+The GitHub read adapter now uses the approved native credential binding and fixed
+Broker-authenticated GETs for server Date and PR merge facts. Terminal claim takes
+a PR number and explicit target branch, not a caller-supplied merge SHA/JSON proof.
+It checks the PR's merged state, exact source head/ref/repository ID and target
+ref/repository ID before CAS. An unchanged expired generation may be terminated;
+drifted ownership cannot. `lastObservedHead` stays the source commit; the separate
+`integration` evidence records the merge commit, provider observation and binding.
+This transition grants no write or cleanup authority. Synthetic native-command
+tests validate the code path, not real Keychain/GitHub access or production readiness.

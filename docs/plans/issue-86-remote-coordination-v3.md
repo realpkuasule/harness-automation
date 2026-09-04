@@ -53,6 +53,14 @@ credentials/approval/receipt 域补齐下列窄实现，不引入 Provider 平�
   因注册获得 worktree 权限。绑定变更须重新批准，不能修改旧 strict schema 或让
   项目 JSON、环境变量、任意配置路径自行提供 resolver/批准。
   本机状态使用安全路径、拒绝 symlink、owner-only 权限；无 receipt 的手写文件不生效。
+- **machine 身份**：采用仓库外固定本机用户状态目录中的随机安装 UUID，hostname
+  仅作显示标签；repo ID、canonical common-dir/workspace 另行校验，不以同 hostname
+  和路径推断同机器。首次凭据注册 plan 在无既有身份时生成候选 UUID，纳入同一个
+  显式批准及 apply 原子落盘；已有 ID 则复用，不另起一轮初始化审批。普通读取绝不
+  自动生成身份；每次从固定本机位置读取并与新 v3 凭据绑定/回执核对，不采信项目
+  JSON 或 CLI 参数自报。ID 丢失/更换须显式恢复绑定，新机器不能复制旧 ID；它不是
+  物理机器证明，不宣称抵抗同权限者复制整套状态。旧 worktree binding strict schema
+  不变。本轮仅编写实现，不执行本机安装 ID/凭据登记或生产启用。
 - **可执行注册与装配**：实现只含非秘密输入的绑定 plan/apply 入口，复用既有
   semantic plan、显式人工批准及 receipt 持久化；注册/变更是人类门，不依赖待注册
   凭据或未启用 Reviewer 来批准自身。CLI 自动装配固定 loader → OS resolver →
@@ -109,7 +117,7 @@ Provider adapter 的证据，以及未注册、错用途、伪造批准、secret
 |---|---|
 | `repository`、`repositoryId`、`workItem` | canonical 名称和不可变 Provider ID；跨仓库、大小写/别名归一化后仍须映射一致 |
 | `branch`、`sourceRepositoryId` | 交付分支和实际 head 仓库；支持 fork 身份分离，不把内部协调 ref 当交付分支 |
-| `owner`、`machine`、`sessionRef` | owner/机器来自已验证身份及 host binding；sessionRef 可选、不透明，不授予权限 |
+| `owner`、`machine`、`sessionRef` | owner 来自已验证身份，machine 使用 §2.1 受信安装 UUID 而非 hostname；sessionRef 可选、不透明，不授予权限 |
 | `generation`、`controlEpochDigest` | generation 为正安全整数；fencing token 绑定该代及身份，不另造不一致计数器；epoch 为当前协议/mode/policy/config 的同一个 digest |
 | `createdAt`、`expiresAt`、`lastObservedHead` | Provider 时间语义、exact source SHA；terminal 形态 `expiresAt=null`，不以超远未来冒充无 TTL |
 | `lifecycleState` | 仅成果01 §9.1 的可达子集；不能写入 HandoffPending、Blocked、RecoveryRequired 等附着结果 |
@@ -225,21 +233,68 @@ Reviewer 或生产写资格；无变化观察不追加重复证据。此机制�
 | acquire | Work Item 存在、目标记录不存在、身份/epoch/source Head 正确；一次 CAS 建立唯一 generation，不由本命令提前声明 Prepared |
 | renew | 当前 owner/generation/epoch/Head 与有效时间证据匹配；按 §4 reservation/及时性证明/confirmation 完成远端确认后才更新缓存；generation 不变 |
 | rebind | 当前代主写者、目标 session/workspace/source Head 经事实验证；先 CAS 再缓存；generation 不变；变动使旧绑定证据失效 |
-| transfer | 旧 owner 先冻结受管写入，冻结信息绑定权威记录；完成下述零损失快照后，一次 CAS 同时替换 owner/machine 并 generation+1，不能先释放再竞抢 |
+| transfer | 源端冻结、发布零损失事实后，目标端 accept-transfer 以一次 exact CAS 同时替换 owner/machine 并 generation+1，保留原 expiresAt；不能先释放再竞抢 |
 | takeover/recover | 无法证明普通 transfer 时，只接受绑定当前/新 owner、expected generation/Head/epoch、资产风险和范围的显式人类批准；一次 CAS 新代 fencing，保留旧资产和风险回执 |
 | terminal claim | 可信 Provider exact merge 事实绑定 integratedSourceHead/integratedCommit/身份；匹配当前 generation/epoch 时 CAS 到 Integrated 无写权限形态，固定 closeOwnerGeneration、无 TTL |
 
-冻结/交接 pending 信息是同一协调记录的结构化操作数据，不是第二生命周期。
-零损失快照必须在冻结后读取：canonical 旧 Worktree、exact HEAD、tracked clean、
-untracked/ignored 清单及处理依据、unique/unpushed 为零、远端 source SHA，以及
-目标机器确实取回该 SHA 的证据。旧机器离线/证据缺失/路径或 Head 漂移，保持
-`HandoffPending + Blocked`；不能将客户端自报布尔值当快照。失败不自动解冻旧客户端；
-恢复须重验冻结记录、身份和当前代。旧机器回来只能救援审计，不能自动 push/cherry-pick。
+跨机器交接通过同一远端 record 的窄操作数据完成，不要求源 CLI 访问目标机器目录：
+
+1. 源 owner CAS freeze，绑定 transferId、target owner/machine、source Head、
+   generation/epoch；冻结期间普通写、renew、rebind 拒绝。排空受管在途写入后实际
+   采集 canonical 源 Worktree、exact HEAD、tracked clean、untracked/ignored 清单
+   及处理依据、unique/unpushed 为零和远端 exact Head，再以同代 CAS 附加规范化
+   source facts 及其 hash；不能只存一个无法核验的 hash，也不接受 CLI JSON 自报。
+2. 目标 host 用自身受信 Broker/安装身份读取并验证 freeze/source facts，在本机
+   真实 fetch exact source SHA、核验目标工作区并重验远端 source Head。只有与
+   freeze 指定目标匹配的 accept-transfer 可完成交接；它不是提前获得普通 owner 权。
+3. 目标端以绑定当前 source-proof recordHash 的最后一次 exact CAS 换代，附 target
+   retrieval evidence，拒绝覆盖 takeover、terminal 或任何漂移。新代继承原
+   expiresAt，不在 transfer 中发放新 TTL；只有 CAS/readback 后仍可证明未到期才
+   获得写资格，后续延长走 §4 的 renew。迟到 CAS 留下过期新代也不恢复写权。
+
+这些 pending 阶段不是 lifecycleState；`HandoffPending` 仍为附着结果。各阶段复用
+同一 transferId 和既有 receipt 链，分别绑定 phase/candidate SHA，不另建交接账本。
+旧机器离线、证据缺失、到期或路径/Head 漂移时保持阻断，按已有显式 recovery/takeover
+门处理；失败不自动解冻，unknown outcome 按 §4 恢复。保留源 Worktree 与原资产；
+旧机器回来只能救援审计，不能自动 push/cherry-pick。排空/冻结只保证受管写入协调，
+不宣称阻止用户绕过 Harness 修改文件；不增加 SSH、后台或第二后端。
 
 terminal claim 即使原租约过期也可建立，但必须证明没有新 generation/epoch 取代它；
 建立失败保持 `Integrated + RecoveryRequired`。它禁止 renew/transfer/new push/重新开发，
 只承载后续安全快照及 Closing 责任；本 wave 不签发 cleanup token、不删除交付资产。
 该路径不能仅凭 CLI 参数或 ancestry 认定 merge；无可信 merge 证据时阻断。
+
+### 5.1 Drain 的锁边界与后续会话接入
+
+复用 `recovery.acquireMutationLock/releaseMutationLock` 的
+`<common-dir>/harness/worktree-delivery/apply.lock`；worktree Apply 已使用同一路径。
+`requireMutationAllowed` 的恢复检查不能替代远端 freeze/租约检查。锁仅覆盖参与者，
+成功取得锁不等于所有 Agent、编辑器或后台进程都已停止写文件。
+
+#86 提供窄的锁内校验接口（例如 `assertManagedWriteAllowedLocked`），由实际持锁的
+受管写入口调用：重验当前远端 owner/安装 ID、Head、generation/epoch、时间和冻结
+状态，覆盖从授权到实际写入及子进程结束的整个操作。独立入口可用薄 wrapper 取得
+同一把锁；已有 `applyWorkspacePlan` 等锁拥有者只调用锁内版本，禁止外层再加一次
+锁。锁忙或遗留锁不算 drained，不自动删除；不为此建立第二锁、在途计数后台或账本。
+
+源端在此锁下重验授权、CAS freeze，再重读 frozen record、核验写入覆盖/停稳证据、
+采集 source facts 并发布 source proof，最后释放锁；已分阶段 freeze 的恢复同样先
+取得该锁并验证同一 transferId。等待中的已接入写者获锁后必须重验冻结，不能复用
+入队前或会话开始时的许可。所有步骤有界；不持本机锁等待目标机器 accept。
+
+已读基线 `6059146` 与冻结 #87 `77799b83` 的边界：worktree Apply 参与共享锁；
+#87 Local-only session handoff 参与此锁，GitHub handoff 路径尚未覆盖；session
+admission 是 `managed-commands-only` 的准入记录，不是运行中写者登记或 drain
+证明。#87 接入时应在真实 mutation 边界调用上述接口，不能因为本地 admission
+fingerprint 未变就复用旧 `managedWriteAllowed`；只在 pre-write hook 检查后释放锁、
+而实际操作尚未完成，也不能证明 drain。本轮不修改冻结 #87 分支。
+
+source proof 必须绑定 freeze/transferId、common-dir/Work Item、实际覆盖的入口及
+观察器版本、快照和可验证的宿主停稳证据；不接受 CLI 自报 `drained=true`。
+#86 可独立证明已接入 CLI/受控资格 fixture 的排空，不能据此声称覆盖未接入的 Agent
+工具、直接文件修改或 background build。生产源写者覆盖无法证明时，不发布完整
+零损失 source proof，保持 `HandoffPending + Blocked` 或走已批准的显式 takeover；
+不虚构宿主已暂停。隔离 fixture 的证明不得转为生产覆盖资格，凭据/生产采用门不变。
 
 ## 6. 可调用入口及资格门
 
@@ -273,13 +328,14 @@ transfer、takeover、terminal-claim 的命令路由；复用同一生产用例�
 
 | 证据组 | 正向及必需负面对照 |
 |---|---|
-| 身份/范围 | 正确 actor/repository/credentialRef 成功；wrong ID、fork/source 映射错、endpoint rewrite、多 pushurl、secret 泄露和隐式凭据继承被拒 |
+| 身份/范围 | 正确 actor/repository/credentialRef 成功；同 hostname/路径但不同安装 UUID 不混同，普通读取不生成 ID；wrong ID、fork/source 映射错、endpoint rewrite、多 pushurl、secret 泄露和隐式凭据继承被拒 |
 | CAS/唯一主写 | 两个进程首次 acquire 只有一个赢家；stale expected SHA/generation/owner/Head/epoch/recordHash 逐项拒绝；其他 Work Item 的记录不丢失 |
 | 对象/历史 | 无 checkout；未知路径/模式、symlink、截断与读取失败不当 absent；拒绝源码祖先、断链和中间未知版本；冷缓存可分段恢复，超过单批预算的合法长链可完成，检查点不授予写权限 |
 | 时间/renew | 有效窗口 renew 不增代；到期边界、秒级 Date、往返延迟、陈旧/缺失/倒退样本、本机时间跳变、休眠和超时不能延长授权 |
 | 迟到 renew/跨进程 | 旧到期后 reservation 才落远端、发起进程退出、新进程读取时无同代写权；及时证明后的确认可恢复，但与 takeover/terminal 竞争必须拒绝旧确认，未确认拟延长期限永不授权 |
 | 缓存/恢复 | 删缓存不删远端事实；CAS 后崩溃按 exact candidate/合法历史恢复原事务，ref 推进或新代取代不重复转换；同 transactionId 内容漂移、unknown outcome、401/403/5xx、复读旧 SHA 不报告成功 |
-| transfer/takeover | 双机器/独立 clone 取回 exact Head 后单 CAS 换代；dirty/untracked/ignored/unique/unpushed/离线/资产批准漂移逐项阻断；旧代永不重新授权 |
+| transfer/takeover | 目标端实际取回 exact Head 后单 CAS 换代并保留原 expiresAt；冻结期间写/renew/rebind、伪造 source facts/target 身份、迟到 accept 授权均拒绝；dirty/untracked/ignored/unique/unpushed/离线/资产批准漂移逐项阻断，旧代不重新授权 |
+| drain/接入 | 同锁在途写者未结束不发布 source proof；获锁后的排队写者拒绝 frozen 状态；缓存 admission 不越过新 freeze；未接入入口/缺宿主停稳证据不报告完整 drained，不嵌套获取既有 Apply 锁 |
 | terminal | 有效 exact merge 可在租约过期后终结；新代/epoch/身份漂移拒绝；claim 无 TTL 无写权，不产生 cleanup token、不删 Branch/Worktree |
 | CLI/安全面 | 正常入口真实进入用例；无配置/资格/启用授权零 mutation；未知字段/伪造审批/伪造 merge 证据拒绝；safe-mode 只读恢复观察仍可用 |
 

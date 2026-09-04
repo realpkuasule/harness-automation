@@ -8,6 +8,11 @@ const sha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
 const generation = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const repository = z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u);
 const timestamp = z.string().datetime();
+const mergeEvidenceSchema = z.object({
+  pullRequestNumber: generation, pullRequestId: text, integratedSourceHead: sha, integratedCommit: sha,
+  headRef: text, headRepositoryId: text, baseRef: text, baseRepositoryId: text,
+  mergedAt: timestamp, observedAt: text, observer: text, hostId: text, credentialBindingHash: digest, evidenceHash: digest,
+}).strict();
 const renewalProofSchema = z.object({
   transactionId: text, reservationControlSha: sha, reservationRecordHash: digest,
   oldExpiresAt: timestamp, proposedExpiresAt: timestamp, serverDate: text,
@@ -33,6 +38,7 @@ export const coordinationRecordSchema = z.object({
   lifecycleState: z.enum(["Admitted", "Prepared", "Active", "Draft", "Ready", "MergeArmed", "Integrated", "Closing", "Closed", "Abandoned"]),
   renewal: z.object({ transactionId: text, proposedExpiresAt: timestamp, reservedAt: timestamp }).strict().optional(),
   renewalConfirmation: renewalProofSchema.optional(),
+  integration: mergeEvidenceSchema.optional(),
   closeOwnerGeneration: generation.optional(), transactionId: text, recordHash: digest,
 }).strict();
 
@@ -44,14 +50,21 @@ export function validRecord(input: unknown): input is CoordinationRecord {
   if (!parsed.success) return false;
   const record = parsed.data;
   const terminal = ["Integrated", "Closing", "Closed", "Abandoned"].includes(record.lifecycleState);
+  const integration = record.integration;
   return record.workItem.startsWith(`github:${record.repository}#`) &&
     Number.isSafeInteger(Number(record.workItem.split("#")[1])) &&
+    (record.lifecycleState !== "Integrated" || integration !== undefined) &&
     (terminal ? record.expiresAt === null && record.closeOwnerGeneration === record.generation && !record.renewal
       : record.expiresAt !== null && Date.parse(record.expiresAt) > Date.parse(record.createdAt) && record.closeOwnerGeneration === undefined) &&
     (!record.renewal || record.expiresAt !== null && record.renewal.transactionId === record.transactionId &&
       Date.parse(record.renewal.reservedAt) >= Date.parse(record.createdAt) && Date.parse(record.renewal.reservedAt) < Date.parse(record.expiresAt) &&
       Date.parse(record.renewal.proposedExpiresAt) > Date.parse(record.expiresAt)) &&
     (!record.renewalConfirmation || validRenewalProof(record.renewalConfirmation) && record.renewalConfirmation.proposedExpiresAt === record.expiresAt) &&
+    (!integration || terminal && integration.integratedSourceHead === record.lastObservedHead &&
+      integration.headRef === record.branch && integration.headRepositoryId === record.sourceRepositoryId &&
+      integration.baseRepositoryId === record.repositoryId && integration.observer === record.owner && integration.hostId === record.machine &&
+      Number.isFinite(Date.parse(integration.observedAt)) && new Date(integration.observedAt).toUTCString() === integration.observedAt &&
+      integration.evidenceHash === hashObject({ ...integration, evidenceHash: undefined })) &&
     record.recordHash === hashObject(recordWithoutHash(record));
 }
 export function createCoordinationRecord(input: Omit<CoordinationRecord, "schemaVersion" | "recordHash">): CoordinationRecord {

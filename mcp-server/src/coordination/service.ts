@@ -8,6 +8,7 @@ import { assertExpected, createCoordinationRecord, expectedRecord, recordWithout
 import { GitCoordinationStore } from "./store.js";
 import { CoordinationClock } from "./clock.js";
 import { confirmRenewal, nextLease, observeRenewal, rebindLease, requireWriteLease, reserveRenewal } from "./leases.js";
+import type { GitHubCoordinationReader } from "./github.js";
 export { assertExpected, createCoordinationRecord } from "./record.js";
 export { GitCoordinationStore } from "./store.js";
 export { confirmRenewal, nextLease, observeRenewal, rebindLease, reserveRenewal } from "./leases.js";
@@ -59,13 +60,6 @@ export function requireEnabledCoordination(root: string): CoordinationConfig {
   fail("CREDENTIAL_TRANSPORT_HELPER_REQUIRED");
 }
 
-export function terminalClaim(record: CoordinationRecord, expected: CoordinationExpected, integratedHead: string, transactionId = randomUUID()): CoordinationRecord {
-  assertExpected(record, expected);
-  if (!SHA.test(integratedHead) || record.lifecycleState === "Integrated" || record.lifecycleState === "Closing" || record.lifecycleState === "Closed" || record.lifecycleState === "Abandoned") fail("COORDINATION_TERMINAL_CLAIM_INVALID");
-  const next = recordWithoutHash(record); delete next.renewal; delete next.renewalConfirmation;
-  return createCoordinationRecord({ ...next, lastObservedHead: integratedHead, lifecycleState: "Integrated", expiresAt: null, closeOwnerGeneration: record.generation, transactionId });
-}
-
 export interface ZeroLossTransferEvidence {
   sourceHead: string;
   remoteHead: string;
@@ -101,7 +95,7 @@ export function transferLease(record: CoordinationRecord, expected: Coordination
 
 /** Shared lifecycle composition: CLI and isolated qualification fixtures use these exact CAS paths. */
 export class CoordinationLifecycleService {
-  constructor(private readonly store: GitCoordinationStore, private readonly refreshClock: () => CoordinationClock) {}
+  constructor(private readonly store: GitCoordinationStore, private readonly refreshClock: () => CoordinationClock, private readonly provider?: GitHubCoordinationReader) {}
   acquire(input: Parameters<typeof nextLease>[0]): CoordinationRecord {
     const current = this.store.read(input.workItem);
     if (current.record) fail("COORDINATION_ALREADY_ACQUIRED");
@@ -118,9 +112,15 @@ export class CoordinationLifecycleService {
     const next = transferLease(current.record, expected, target, evidence, this.refreshClock());
     return this.confirm(this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next }));
   }
-  terminalClaim(workItem: string, expected: CoordinationExpected, integratedHead: string): CoordinationRecord {
+  terminalClaim(workItem: string, expected: CoordinationExpected, number: number, baseRef: string): CoordinationRecord {
+    if (!this.provider) fail("COORDINATION_MERGE_OBSERVER_REQUIRED");
     const current = this.store.read(workItem); if (!current.record) fail("COORDINATION_RECORD_ABSENT");
-    const next = terminalClaim(current.record, expected, integratedHead);
+    assertExpected(current.record, expected);
+    if (current.record.expiresAt === null) fail("COORDINATION_TERMINAL_CLAIM_INVALID");
+    const integration = this.provider.observeMerge(current.record, number, baseRef);
+    const content = recordWithoutHash(current.record); delete content.renewal; delete content.renewalConfirmation;
+    const next = createCoordinationRecord({ ...content, integration, lifecycleState: "Integrated", expiresAt: null,
+      closeOwnerGeneration: current.record.generation, transactionId: randomUUID() });
     return this.confirm(this.store.compareAndSwap({ workItem, expectedControlSha: current.controlSha, expected, next }));
   }
   renew(workItem: string, expected: CoordinationExpected, ttlMs: number): CoordinationRecord {

@@ -47,11 +47,16 @@ function credentialEnv(ref: CredentialRef, secret: string): NodeJS.ProcessEnv {
     ? {
         GIT_TERMINAL_PROMPT: "0",
         GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_COUNT: "2",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_COUNT: "4",
         GIT_CONFIG_KEY_0: "credential.helper",
         GIT_CONFIG_VALUE_0: "",
         GIT_CONFIG_KEY_1: "http.https://github.com/.extraheader",
         GIT_CONFIG_VALUE_1: `Authorization: Basic ${Buffer.from(`x-access-token:${secret}`, "utf8").toString("base64")}`,
+        GIT_CONFIG_KEY_2: "http.followRedirects",
+        GIT_CONFIG_VALUE_2: "false",
+        GIT_CONFIG_KEY_3: "core.hooksPath",
+        GIT_CONFIG_VALUE_3: "/dev/null",
       }
     : {};
   return {
@@ -72,7 +77,7 @@ function fixedProbe(ref: CredentialRef, env: NodeJS.ProcessEnv, requiredCapabili
   // Git and API retain distinct refs, but share one fixed, explicitly authenticated probe.
   const probeEnv = { PATH: env.PATH, CI: "1", GH_TOKEN: env[ref.envVar] };
   const request = (endpoint: string): unknown => {
-    const result = spawnSync("gh", ["api", "-i", "--method", "GET", endpoint], { env: probeEnv, encoding: "utf8", timeout: 10_000, maxBuffer: 1024 * 1024 });
+    const result = spawnSync("gh", ["api", "--hostname", "github.com", "-i", "--method", "GET", endpoint], { env: probeEnv, encoding: "utf8", timeout: 10_000, maxBuffer: 1024 * 1024 });
     if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") throw new Error("ENVIRONMENT_BLOCKED: CREDENTIAL_PROBE_UNAVAILABLE");
     const status = statusFromOutput(result.stdout ?? "");
     if (status === 401 || status === 403) throw new Error("CREDENTIAL_ACCESS_DENIED");

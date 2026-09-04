@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CoordinationLifecycleService, GitCoordinationStore, confirmRenewal, coordinationStatus, nextLease, observeRenewal, observeZeroLossTransfer, reserveRenewal, terminalClaim, transferLease } from "./service.js";
+import { CoordinationLifecycleService, GitCoordinationStore, confirmRenewal, coordinationStatus, nextLease, observeRenewal, observeZeroLossTransfer, reserveRenewal, transferLease } from "./service.js";
 import { createCoordinationRecord, expectedRecord } from "./record.js";
 import { CoordinationClock } from "./clock.js";
 import { localHistory, localTransport } from "./__fixtures__/transport.js";
@@ -22,6 +22,14 @@ function lease(workItem = "github:owner/repo#1") { return nextLease({ repository
 afterEach(() => { while (paths.length) rmSync(paths.pop()!, { recursive: true, force: true }); });
 
 describe("GitCoordinationStore", { timeout: 20_000 }, () => {
+  it("refuses terminal claims without an authenticated merge observer", () => {
+    const { store } = fixture(); const first = lease();
+    store.compareAndSwap({ workItem: first.workItem, expectedControlSha: null, expected: {}, next: first });
+    const before = store.read(first.workItem).controlSha;
+    const lifecycle = new CoordinationLifecycleService(store, sampleClock);
+    expect(() => lifecycle.terminalClaim(first.workItem, expectedRecord(first), "c".repeat(40) as never, "main")).toThrow("COORDINATION_MERGE_OBSERVER_REQUIRED");
+    expect(store.read(first.workItem).controlSha).toBe(before);
+  });
   it("refuses an expired lease in the actual rebind handler before a remote mutation", () => {
     const { store } = fixture();
     const expired = createCoordinationRecord({ ...lease(), createdAt: "2020-01-01T00:00:00.000Z", expiresAt: "2020-01-02T00:00:00.000Z" });
@@ -43,11 +51,12 @@ describe("GitCoordinationStore", { timeout: 20_000 }, () => {
     expect(() => store.compareAndSwap({ workItem: first.workItem, expectedControlSha: before.controlSha, expected: { generation: 2 }, next: lease(first.workItem) })).toThrow("COORDINATION_CAS_CONFLICT");
   });
 
-  it("uses one real lifecycle handler for acquire, rebind, and terminal CAS", () => {
+  it("uses one real lifecycle handler for acquire and rebind CAS", () => {
     const { store } = fixture(); const lifecycle = new CoordinationLifecycleService(store, sampleClock); const input = { repository: "owner/repo", repositoryId: "R_1", workItem: "github:owner/repo#9", branch: "codex/test", sourceRepositoryId: "R_1", owner: "octo", machine: "machine-a", controlEpochDigest: "a".repeat(64), head: "b".repeat(40), ttlMs: 86_400_000, transactionId: "lifecycle" };
     const acquired = lifecycle.acquire(input); const expected = expectedRecord(acquired);
     const rebound = lifecycle.rebind(acquired.workItem, expected, "opaque", acquired.lastObservedHead);
-    expect(lifecycle.terminalClaim(acquired.workItem, { ...expected, recordHash: rebound.recordHash }, "c".repeat(40)).expiresAt).toBeNull();
+    expect(rebound.sessionRef).toBe("opaque");
+    expect(store.read(acquired.workItem).record?.recordHash).toBe(rebound.recordHash);
   });
 
   it("reports unconfigured status and refuses production mutation", () => {
@@ -64,7 +73,6 @@ describe("GitCoordinationStore", { timeout: 20_000 }, () => {
     const renewed = confirmRenewal(pending, expectedRecord(pending), proof, late);
     expect(renewed.expiresAt).toBe("2026-09-06T04:00:00.000Z");
     expect(renewed.renewalConfirmation).toEqual(proof); expect(renewed.generation).toBe(first.generation);
-    expect(terminalClaim(renewed, expectedRecord(renewed), "c".repeat(40)).expiresAt).toBeNull();
     const replaced = createCoordinationRecord({ ...pending, generation: 2, owner: "another" });
     expect(() => confirmRenewal(replaced, expectedRecord(replaced), proof, late)).toThrow("COORDINATION_RENEWAL_TIME_UNPROVEN");
     expect(() => confirmRenewal(pending, expectedRecord(pending), { ...proof, observedUpperBoundAt: pending.expiresAt! }, late)).toThrow("COORDINATION_RENEWAL_TIME_UNPROVEN");
