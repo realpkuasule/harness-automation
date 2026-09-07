@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 
-const packageRoot = resolve(new URL("..", import.meta.url).pathname);
-const sourceRoot = resolve(packageRoot, "..");
+const sourceRoot = resolve(new URL("..", import.meta.url).pathname);
+const packageRoot = resolve(sourceRoot, "mcp-server");
 const selfTest = process.argv.includes("--self-test");
 if (!selfTest && execFileSync("git", ["-C", sourceRoot, "status", "--porcelain"], { encoding: "utf8" }) !== "") {
   throw new Error("PROTECTION_FAULT_SOURCE_NOT_CLEAN");

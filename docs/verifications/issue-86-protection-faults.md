@@ -1,6 +1,6 @@
 # Issue #86 protection-fault verification
 
-Run `node mcp-server/scripts/verify-protection-faults.mjs` only from a clean
+Run `node scripts/verify-protection-faults.mjs` only from a clean
 candidate commit. It copies the package into a fresh temporary directory,
 removes Harness state, uses an empty HOME and offline dependencies, then runs
 baseline → one mechanical fault → restored for every listed case.
