@@ -23,6 +23,7 @@ const cases = [
   ["write-budget", "src/approval/human.ts", "if (used >= (cleanup ? scope.maxCleanupAttempts : ordinaryLimit(scope, \"maxWriteAttempts\"))) throw new Error(\"HUMAN_WRITE_BUDGET_EXHAUSTED\");", "if (used > (cleanup ? scope.maxCleanupAttempts : ordinaryLimit(scope, \"maxWriteAttempts\"))) throw new Error(\"HUMAN_WRITE_BUDGET_EXHAUSTED\");", "src/approval/human.test.ts", "counts rejection/unknown outcomes, refuses replay, and preserves separate cleanup allowance", "AssertionError: expected [Function] to throw an error"],
   ["writes-closed", "src/approval/human.ts", "if (!state.writesClosed) append(commonDir, state.approval.packet, { kind: \"qualification-writes-closed\", runId: scope.runId, manifest: scope.manifest });", "if (false) append(commonDir, state.approval.packet, { kind: \"qualification-writes-closed\", runId: scope.runId, manifest: scope.manifest });", "src/coordination/manifest.test.ts", "closes ordinary writes durably and idempotently, allowing facts but neither dispatch nor unverified cleanup", "AssertionError: expected {"],
   ["local-assets", "src/worktree/qualification.ts", "readdirSync(resource.path).some((name) => name !== \".git\")", "false", "src/approval/human_resources.test.ts", "shares real worktree path protection, capacity and audit without creating a fixture or a Delivery lease", "AssertionError: expected [Function] to throw an error"],
+  ["copied-private-handle", "src/coordination/publication.ts", ["const preparations = new WeakMap<SyntheticPreparation, Prepared>();", "const prepared = preparations.get(handle);"], ["const preparations = new Map<SyntheticPreparation, Prepared>();", "const prepared = preparations.get(handle) ?? [...preparations.values()][0];"], "src/coordination/publication.test.ts", "prepares without an attempt or held lock, refuses copied/reused handles, and still lets Git classify a later same-SHA no-op", "AssertionError: expected [Function] to throw an error"],
 ];
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const run = (command, args, cwd, env) => {
@@ -54,15 +55,16 @@ try {
       return { ...execution, report: targetResult(reportPath, testName) };
     };
     const clean = invoke("baseline");
-    const patchApplied = original.includes(before) && original.indexOf(before) === original.lastIndexOf(before);
-    if (patchApplied) writeFileSync(target, original.replace(before, after));
+    const beforeParts = Array.isArray(before) ? before : [before]; const afterParts = Array.isArray(after) ? after : [after];
+    const patchApplied = beforeParts.length === afterParts.length && beforeParts.every((value) => original.includes(value) && original.indexOf(value) === original.lastIndexOf(value));
+    if (patchApplied) writeFileSync(target, beforeParts.reduce((source, value, index) => source.replace(value, afterParts[index]), original));
     const mutant = patchApplied ? invoke("mutant") : null;
     writeFileSync(target, original);
     const restored = invoke("restored");
     const passedTarget = (result) => result?.report?.matches?.length === 1 && result.report.matches[0].status === "passed" && result.report.report.numFailedTests === 0;
     const failedTarget = mutant?.error === null && mutant.signal === null && mutant.exitCode === 1 && mutant?.report?.matches?.length === 1 && mutant.report.matches[0].status === "failed" && mutant.report.report.numFailedTests === 1 && mutant.report.matches[0].failureMessages.some((message) => message.startsWith(expectedAssertion));
     const classification = !patchApplied ? "invalid-injection" : !passedTarget(clean) || !passedTarget(restored) ? "unable-to-execute" : failedTarget ? "correctly-caught" : mutant?.exitCode ? "unrelated-failure" : "survived";
-    evidence.push({ id, sourceSha, path, beforeSha256: hash(original), patchSha256: hash(`${before}\n${after}`), testFile, testName, expectedAssertion, patchApplied, clean: { ...clean, output: undefined }, mutant: mutant && { ...mutant, output: undefined }, restored: { ...restored, output: undefined }, classification });
+    evidence.push({ id, sourceSha, path, beforeSha256: hash(original), patchSha256: hash(JSON.stringify({ before, after })), testFile, testName, expectedAssertion, patchApplied, clean: { ...clean, output: undefined }, mutant: mutant && { ...mutant, output: undefined }, restored: { ...restored, output: undefined }, classification });
   }
   const report = { schemaVersion: "protection-fault-report/1", sourceSha, cases: evidence };
   process.stdout.write(`${JSON.stringify({ ...report, reportSha256: hash(JSON.stringify(report)) }, null, 2)}\n`);
