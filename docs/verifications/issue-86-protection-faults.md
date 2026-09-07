@@ -26,10 +26,4 @@ failed test is not a caught protection.
 | W-06, W-13 | canonical local path, empty assets and stable directory identity (`local-canonical-path`, `local-assets`, `local-directory-identity`) | local-resource assertions fail at their declared locations, with primary assets still preserved |
 
 The structured report, rather than this table, is the source of case-level evidence: it records the exact source SHA,
-patch hash, test ID, assertion location, baseline/mutant/restored commands and sanitized output hashes.
-
-The current bounded matrix covers actor identity, expiry, exact old-SHA CAS,
-stale owner, one-shot dispatch, preservation of another Work Item, and exact
-remote-delete output. Local resource ownership/asset and unknown-result replay
-remain covered by their focused native tests; do not claim a fault was caught
-until it is added as a similarly reachable single-fault case.
+patch hash, setup and test argv, sanitized execution environment, test ID, assertion location, and output hashes.

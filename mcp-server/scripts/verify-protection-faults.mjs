@@ -31,6 +31,7 @@ const cases = [
   ["unknown-replay", "src/coordination/store.ts", "return this.recoverRecordedCandidate({ ...candidate, recordHash: candidate.record.recordHash });", "this.transport.push(candidate.objectDirectory, candidate.controlSha, candidate.controlRef, candidate.expectedControlSha); return this.recoverRecordedCandidate({ ...candidate, recordHash: candidate.record.recordHash });", "src/coordination/store.test.ts", "preserves an unknown-outcome candidate and recovers by exact history without repeating the push", "AssertionError: expected 1 to be +0", "src/coordination/store.test.ts:59:"],
 ];
 const hash = (value) => createHash("sha256").update(value).digest("hex");
+const executionEnvironment = Object.freeze({ source: "fresh mcp-server package copy", gitMetadata: "excluded", harnessState: "excluded", credentials: "not provided", home: "fresh temporary directory", dependencyInstall: "npm ci --offline --ignore-scripts", ci: "1" });
 const failedTarget = (result, expectedAssertion, expectedFailureLocation) => result?.error === null && result.signal === null && result.exitCode === 1 &&
   result?.report?.matches?.length === 1 && result.report.matches[0].status === "failed" && result.report.report.numFailedTests === 1 &&
   result.report.matches[0].failureMessages.some((message) => message.startsWith(expectedAssertion) && message.includes(expectedFailureLocation));
@@ -60,14 +61,16 @@ try {
     const sandbox = join(root, id);
     cpSync(packageRoot, sandbox, { recursive: true, filter: (entry) => !["node_modules", "dist", ".harness"].includes(basename(entry)) });
     // Dependencies are copied into each sandbox. No source tree, Git metadata, approval receipt, or credential location is shared.
-    execFileSync("npm", ["ci", "--offline", "--ignore-scripts", "--no-audit", "--fund=false"], { cwd: sandbox, env: { PATH: process.env.PATH, HOME: join(root, "home"), NPM_CONFIG_USERCONFIG: "/dev/null", NPM_CONFIG_CACHE: join(process.env.HOME ?? "", ".npm") }, stdio: "pipe" });
+    const npmEnv = { PATH: process.env.PATH, HOME: join(root, "home"), NPM_CONFIG_USERCONFIG: "/dev/null", NPM_CONFIG_CACHE: join(process.env.HOME ?? "", ".npm") };
+    const setupArgv = ["npm", "ci", "--offline", "--ignore-scripts", "--no-audit", "--fund=false"];
+    execFileSync(setupArgv[0], setupArgv.slice(1), { cwd: sandbox, env: npmEnv, stdio: "pipe" });
     const target = join(sandbox, path); const original = readFileSync(target, "utf8");
     const invoke = (phase) => {
       const reportPath = join(sandbox, `${phase}.json`);
       const testPattern = testName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
       const argv = ["./node_modules/.bin/vitest", "run", testFile, "-t", testPattern, "--reporter=json", `--outputFile=${reportPath}`, "--maxWorkers=1"];
       const execution = run(argv[0], argv.slice(1), sandbox, { PATH: process.env.PATH, HOME: join(root, "home"), CI: "1" });
-      return { ...execution, report: targetResult(reportPath, testName) };
+      return { argv, environment: executionEnvironment, ...execution, report: targetResult(reportPath, testName) };
     };
     const clean = invoke("baseline");
     const beforeParts = Array.isArray(before) ? before : [before]; const afterParts = Array.isArray(after) ? after : [after];
@@ -79,9 +82,9 @@ try {
     const passedTarget = (result) => result?.report?.matches?.length === 1 && result.report.matches[0].status === "passed" && result.report.report.numFailedTests === 0;
     const caught = failedTarget(mutant, expectedAssertion, expectedFailureLocation);
     const classification = !patchApplied ? "invalid-injection" : !passedTarget(clean) || !passedTarget(restored) ? "unable-to-execute" : caught ? "correctly-caught" : mutant?.exitCode ? "unrelated-failure" : "survived";
-    evidence.push({ id, sourceSha, path, beforeSha256: hash(original), patchSha256: hash(JSON.stringify({ before, after })), testFile, testName, expectedAssertion, expectedFailureLocation, patchApplied, clean: { ...clean, output: undefined }, mutant: mutant && { ...mutant, output: undefined }, restored: { ...restored, output: undefined }, classification });
+    evidence.push({ id, sourceSha, path, beforeSha256: hash(original), patchSha256: hash(JSON.stringify({ before, after })), setup: { argv: setupArgv, environment: executionEnvironment }, testFile, testName, expectedAssertion, expectedFailureLocation, patchApplied, clean: { ...clean, output: undefined }, mutant: mutant && { ...mutant, output: undefined }, restored: { ...restored, output: undefined }, classification });
   }
-  const report = { schemaVersion: "protection-fault-report/1", sourceSha, cases: evidence };
+  const report = { schemaVersion: "protection-fault-report/1", sourceSha, executionEnvironment, cases: evidence };
   process.stdout.write(`${JSON.stringify({ ...report, reportSha256: hash(JSON.stringify(report)) }, null, 2)}\n`);
   if (evidence.some((item) => item.classification !== "correctly-caught")) process.exitCode = 1;
 } finally {
