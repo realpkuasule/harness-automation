@@ -54,7 +54,9 @@ it("preserves an unknown-outcome candidate and recovers by exact history without
   const uncertain = new GitCoordinationStore(ref, { ...f.transport, push(...args) { writes++; const result = f.transport.push(...args); expect(result.status).toBe(0); return { ...result, status: null, error: "connection interrupted" }; } }, (value) => { candidate = value; f.beforePush(value); }, f.genesis, f.history, () => () => {});
   expect(() => uncertain.compareAndSwap({ workItem: f.record.workItem, expectedControlSha: f.genesis.commitSha, expected: {}, next: f.record })).toThrow("COORDINATION_WRITE_OUTCOME_UNKNOWN");
   expect(candidate).toBeDefined(); roots.push(candidate!.objectDirectory); expect(existsSync(candidate!.objectDirectory)).toBe(true);
-  const recovered = f.store.recover(candidate!); expect(recovered.disposition).toBe("current"); expect(writes).toBe(1);
+  let recoveryWrites = 0;
+  const recovery = new GitCoordinationStore(ref, { ...f.transport, push(...args) { recoveryWrites++; return f.transport.push(...args); } }, () => {}, f.genesis, f.history, () => () => {});
+  const recovered = recovery.recover(candidate!); expect(recovered.disposition).toBe("current"); expect(writes).toBe(1); expect(recoveryWrites).toBe(0);
   const next = createCoordinationRecord({ ...f.record, owner: "another", generation: 2, transactionId: "tx-second" });
   const applied = f.store.compareAndSwap({ workItem: f.record.workItem, expectedControlSha: recovered.current.controlSha, expected: expectedRecord(f.record), next });
   expect(applied.current.record?.generation).toBe(2);
