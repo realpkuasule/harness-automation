@@ -529,24 +529,26 @@ process.stdout.write(JSON.stringify(values[endpoint]));
     write(root, "evals/baseline.json", "{}\n");
     write(root, "evals/fixtures/known-bad.json", "{}\n");
     write(root, "evals/runner-manifest.json", "{}\n");
+    write(root, "evals/run-negative.mjs", `process.stdout.write(JSON.stringify({ schemaVersion: "evaluation-negative-report/1", suiteId: "cli-quality", fixture: "evals/fixtures/known-bad.json", executed: [{ id: "cli-quality", status: "failed" }], failures: [{ assertionId: "cli-quality-gate", category: "known-bad-fixture" }] })); process.exit(1);\n`);
     write(root, "evals/evals.json", JSON.stringify({
-      schemaVersion: "1.1",
+      schemaVersion: "1.2",
       suites: [{
         id: "cli-quality",
         kind: "regression",
         owner: "owner",
         description: "CLI quality regression.",
         command: ["node", "-e", "process.exit(0)"],
-        runnerSources: ["evals/runner-manifest.json"],
+        runnerSources: ["evals/runner-manifest.json", "evals/run-negative.mjs"],
         tasks: ["evals/tasks.jsonl"],
         traceability: [{ requirementId: "PRD-AI-004", ruleIds: ["cli-quality-gate"] }],
         baseline: { origin: "adoption", score: 1, trials: 1, evidence: "evals/baseline.json" },
         target: { metric: "pass-at-1", threshold: 1, trials: 1 },
         graders: [{ id: "tests", kind: "code", role: "gate" }],
         negativeControl: {
-          command: ["node", "-e", "process.exit(1)"],
+          command: ["node", "evals/run-negative.mjs"],
           fixture: "evals/fixtures/known-bad.json",
           expectedExitCode: 1,
+          expectedReport: { testId: "cli-quality", assertionId: "cli-quality-gate", category: "known-bad-fixture" },
         },
       }],
     }));
