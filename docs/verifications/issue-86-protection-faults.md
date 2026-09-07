@@ -5,6 +5,10 @@ candidate commit. It copies the package into a fresh temporary directory,
 removes Harness state, uses an empty HOME and offline dependencies, then runs
 baseline → one mechanical fault → restored for every listed case.
 
+`copied-private-handle` is one structural fault model with two adjacent substitutions: it makes the private
+preparation registry enumerable and then uses that erroneous fallback. A one-line lookup substitution cannot
+obtain a `WeakMap` value and is correctly classified as an unrelated runtime failure instead of coverage.
+
 Each case is valid only when baseline and restored pass and the mutant fails
 the one named test at its predefined assertion prefix and source location. The JSON report records the candidate SHA, exact patch hash,
 argv, structured Vitest result, sanitized execution hashes and one of `correctly-caught`, `survived`,
