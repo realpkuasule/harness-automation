@@ -32,20 +32,40 @@ const cases = [
 ];
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const executionEnvironment = Object.freeze({ source: "fresh mcp-server package copy", gitMetadata: "excluded", harnessState: "excluded", credentials: "not provided", home: "fresh temporary directory", dependencyInstall: "npm ci --offline --ignore-scripts", ci: "1" });
-const failedTarget = (result, expectedAssertion, expectedFailureLocation) => result?.error === null && result.signal === null && result.exitCode === 1 &&
-  result?.report?.matches?.length === 1 && result.report.matches[0].status === "failed" && result.report.report.numFailedTests === 1 &&
+const hasSingleTargetReport = (result) => Array.isArray(result?.report?.matches) && result.report.matches.length === 1 &&
+  typeof result.report.report?.success === "boolean" && typeof result.report.report.numFailedTests === "number";
+const completedTarget = (result) => result?.error === null && result.signal === null && typeof result.exitCode === "number" && hasSingleTargetReport(result);
+const passedTarget = (result) => completedTarget(result) && result.exitCode === 0 && result.report.report.success === true &&
+  result.report.matches[0].status === "passed" && result.report.report.numFailedTests === 0;
+const failedTarget = (result, expectedAssertion, expectedFailureLocation) => completedTarget(result) && result.exitCode === 1 && result.report.report.success === false &&
+  result.report.matches[0].status === "failed" && result.report.report.numFailedTests === 1 &&
+  Array.isArray(result.report.matches[0].failureMessages) &&
   result.report.matches[0].failureMessages.some((message) => message.startsWith(expectedAssertion) && message.includes(expectedFailureLocation));
+const classify = (patchApplied, clean, mutant, restored, expectedAssertion, expectedFailureLocation) => {
+  if (!patchApplied) return "invalid-injection";
+  if (!passedTarget(clean) || !passedTarget(restored) || !completedTarget(mutant)) return "unable-to-execute";
+  if (failedTarget(mutant, expectedAssertion, expectedFailureLocation)) return "correctly-caught";
+  return passedTarget(mutant) ? "survived" : "unrelated-failure";
+};
 if (selfTest) {
-  const sample = { error: null, signal: null, exitCode: 1, report: { matches: [{ status: "failed", failureMessages: ["AssertionError: expected [Function] to throw an error\\n    at src/target.test.ts:10:3"] }], report: { numFailedTests: 1 } } };
-  assert.equal(failedTarget(sample, "AssertionError: expected [Function] to throw an error", "src/target.test.ts:10:"), true);
-  assert.equal(failedTarget(sample, "AssertionError: expected [Function] to throw an error", "src/target.test.ts:11:"), false);
+  const passed = { error: null, signal: null, exitCode: 0, report: { matches: [{ status: "passed", failureMessages: [] }], report: { success: true, numFailedTests: 0 } } };
+  const failed = { error: null, signal: null, exitCode: 1, report: { matches: [{ status: "failed", failureMessages: ["AssertionError: expected [Function] to throw an error\\n    at src/target.test.ts:10:3"] }], report: { success: false, numFailedTests: 1 } } };
+  const assertion = "AssertionError: expected [Function] to throw an error";
+  const location = "src/target.test.ts:10:";
+  assert.equal(passedTarget(passed), true);
+  assert.equal(passedTarget({ ...passed, exitCode: 1 }), false);
+  assert.equal(failedTarget(failed, assertion, location), true);
+  assert.equal(failedTarget(failed, assertion, "src/target.test.ts:11:"), false);
+  assert.equal(classify(true, { ...passed, exitCode: 1 }, failed, passed, assertion, location), "unable-to-execute");
+  assert.equal(classify(true, passed, { ...failed, signal: "SIGTERM", exitCode: null }, passed, assertion, location), "unable-to-execute");
+  assert.equal(classify(true, passed, failed, passed, assertion, "src/target.test.ts:11:"), "unrelated-failure");
   process.stdout.write("protection-fault verifier self-test passed\\n");
   process.exit(0);
 }
 const run = (command, args, cwd, env) => {
   const result = spawnSync(command, args, { cwd, env, encoding: "utf8", timeout: 120_000, maxBuffer: 10 * 1024 * 1024 });
   const stdout = result.stdout ?? ""; const stderr = result.stderr ?? "";
-  return { exitCode: result.status, signal: result.signal, error: result.error?.code ?? null, stdoutSha256: hash(stdout), stderrSha256: hash(stderr), stdoutBytes: Buffer.byteLength(stdout), stderrBytes: Buffer.byteLength(stderr), output: `${stdout}${stderr}` };
+  return { exitCode: result.status, signal: result.signal, error: result.error?.code ?? (result.error ? "UNKNOWN" : null), stdoutSha256: hash(stdout), stderrSha256: hash(stderr), stdoutBytes: Buffer.byteLength(stdout), stderrBytes: Buffer.byteLength(stderr), output: `${stdout}${stderr}` };
 };
 const targetResult = (path, testName) => {
   try {
@@ -79,9 +99,7 @@ try {
     const mutant = patchApplied ? invoke("mutant") : null;
     writeFileSync(target, original);
     const restored = invoke("restored");
-    const passedTarget = (result) => result?.report?.matches?.length === 1 && result.report.matches[0].status === "passed" && result.report.report.numFailedTests === 0;
-    const caught = failedTarget(mutant, expectedAssertion, expectedFailureLocation);
-    const classification = !patchApplied ? "invalid-injection" : !passedTarget(clean) || !passedTarget(restored) ? "unable-to-execute" : caught ? "correctly-caught" : mutant?.exitCode ? "unrelated-failure" : "survived";
+    const classification = classify(patchApplied, clean, mutant, restored, expectedAssertion, expectedFailureLocation);
     evidence.push({ id, sourceSha, path, beforeSha256: hash(original), patchSha256: hash(JSON.stringify({ before, after })), setup: { argv: setupArgv, environment: executionEnvironment }, testFile, testName, expectedAssertion, expectedFailureLocation, patchApplied, clean: { ...clean, output: undefined }, mutant: mutant && { ...mutant, output: undefined }, restored: { ...restored, output: undefined }, classification });
   }
   const report = { schemaVersion: "protection-fault-report/1", sourceSha, executionEnvironment, cases: evidence };
