@@ -18,6 +18,16 @@ same-prefix failure at another assertion location is rejected. Only `correctly-c
 acceptance evidence; a timeout, dependency error, skipped test, or a different
 failed test is not a caught protection.
 
+| Requirement IDs | Protection / fault IDs | Target test evidence |
+|---|---|---|
+| D-01, D-02 | actor identity and stale owner (`identity-owner`, `stale-owner`); expiry, revocation, closed writes and write budget (`expired-write`, `revoked-write`, `writes-closed`, `write-budget`); one-shot send and copied private handle (`one-shot`, `copied-private-handle`) | named authority, lease, human-approval, publication tests fail at the declared assertion location |
+| W-07, D-02 | exact old-SHA CAS and preservation of another Work Item (`exact-cas`, `other-work-item`) | stale-dispatch / tree-preservation assertions fail at their declared locations |
+| L-03, L-04 | exact remote-delete result and no replay after unknown result (`remote-delete`, `unknown-replay`) | porcelain and recovery-write-count assertions fail at their declared locations |
+| W-06, W-13 | canonical local path, empty assets and stable directory identity (`local-canonical-path`, `local-assets`, `local-directory-identity`) | local-resource assertions fail at their declared locations, with primary assets still preserved |
+
+The structured report, rather than this table, is the source of case-level evidence: it records the exact source SHA,
+patch hash, test ID, assertion location, baseline/mutant/restored commands and sanitized output hashes.
+
 The current bounded matrix covers actor identity, expiry, exact old-SHA CAS,
 stale owner, one-shot dispatch, preservation of another Work Item, and exact
 remote-delete output. Local resource ownership/asset and unknown-result replay
