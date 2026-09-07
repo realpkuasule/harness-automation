@@ -1,6 +1,6 @@
 {
   "schemaVersion": "2.0",
-  "generatedAt": "2026-09-03T07:55:36.264Z",
+  "generatedAt": "2026-09-07T07:41:08.978Z",
   "profile": "custom",
   "stacks": [
     "typescript"
@@ -168,7 +168,7 @@
     "configured": true,
     "valid": true,
     "contractPath": "evals/evals.json",
-    "schemaVersion": "1.1",
+    "schemaVersion": "1.2",
     "suites": [
       {
         "id": "npm-release-worktree-policy",
@@ -239,7 +239,12 @@
             "evals/fixtures/known-bad-npm-release-policy.md"
           ],
           "fixture": "evals/fixtures/known-bad-npm-release-policy.md",
-          "expectedExitCode": 1
+          "expectedExitCode": 1,
+          "expectedReport": {
+            "testId": "npm-release-worktree-policy",
+            "assertionId": "npm-release-policy-required-strings",
+            "category": "required-string-missing"
+          }
         }
       }
     ],

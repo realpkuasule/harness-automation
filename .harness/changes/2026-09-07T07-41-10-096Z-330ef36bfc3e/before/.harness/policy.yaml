@@ -5,7 +5,7 @@
     "version": "2.8.11"
   },
   "evaluations": {
-    "schemaVersion": "1.2",
+    "schemaVersion": "1.1",
     "suites": [
       {
         "id": "npm-release-worktree-policy",
@@ -76,12 +76,7 @@
             "evals/fixtures/known-bad-npm-release-policy.md"
           ],
           "fixture": "evals/fixtures/known-bad-npm-release-policy.md",
-          "expectedExitCode": 1,
-          "expectedReport": {
-            "testId": "npm-release-worktree-policy",
-            "assertionId": "npm-release-policy-required-strings",
-            "category": "required-string-missing"
-          }
+          "expectedExitCode": 1
         }
       }
     ]
@@ -224,7 +219,7 @@
       "id": "eval-evals",
       "kind": "eval",
       "path": "evals/evals.json",
-      "sha256": "91848287fea3b58a2951731c1864e20a6f231287adab026c1ff9a66e735eae0d",
+      "sha256": "aefc091356b5b5f23e14945ab48d1468599fc51cda211f94c07956d89022b794",
       "approved": true
     },
     {
@@ -238,7 +233,7 @@
       "id": "eval-run-npm-release-policy",
       "kind": "eval",
       "path": "evals/run_npm_release_policy.mjs",
-      "sha256": "51e140657de71a9b7f45e93a4c8eb2ab47d7008c90780571c7b5f84c0bf35110",
+      "sha256": "715d3320bf661d48b1d477592da4a077ef025eb8a41f48704dbfae032c54847a",
       "approved": true
     },
     {
