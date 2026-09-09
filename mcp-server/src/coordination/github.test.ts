@@ -8,7 +8,7 @@ import { planCredentialHostBinding, applyCredentialHostBinding } from "../creden
 import { fileHash, hashObject, sha256 } from "../v2/fs.js";
 import { acquireMutationLock, releaseMutationLock } from "../recovery/service.js";
 import { createSemanticApprovalPacket } from "../approval/service.js";
-import { closeQualificationWrites, loadHumanAuthorization, recordHumanApproval, type HumanScope } from "../approval/human.js";
+import { closeQualificationWrites, closeQualificationWritesLocked, loadHumanAuthorization, qualificationResourceReservations, recordHumanApproval, revokeHumanAuthorization, type HumanScope } from "../approval/human.js";
 import { createQualificationRuntime, createTakeoverRuntime, observeCoordinationBinding } from "./runtime.js";
 import { observeTakeoverRisk } from "./takeover.js";
 import { GitHubCoordinationReader } from "./github.js";
@@ -25,7 +25,8 @@ import { observeQualificationRemote, readQualificationRemote } from "./qualifica
 import { applyQualificationCleanup, planQualificationCleanup, recoverQualificationCleanup } from "./qualification_cleanup.js";
 import { startClientProcess } from "./client_process.js";
 import { applyWorkspacePlan, planWorkspaceConfiguration, workspaceStatus } from "../worktree/service.js";
-import { createQualificationWorkspaceLocked, observeQualificationWorkspace, reserveQualificationWorkspacesLocked } from "../worktree/qualification.js";
+import { closeQualificationWorkspaceLocked, createQualificationWorkspaceLocked, observeQualificationWorkspace, reserveQualificationWorkspacesLocked } from "../worktree/qualification.js";
+import { readLkgChain } from "../receipt/service.js";
 
 const nativeHost = vi.hoisted(() => ({ home: "", sourceGroupSizes: [] as number[], badNonceClient: "" }));
 vi.mock("node:child_process", async (original) => {
@@ -714,4 +715,147 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
     expect(receipt.candidates).toHaveLength(1); expect(receipt.attempts).toHaveLength(1); expect(receipt.attempts[0].outcome?.status).toBe("applied");
     expect(readFileSync(native.trace, "utf8")).not.toContain("synthetic-provider-canary");
   }, 90_000);
+});
+
+describe("closeQualificationWorkspaceLocked (LOCAL native-command fixtures)", { timeout: 30_000 }, () => {
+  function readyFixture() {
+    const p = prepareSupervisedFixture();
+    git(p.f.root, "symbolic-ref", "HEAD", "refs/heads/main");
+    git(p.f.root, "-c", "core.hooksPath=/dev/null", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "primary");
+    const allowed = join(p.f.bin, "workspaces"); mkdirSync(allowed); const path = join(allowed, "source");
+    const configured = planWorkspaceConfiguration({ projectRoot: p.f.root, mode: "enforced", managementBranch: "main", maxPersistentWorktrees: 1,
+      allowedRoots: [allowed], protectedRoots: [p.f.root, p.f.commonDir, "/"] });
+    applyWorkspacePlan({ projectRoot: p.f.root, planPath: configured.path, approval: configured.plan.planHash });
+    const input = { ...p.manifest }; delete input.execution;
+    input.clients[0].scope.localResources = { authorityRoot: p.f.root, commonDir: p.f.commonDir,
+      configHash: fileHash(join(p.f.root, ".harness/worktree-delivery.json"))!, hostBindingHash: workspaceStatus(p.f.root).hostBinding.hash!,
+      expiresAt: input.expiresAt, cleanupExpiresAt: input.cleanupExpiresAt, maxConcurrent: 1, items: [{ resourceId: "source", clientId: "local",
+        path, branch: p.sourceRef.slice("refs/heads/".length), fixtureId: "source", sourceSha: p.source.commitSha,
+        operations: ["import-source", "create-once", "observe", "close-exact"] }] };
+    const { manifestHash, ...definition } = input; expect(manifestHash).toBe(p.manifest.manifestHash);
+    p.manifest = prepareQualificationManifest(definition);
+    const targets = registerSupervisedFixture(p); const approvalRef = targets[0].approvalRef;
+    const runtime = createQualificationRuntime(p.f.root, approvalRef, p.controlRef); runtime.bootstrap(); runtime.sourceFixture("source");
+    return { p, path, approvalRef, runtime };
+  }
+
+  it("releases a fully created and observed resource without modifying primary checkout or scope bindings", () => {
+    const { p, path, approvalRef, runtime } = readyFixture();
+    const before = { head: git(p.f.root, "rev-parse", "HEAD"), branch: git(p.f.root, "symbolic-ref", "HEAD"), status: git(p.f.root, "status", "--porcelain"),
+      index: fileHash(join(p.f.commonDir, "index")) };
+    const lock = acquireMutationLock({ projectDir: p.f.root, commonDir: p.f.commonDir, repository: true });
+    try {
+      reserveQualificationWorkspacesLocked(lock, p.f.root, approvalRef, runtime.binding, runtime.provider.serverClock());
+      createQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source");
+      closeQualificationWritesLocked(lock, p.f.commonDir, approvalRef);
+      const closed = closeQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source");
+      expect(closed).toMatchObject({ outcome: "released", resourceId: "source", branch: p.sourceRef.slice("refs/heads/".length) });
+      expect(existsSync(path)).toBe(false);
+      expect(git(p.f.root, "for-each-ref", "--format=%(refname)", `refs/heads/${p.sourceRef.slice("refs/heads/".length)}`)).toBe("");
+      expect(qualificationResourceReservations(p.f.commonDir)).toEqual([]);
+      expect(loadHumanAuthorization(p.f.commonDir, approvalRef).resourceStates!.source.phase).toBe("released");
+    } finally { releaseMutationLock(lock); }
+    expect({ head: git(p.f.root, "rev-parse", "HEAD"), branch: git(p.f.root, "symbolic-ref", "HEAD"), status: git(p.f.root, "status", "--porcelain"), index: fileHash(join(p.f.commonDir, "index")) }).toEqual(before);
+  }, 60_000);
+
+  it("releases a resource that never started add (reserved-only)", () => {
+    const { p, approvalRef, runtime } = readyFixture();
+    const lock = acquireMutationLock({ projectDir: p.f.root, commonDir: p.f.commonDir, repository: true });
+    try {
+      reserveQualificationWorkspacesLocked(lock, p.f.root, approvalRef, runtime.binding, runtime.provider.serverClock());
+      closeQualificationWritesLocked(lock, p.f.commonDir, approvalRef);
+      const closed = closeQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source");
+      expect(closed).toMatchObject({ outcome: "released", resourceId: "source" });
+      expect(loadHumanAuthorization(p.f.commonDir, approvalRef).resourceStates!.source.phase).toBe("released");
+      expect(qualificationResourceReservations(p.f.commonDir)).toEqual([]);
+    } finally { releaseMutationLock(lock); }
+  }, 60_000);
+
+  it("is idempotent on a released resource", () => {
+    const { p, approvalRef, runtime } = readyFixture();
+    const lock = acquireMutationLock({ projectDir: p.f.root, commonDir: p.f.commonDir, repository: true });
+    try {
+      reserveQualificationWorkspacesLocked(lock, p.f.root, approvalRef, runtime.binding, runtime.provider.serverClock());
+      createQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source");
+      closeQualificationWritesLocked(lock, p.f.commonDir, approvalRef);
+      closeQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source");
+      const lkg = readLkgChain({ root: p.f.commonDir, domain: "approval-human" }).filter((record) => record.transactionId === approvalRef);
+      const second = closeQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source");
+      expect(second).toMatchObject({ outcome: "released", resourceId: "source" });
+      const after = readLkgChain({ root: p.f.commonDir, domain: "approval-human" }).filter((record) => record.transactionId === approvalRef);
+      expect(after.length).toBe(lkg.length);
+    } finally { releaseMutationLock(lock); }
+  }, 60_000);
+
+  it("throws HUMAN_QUALIFICATION_WRITES_OPEN before closeQualificationWrites is called", () => {
+    const { p, approvalRef, runtime } = readyFixture();
+    const lock = acquireMutationLock({ projectDir: p.f.root, commonDir: p.f.commonDir, repository: true });
+    try {
+      reserveQualificationWorkspacesLocked(lock, p.f.root, approvalRef, runtime.binding, runtime.provider.serverClock());
+      expect(() => closeQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source")).toThrow("HUMAN_QUALIFICATION_WRITES_OPEN");
+    } finally { releaseMutationLock(lock); }
+  }, 60_000);
+
+  it("throws HUMAN_AUTHORIZATION_REVOKED after revokeHumanAuthorization", () => {
+    const { p, approvalRef, runtime } = readyFixture();
+    let lock = acquireMutationLock({ projectDir: p.f.root, commonDir: p.f.commonDir, repository: true });
+    try {
+      reserveQualificationWorkspacesLocked(lock, p.f.root, approvalRef, runtime.binding, runtime.provider.serverClock());
+      createQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source");
+      closeQualificationWritesLocked(lock, p.f.commonDir, approvalRef);
+      releaseMutationLock(lock); lock = null as unknown as typeof lock;
+      revokeHumanAuthorization(p.f.commonDir, approvalRef, "test revoke");
+      const next = acquireMutationLock({ projectDir: p.f.root, commonDir: p.f.commonDir, repository: true });
+      try { expect(() => closeQualificationWorkspaceLocked(next, p.f.root, approvalRef, "source")).toThrow("HUMAN_AUTHORIZATION_REVOKED"); }
+      finally { releaseMutationLock(next); }
+    } finally { if (lock) releaseMutationLock(lock); }
+  }, 60_000);
+
+  it("retains when the local branch was advanced past the recorded source SHA", () => {
+    const { p, approvalRef, runtime } = readyFixture();
+    const branch = p.sourceRef.slice("refs/heads/".length);
+    git(p.f.root, "-c", "core.hooksPath=/dev/null", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+      "commit", "--quiet", "--allow-empty", "-m", "external-advance");
+    const otherSha = git(p.f.root, "rev-parse", "HEAD");
+    const lock = acquireMutationLock({ projectDir: p.f.root, commonDir: p.f.commonDir, repository: true });
+    try {
+      reserveQualificationWorkspacesLocked(lock, p.f.root, approvalRef, runtime.binding, runtime.provider.serverClock());
+      createQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source");
+      closeQualificationWritesLocked(lock, p.f.commonDir, approvalRef);
+      git(p.f.root, "update-ref", `refs/heads/${branch}`, otherSha, p.source.commitSha);
+      expect(() => closeQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source")).toThrow("BRANCH_REF_DRIFT");
+      expect(git(p.f.root, "rev-parse", `refs/heads/${branch}`)).toBe(otherSha);
+      const state = loadHumanAuthorization(p.f.commonDir, approvalRef);
+      expect(state.resourceStates!.source.phase).toBe("ready");
+      expect(state.resourceStates!.source.retained?.reason).toBeUndefined();
+    } finally { releaseMutationLock(lock); }
+  }, 60_000);
+
+  it("throws LOCAL_PATH_REPLACED when the resource path becomes a regular file", () => {
+    const { p, path, approvalRef, runtime } = readyFixture();
+    const lock = acquireMutationLock({ projectDir: p.f.root, commonDir: p.f.commonDir, repository: true });
+    try {
+      reserveQualificationWorkspacesLocked(lock, p.f.root, approvalRef, runtime.binding, runtime.provider.serverClock());
+      createQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source");
+      closeQualificationWritesLocked(lock, p.f.commonDir, approvalRef);
+      rmSync(path, { recursive: true, force: true });
+      writeFileSync(path, "preserve");
+      expect(() => closeQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source")).toThrow("LOCAL_PATH_REPLACED");
+      expect(readFileSync(path, "utf8")).toBe("preserve");
+    } finally { releaseMutationLock(lock); }
+  }, 60_000);
+
+  it("throws WORKTREE_REMOVE_FAILED when worktree remove fails on an untracked file", () => {
+    const { p, path, approvalRef, runtime } = readyFixture();
+    const lock = acquireMutationLock({ projectDir: p.f.root, commonDir: p.f.commonDir, repository: true });
+    try {
+      reserveQualificationWorkspacesLocked(lock, p.f.root, approvalRef, runtime.binding, runtime.provider.serverClock());
+      createQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source");
+      closeQualificationWritesLocked(lock, p.f.commonDir, approvalRef);
+      writeFileSync(join(path, "untracked"), "block");
+      expect(() => closeQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source")).toThrow("WORKTREE_REMOVE_FAILED");
+      expect(existsSync(path)).toBe(true);
+      expect(readFileSync(join(path, "untracked"), "utf8")).toBe("block");
+    } finally { releaseMutationLock(lock); }
+  }, 60_000);
 });

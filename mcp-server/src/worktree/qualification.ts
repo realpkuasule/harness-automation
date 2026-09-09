@@ -6,6 +6,7 @@ import { qualificationSourceGraph, type ResourceFact, type ResourceState } from 
 import type { CoordinationClock } from "../coordination/clock.js";
 import { objectDirectory, objectEnv, objectGit, validateSyntheticObject } from "../coordination/objects.js";
 import { nativeCoordinationObservers } from "../coordination/runtime.js";
+import { readLkgChain } from "../receipt/service.js";
 import { GitHubCoordinationTransport } from "../coordination/transport.js";
 import { assertMutationLock, type MutationLock } from "../recovery/service.js";
 import { inspectGit, observeWorkspaceAssets } from "../repository/assets.js";
@@ -184,4 +185,92 @@ export function createQualificationWorkspaceLocked(lock: MutationLock, projectRo
   record({ type: "ready", gitDir: observation.gitDir, evidenceHash: observation.evidenceHash });
   if (added.status !== 0 || added.error) throw new Error("QUALIFICATION_RESOURCE_ADD_FAILED");
   return observation;
+}
+
+export type CloseOutcome = "released" | "retained";
+export interface CloseResourceResult {
+  resourceId: string;
+  path: string;
+  branch: string;
+  evidenceHash: string;
+  outcome: CloseOutcome;
+  reason?: string;
+}
+
+/** Exact owned-resource close; re-uses the resource-owner apply lock and the same human receipt chain as create. */
+export function closeQualificationWorkspaceLocked(lock: MutationLock, projectRoot: string, approvalRef: string, resourceId: string): CloseResourceResult {
+  const context = resolveRepositoryContext(projectRoot);
+  assertMutationLock(context, lock);                                                // NLC-02
+  const state = loadHumanAuthorization(context.commonDir, approvalRef);
+  const scope = state.approval.scope;
+  if (scope.kind !== "qualification-run" || !scope.localResources) throw new Error("HUMAN_LOCAL_RESOURCE_SCOPE_REQUIRED"); // NLC-04
+  const resource = scope.localResources.items.find((item) => item.resourceId === resourceId);
+  const progress = state.resourceStates && state.resourceStates[resourceId];
+  if (!resource || !progress) throw new Error("HUMAN_LOCAL_RESOURCE_SCOPE_REQUIRED");                                   // NLC-04
+  if (state.revoked) throw new Error("HUMAN_AUTHORIZATION_REVOKED");                                                    // NLC-03
+  if (!state.writesClosed) throw new Error("HUMAN_QUALIFICATION_WRITES_OPEN");                                          // NLC-03
+  if (progress.phase === "released") {                                                                                  // NLC-14 + NLC-13
+    return {
+      resourceId, path: resource.path, branch: resource.branch,
+      evidenceHash: progress.evidenceHash ?? hashObject({ alreadyReleased: true, resourceId, path: resource.path, branch: resource.branch }),
+      outcome: "released",
+    };
+  }
+  if (progress.retained && progress.phase !== "ready") {                                                                // NLC-12
+    return {
+      resourceId, path: resource.path, branch: resource.branch,
+      evidenceHash: progress.retained.evidenceHash,
+      outcome: "retained", reason: progress.retained.reason,
+    };
+  }
+  const native = nativeCoordinationObservers(context, scope.binding);
+  const clock = native.provider.serverClock();
+  const record = (fact: ResourceFact) => recordQualificationResourceLocked(lock, context.commonDir, approvalRef, resourceId, fact, native.observeBinding(), clock);
+  const run = (args: string[]) => runGitCommand(context.projectDir, [
+    "--no-optional-locks", "--no-replace-objects",
+    "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+    "-c", "maintenance.auto=false", "-c", "gc.auto=0",
+    ...args,
+  ], objectEnv());
+  const lastRecordHash = (): string | null => {
+    const records = readLkgChain({ root: context.commonDir, domain: "approval-human" }).filter((record) => record.transactionId === approvalRef);
+    return records.length ? records[records.length - 1].recordHash : null;
+  };
+  const observedAt = () => new Date(Math.floor(clock.bounds().lowerMs)).toISOString();
+  if (progress.phase === "reserved") {                                                                                // NLC-05
+    const evidenceHash = hashObject({ resourceId, path: resource.path, branch: resource.branch, sourceSha: resource.sourceSha,
+      worktreeRemoved: false, branchRemoved: false, recordedAt: lastRecordHash(), observedAt: observedAt() });
+    record({ type: "released", evidenceHash });
+    return { resourceId, path: resource.path, branch: resource.branch, evidenceHash, outcome: "released" };
+  }
+  if (progress.phase !== "ready") throw new Error("QUALIFICATION_RESOURCE_CLOSE_PHASE_NOT_READY");
+  validateBranch(context.projectDir, resource.branch);
+  const hostBinding = workspaceLocalInventory(projectRoot, true).hostBinding;
+  if (validateTarget(hostBinding, resource.path) !== resource.path) throw new Error("HUMAN_LOCAL_RESOURCE_BINDING_MISMATCH");
+  const pathStat = lstatSync(resource.path, { throwIfNoEntry: false });                                                 // NLC-08
+  if (pathStat && !pathStat.isDirectory()) throw new Error("LOCAL_PATH_REPLACED");
+  const currentBranch = inspectGit(context.projectDir, ["rev-parse", "--verify", `refs/heads/${resource.branch}^{commit}`], true).trim(); // NLC-07
+  if (currentBranch && currentBranch !== resource.sourceSha) throw new Error("BRANCH_REF_DRIFT");
+  const porcelain = parseWorktreePorcelain(inspectGit(context.projectDir, ["worktree", "list", "--porcelain", "-z"]));
+  const matching = porcelain.filter((record) => record.path === resource.path);
+  if (matching.length && matching.some((record) => record.head !== resource.sourceSha)) throw new Error("WORKTREE_HEAD_DRIFT");
+  let worktreeRemoved = false;                                                                                          // NLC-06 (a)
+  if (pathStat) {
+    const removed = run(["worktree", "remove", resource.path]);
+    if (removed.status === 0) worktreeRemoved = true;
+    else if (/did not exist/i.test(removed.stderr ?? "")) worktreeRemoved = true;
+    else throw new Error("WORKTREE_REMOVE_FAILED");                                                                     // NLC-09
+  } else worktreeRemoved = true;
+  const deleted = run(["update-ref", "-d", `refs/heads/${resource.branch}`, resource.sourceSha]);                       // NLC-06 (b)
+  let branchRemoved = false;
+  if (deleted.status === 0) branchRemoved = true;
+  else if (/reference does not exist/i.test(deleted.stderr ?? "")) branchRemoved = true;
+  else throw new Error("BRANCH_DELETE_FAILED");                                                                         // NLC-10
+  if (progress.gitDir && lstatSync(progress.gitDir, { throwIfNoEntry: false })) throw new Error("GITDIR_REGISTERED_AFTER_CLOSE"); // NLC-11
+  const evidenceHash = hashObject({                                                                                     // NLC-06 (d)
+    resourceId, path: resource.path, branch: resource.branch, sourceSha: resource.sourceSha,
+    worktreeRemoved, branchRemoved, recordedAt: lastRecordHash(), observedAt: observedAt(),
+  });
+  record({ type: "released", evidenceHash });
+  return { resourceId, path: resource.path, branch: resource.branch, evidenceHash, outcome: "released" };
 }
