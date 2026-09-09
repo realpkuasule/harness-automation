@@ -116,6 +116,20 @@ class LocalTrackingTests(unittest.TestCase):
             self.assertIn("LOCAL_TRACKING_CHANGELOG_SCHEMA_INVALID", changelog_result.stderr)
             self.assertEqual(changelog_file.read_bytes(), before_changelog)
 
+            task_file.write_text('{"schemaVersion":"1.0","schemaVersion":"2.0","meta":{},"tasks":[]}\n', encoding="utf-8")
+            before_task = task_file.read_bytes()
+            task_result = run(TASK, "list", cwd=root, check=False, local_only=True)
+            self.assertNotEqual(task_result.returncode, 0)
+            self.assertIn("LOCAL_TRACKING_DUPLICATE_KEY: schemaVersion", task_result.stderr)
+            self.assertEqual(task_file.read_bytes(), before_task)
+
+            changelog_file.write_text('{"timestamp":"a","type":"feat","phase":1,"description":"first","description":"second"}\n', encoding="utf-8")
+            before_changelog = changelog_file.read_bytes()
+            changelog_result = run(CHANGELOG, "list", cwd=root, check=False, local_only=True)
+            self.assertNotEqual(changelog_result.returncode, 0)
+            self.assertIn("LOCAL_TRACKING_DUPLICATE_KEY: description", changelog_result.stderr)
+            self.assertEqual(changelog_file.read_bytes(), before_changelog)
+
     def test_non_repository_does_not_create_a_fallback_store(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
