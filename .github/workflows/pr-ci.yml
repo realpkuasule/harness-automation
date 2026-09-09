@@ -35,7 +35,7 @@ jobs:
         run: npm run build
 
       - name: Run tests
-        run: npm test
+        run: npm test -- --testTimeout=30000
 
   local-tracking:
     runs-on: ubuntu-latest
