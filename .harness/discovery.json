@@ -1,23 +1,20 @@
 {
   "schemaVersion": "2.0",
-  "generatedAt": "2026-09-01T11:48:51.347Z",
+  "generatedAt": "2026-09-07T07:41:08.978Z",
   "profile": "custom",
   "stacks": [
     "typescript"
   ],
   "manifests": [
     "mcp-server/package.json",
-    "mcp-server/src/__fixtures__/mixed/package.json",
-    "package.json"
+    "mcp-server/src/__fixtures__/mixed/package.json"
   ],
   "lockfiles": [
-    "mcp-server/package-lock.json",
-    "package-lock.json"
+    "mcp-server/package-lock.json"
   ],
   "packages": [
     "mcp-server",
-    "mcp-server/src/__fixtures__/mixed",
-    "package.json"
+    "mcp-server/src/__fixtures__/mixed"
   ],
   "commands": {
     "npm:mcp-server:build": [
@@ -151,8 +148,7 @@
       "fact": "Detected stack profile: custom",
       "paths": [
         "mcp-server/package.json",
-        "mcp-server/src/__fixtures__/mixed/package.json",
-        "package.json"
+        "mcp-server/src/__fixtures__/mixed/package.json"
       ],
       "confidence": 0.5
     },
@@ -160,8 +156,7 @@
       "fact": "Detected stacks: typescript",
       "paths": [
         "mcp-server/package.json",
-        "mcp-server/src/__fixtures__/mixed/package.json",
-        "package.json"
+        "mcp-server/src/__fixtures__/mixed/package.json"
       ],
       "confidence": 0.9
     }
@@ -173,7 +168,7 @@
     "configured": true,
     "valid": true,
     "contractPath": "evals/evals.json",
-    "schemaVersion": "1.1",
+    "schemaVersion": "1.2",
     "suites": [
       {
         "id": "npm-release-worktree-policy",
@@ -244,7 +239,12 @@
             "evals/fixtures/known-bad-npm-release-policy.md"
           ],
           "fixture": "evals/fixtures/known-bad-npm-release-policy.md",
-          "expectedExitCode": 1
+          "expectedExitCode": 1,
+          "expectedReport": {
+            "testId": "npm-release-worktree-policy",
+            "assertionId": "npm-release-policy-required-strings",
+            "category": "required-string-missing"
+          }
         }
       }
     ],

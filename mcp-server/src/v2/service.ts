@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +8,7 @@ import { discoverProject } from "./discovery.js";
 import {
   assertCurrentHash,
   atomicWrite,
+  durableWriteOnce,
   fileHash,
   hashObject,
   prettyJson,
@@ -15,6 +17,25 @@ import {
   sha256,
   withoutHash,
 } from "./fs.js";
+import {
+  appendLkgRecord,
+  appendReceiptEvent,
+  readLatestReceiptEvent,
+  type ReceiptEvent,
+  type ReceiptKey,
+} from "../receipt/service.js";
+import {
+  acquireMutationLock,
+  createFileApplyJournal,
+  createFileRollbackJournal,
+  releaseMutationLock,
+  requireMutationAllowed,
+  validateFileApplyJournal,
+  validateFileRollbackJournal,
+  type FileApplyJournal,
+  type FileRollbackJournal,
+} from "../recovery/service.js";
+import { resolveProjectContext } from "../repository/git.js";
 import {
   GO_NAMING_CHECKER,
   PYTHON_NAMING_CHECKER,
@@ -32,6 +53,7 @@ import type {
   DeliveryProfile,
   DomainProfile,
   EnforcementResult,
+  EvalNegativeControl,
   FileOperation,
   Intake,
   LegacyEvalSnapshotMigration,
@@ -175,6 +197,33 @@ export function inspectSkillInstallations(options: {
 
 function harnessPath(root: string, path: string): string {
   return safePath(root, `${HARNESS_DIR}/${path}`);
+}
+
+function fileReceiptKey(
+  context: ReturnType<typeof resolveProjectContext>,
+  transactionId: string,
+  domain = "file-apply",
+): ReceiptKey {
+  return {
+    root: context.repository ? context.commonDir : context.projectDir,
+    stateDirectory: context.repository ? "harness" : ".harness",
+    domain,
+    transactionId,
+  };
+}
+
+function writeImmutablePlan(path: string, plan: ChangePlan): void {
+  const content = prettyJson(plan);
+  if (existsSync(path)) {
+    if (readFileSync(path, "utf8") !== content) throw new Error(`PLAN_ID_CONFLICT: ${path} already exists with different content`);
+    return;
+  }
+  try {
+    durableWriteOnce(path, content);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST" && readFileSync(path, "utf8") === content) return;
+    throw error;
+  }
 }
 
 function markdownFiles(directory: string, root: string): string[] {
@@ -940,7 +989,7 @@ function compileProjectPlan(args: ProjectPlanArgs & { writePlan: boolean }): { p
   };
   draft.planHash = hashObject(withoutHash(draft));
   const path = `.harness/plans/${id}.json`;
-  if (args.writePlan) atomicWrite(safePath(root, path), prettyJson(draft));
+  if (args.writePlan) writeImmutablePlan(safePath(root, path), draft);
   return { plan: draft, path, policy };
 }
 
@@ -1231,10 +1280,7 @@ export function planProjectUpdate(args: {
   ];
   candidate.plan.planHash = hashObject(withoutHash(candidate.plan));
   const planTarget = safePath(root, candidate.path);
-  if (existsSync(planTarget) && readFileSync(planTarget, "utf8") !== prettyJson(candidate.plan)) {
-    throw new Error(`PLAN_ID_CONFLICT: ${candidate.path} already exists with different content`);
-  }
-  atomicWrite(planTarget, prettyJson(candidate.plan));
+  writeImmutablePlan(planTarget, candidate.plan);
   return {
     status: "planned",
     planPath: candidate.path,
@@ -1254,10 +1300,172 @@ function validatePlan(root: string, plan: ChangePlan, approval: string): void {
   const computed = hashObject(withoutHash(plan));
   if (computed !== plan.planHash) throw new Error("PLAN_TAMPERED: plan content does not match its embedded hash");
   if (approval !== plan.planHash) throw new Error(`APPROVAL_MISMATCH: expected exact plan hash ${plan.planHash}`);
-  if (resolve(plan.projectDir) !== root) throw new Error("PROJECT_MISMATCH: plan belongs to another project directory");
+  if (realpathSync.native(resolve(plan.projectDir)) !== realpathSync.native(root)) {
+    throw new Error("PROJECT_MISMATCH: plan belongs to another project directory");
+  }
   assertCurrentHash(harnessPath(root, "intake.json"), plan.intakeHash);
   assertCurrentHash(harnessPath(root, "discovery.json"), plan.discoveryHash);
   for (const source of plan.sourceHashes) assertCurrentHash(safePath(root, source.path), source.sha256);
+}
+
+function validDigest(value: unknown, nullable = false): boolean {
+  return (nullable && value === null) || (typeof value === "string" && /^[a-f0-9]{64}$/u.test(value));
+}
+
+function validateAppliedChange(root: string, change: AppliedChange, plan?: ChangePlan): void {
+  if (!change || typeof change !== "object" || change.schemaVersion !== "2.0" ||
+      typeof change.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(change.id) ||
+      !validDigest(change.planHash) || !Number.isFinite(Date.parse(change.appliedAt)) ||
+      !Array.isArray(change.operations) || change.operations.length === 0 ||
+      new Set(change.operations.map((item) => item?.path)).size !== change.operations.length) {
+    throw new Error("APPLIED_CHANGE_INVALID");
+  }
+  for (const item of change.operations) {
+    if (!item || typeof item.path !== "string" || !item.path || isAbsolute(item.path) ||
+        item.path.split(/[\\/]/u).includes("..") || !validDigest(item.beforeHash, true) ||
+        !validDigest(item.afterHash) || (item.backupPath !== null && typeof item.backupPath !== "string")) {
+      throw new Error("APPLIED_CHANGE_INVALID");
+    }
+    safePath(root, item.path);
+    const expectedBackup = item.beforeHash === null || item.beforeHash === item.afterHash
+      ? null
+      : `.harness/changes/${change.id}/before/${item.path}`;
+    if (item.backupPath !== expectedBackup) throw new Error("APPLIED_CHANGE_INVALID");
+  }
+  if (plan && (change.id !== plan.id || change.planHash !== plan.planHash ||
+      hashObject(change.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash }))) !==
+      hashObject(plan.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash }))))) {
+    throw new Error("APPLIED_CHANGE_PLAN_MISMATCH");
+  }
+}
+
+function appliedChangeReceipt(
+  context: ReturnType<typeof resolveProjectContext>,
+  id: string,
+  plan?: ChangePlan,
+): { change: AppliedChange; event: ReceiptEvent<AppliedChange> } | null {
+  const changeFile = harnessPath(context.projectDir, `changes/${id}/change.json`);
+  const compatibility = existsSync(changeFile) ? readJson<AppliedChange>(changeFile) : undefined;
+  const key = fileReceiptKey(context, id);
+  const latest = readLatestReceiptEvent<AppliedChange>(key);
+  if (!latest && !compatibility) return null;
+  const snapshot = latest?.snapshot ?? compatibility!;
+  validateAppliedChange(context.projectDir, snapshot, plan);
+  const event = appendReceiptEvent({
+    ...key,
+    snapshot,
+    projection: { root: context.projectDir, path: `.harness/changes/${id}/change.json` },
+  });
+  validateAppliedChange(context.projectDir, event.snapshot, plan);
+  return { change: event.snapshot, event };
+}
+
+function appliedChangeObservedHash(root: string, change: AppliedChange): string {
+  return hashObject(change.operations.map((item) => ({ path: item.path, sha256: fileHash(safePath(root, item.path)) })));
+}
+
+function recordFileApplyLkg(
+  context: ReturnType<typeof resolveProjectContext>,
+  change: AppliedChange,
+  event: ReceiptEvent<AppliedChange>,
+): void {
+  appendLkgRecord({
+    ...fileReceiptKey(context, change.id),
+    appliedReceiptEventHash: event.eventHash,
+    planHash: change.planHash,
+    observedHash: appliedChangeObservedHash(context.projectDir, change),
+  });
+}
+
+interface FileRollbackReceipt {
+  schemaVersion: "file-rollback/1.0";
+  kind: "file-rollback-receipt";
+  id: string;
+  planHash: string;
+  appliedReceiptEventHash: string;
+  status: "rolled-back";
+  restored: string[];
+  rolledBackAt: string;
+  observedHash: string;
+}
+
+function rollbackObservedHash(root: string, change: AppliedChange): string {
+  return hashObject(change.operations.map((item) => ({ path: item.path, sha256: fileHash(safePath(root, item.path)) })));
+}
+
+function validateFileRollbackReceipt(receipt: FileRollbackReceipt, change: AppliedChange): void {
+  if (!receipt || typeof receipt !== "object" || receipt.schemaVersion !== "file-rollback/1.0" ||
+      receipt.kind !== "file-rollback-receipt" || receipt.id !== change.id || receipt.planHash !== change.planHash ||
+      !validDigest(receipt.appliedReceiptEventHash) || receipt.status !== "rolled-back" ||
+      !Array.isArray(receipt.restored) || new Set(receipt.restored).size !== receipt.restored.length ||
+      hashObject(receipt.restored) !== hashObject(change.operations.map((item) => item.path)) ||
+      !Number.isFinite(Date.parse(receipt.rolledBackAt)) || !validDigest(receipt.observedHash)) {
+    throw new Error("FILE_ROLLBACK_RECEIPT_INVALID");
+  }
+}
+
+function recordFileRollbackLkg(
+  context: ReturnType<typeof resolveProjectContext>,
+  receipt: FileRollbackReceipt,
+  event: ReceiptEvent<FileRollbackReceipt>,
+): void {
+  appendLkgRecord({
+    ...fileReceiptKey(context, receipt.id, "file-rollback"),
+    appliedReceiptEventHash: event.eventHash,
+    planHash: receipt.planHash,
+    observedHash: receipt.observedHash,
+  });
+}
+
+function completedFileRollbackReceipt(
+  context: ReturnType<typeof resolveProjectContext>,
+  change: AppliedChange,
+): FileRollbackReceipt | null {
+  const key = fileReceiptKey(context, change.id, "file-rollback");
+  const markerPath = harnessPath(context.projectDir, `changes/${change.id}/rolled-back.json`);
+  const latest = readLatestReceiptEvent<FileRollbackReceipt>(key);
+  if (latest) {
+    validateFileRollbackReceipt(latest.snapshot, change);
+    if (change.operations.some((item) => fileHash(safePath(context.projectDir, item.path)) !== item.beforeHash) ||
+        latest.snapshot.observedHash !== rollbackObservedHash(context.projectDir, change)) {
+      throw new Error(`ROLLBACK_DRIFT: ${change.id}`);
+    }
+    const event = appendReceiptEvent({
+      ...key,
+      snapshot: latest.snapshot,
+      projection: { root: context.projectDir, path: `.harness/changes/${change.id}/rolled-back.json` },
+    });
+    recordFileRollbackLkg(context, latest.snapshot, event);
+    return latest.snapshot;
+  }
+  if (!existsSync(markerPath)) return null;
+  const legacy = readJson<{ id?: string; restored?: unknown; rolledBackAt?: string }>(markerPath);
+  if (legacy.id !== change.id || !Array.isArray(legacy.restored) ||
+      hashObject(legacy.restored) !== hashObject(change.operations.map((item) => item.path)) ||
+      typeof legacy.rolledBackAt !== "string" || !Number.isFinite(Date.parse(legacy.rolledBackAt)) ||
+      change.operations.some((item) => fileHash(safePath(context.projectDir, item.path)) !== item.beforeHash)) {
+    throw new Error("FILE_ROLLBACK_RECEIPT_INVALID");
+  }
+  const applied = appliedChangeReceipt(context, change.id);
+  if (!applied) throw new Error("APPLIED_CHANGE_RECEIPT_MISSING");
+  const receipt: FileRollbackReceipt = {
+    schemaVersion: "file-rollback/1.0",
+    kind: "file-rollback-receipt",
+    id: change.id,
+    planHash: change.planHash,
+    appliedReceiptEventHash: applied.event.eventHash,
+    status: "rolled-back",
+    restored: change.operations.map((item) => item.path),
+    rolledBackAt: legacy.rolledBackAt,
+    observedHash: rollbackObservedHash(context.projectDir, change),
+  };
+  const event = appendReceiptEvent({
+    ...key,
+    snapshot: receipt,
+    projection: { root: context.projectDir, path: `.harness/changes/${change.id}/rolled-back.json` },
+  });
+  recordFileRollbackLkg(context, receipt, event);
+  return receipt;
 }
 
 function validateUpdateTransition(root: string, plan: ChangePlan): void {
@@ -1380,49 +1588,117 @@ export function applyPlan(args: {
   projectRoot: string;
   planPath: string;
   approval: string;
+  recoveryApprovalRef?: string;
   now?: Date;
+  testInterruptAfterWrites?: number;
+  testFailPostApply?: boolean;
+  testInterruptAfterChangeReceipt?: boolean;
 }): AppliedChange | WorkspaceReceipt {
-  const root = resolve(args.projectRoot);
+  const context = resolveProjectContext(args.projectRoot);
+  const root = context.projectDir;
   const candidate = readJson<{ kind?: string }>(safePath(root, args.planPath));
   if (candidate.kind === "workspace-plan") return applyWorkspacePlan(args);
-  return applyFilePlan(args);
+  return applyFilePlan(args, context);
 }
 
 function applyFilePlan(args: {
   projectRoot: string;
   planPath: string;
   approval: string;
+  recoveryApprovalRef?: string;
   now?: Date;
-}): AppliedChange {
-  const root = resolve(args.projectRoot);
+  testInterruptAfterWrites?: number;
+  testFailPostApply?: boolean;
+  testInterruptAfterChangeReceipt?: boolean;
+}, context = resolveProjectContext(args.projectRoot)): AppliedChange {
+  const lock = acquireMutationLock(context);
+  try {
+    return applyFilePlanLocked(args, context);
+  } finally {
+    releaseMutationLock(lock);
+  }
+}
+
+function applyFilePlanLocked(args: {
+  projectRoot: string;
+  planPath: string;
+  approval: string;
+  recoveryApprovalRef?: string;
+  now?: Date;
+  testInterruptAfterWrites?: number;
+  testFailPostApply?: boolean;
+  testInterruptAfterChangeReceipt?: boolean;
+}, context: ReturnType<typeof resolveProjectContext>): AppliedChange {
+  const root = context.projectDir;
   const plan = readJson<ChangePlan>(safePath(root, args.planPath));
   validatePlan(root, plan, args.approval);
-  const changeFile = harnessPath(root, `changes/${plan.id}/change.json`);
-  if (existsSync(changeFile)) {
-    const existing = readJson<AppliedChange>(changeFile);
-    if (existing.planHash === plan.planHash && existing.operations.every((item) => fileHash(safePath(root, item.path)) === item.afterHash)) {
-      return existing;
+  const journalFile = harnessPath(root, `changes/${plan.id}/apply.json`);
+  const existingReceipt = appliedChangeReceipt(context, plan.id, plan);
+  if (existingReceipt) {
+    if (existingReceipt.change.operations.every((item) => fileHash(safePath(root, item.path)) === item.afterHash)) {
+      recordFileApplyLkg(context, existingReceipt.change, existingReceipt.event);
+      rmSync(journalFile, { force: true });
+      return existingReceipt.change;
     }
     throw new Error(`CHANGE_ID_CONFLICT: ${plan.id} was already applied but repository outputs have drifted`);
   }
+  let existingJournal = existsSync(journalFile) ? readJson<FileApplyJournal>(journalFile) : null;
+  const operations = plan.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash }));
+  if (existingJournal) {
+    validateFileApplyJournal(existingJournal);
+    if (existingJournal.planHash !== plan.planHash ||
+        hashObject(existingJournal.operations) !== hashObject(operations) ||
+        existingJournal.written.some((path) => !plan.operations.some((item) => item.path === path))) {
+      throw new Error(`RECOVERY_REQUIRED: ${plan.id}`);
+    }
+    if (existingJournal.status === "failed-compensated") {
+      if (plan.operations.some((item) => fileHash(safePath(root, item.path)) !== item.beforeHash)) {
+        throw new Error(`RECOVERY_REQUIRED: ${plan.id}`);
+      }
+      existingJournal = null;
+    } else {
+      requireMutationAllowed(context, {
+        kind: "file-apply", id: plan.id, action: "resume-apply",
+        approvalRef: args.recoveryApprovalRef, now: args.now,
+      });
+    }
+  } else {
+    requireMutationAllowed(context);
+  }
   validateUpdateTransition(root, plan);
   validateTypeScriptNamingTransition(root, plan);
-  for (const item of plan.operations) assertCurrentHash(safePath(root, item.path), item.beforeHash);
+  for (const item of plan.operations) {
+    const current = fileHash(safePath(root, item.path));
+    if (current !== item.beforeHash && (!existingJournal || current !== item.afterHash)) {
+      if (existingJournal) throw new Error(`RECOVERY_REQUIRED: ${item.path}`);
+      assertCurrentHash(safePath(root, item.path), item.beforeHash);
+    }
+  }
 
-  const originals = plan.operations.map((item) => ({
-    item,
-    content: item.beforeHash === null ? null : readFileSync(safePath(root, item.path), "utf8"),
-  }));
-  const written: typeof originals = [];
+  const attempted = new Set(existingJournal?.written ?? []);
+  const recoveryId = existingJournal?.recoveryId ?? randomUUID();
+  const checkpoint = (status: FileApplyJournal["status"]) => {
+    atomicWrite(journalFile, prettyJson(createFileApplyJournal({
+      recoveryId, planHash: plan.planHash, operations, status, written: [...attempted],
+    })));
+  };
+  checkpoint("started");
   try {
-    for (const original of originals) {
-      const { item, content } = original;
-      if (content !== null) {
-        atomicWrite(harnessPath(root, `changes/${plan.id}/before/${item.path}`), content);
+    let completedWrites = 0;
+    for (const item of plan.operations) {
+      const target = safePath(root, item.path);
+      if (fileHash(target) === item.afterHash) continue;
+      if (item.beforeHash !== null) {
+        const backup = harnessPath(root, `changes/${plan.id}/before/${item.path}`);
+        if (!existsSync(backup)) atomicWrite(backup, readFileSync(target, "utf8"));
+        assertCurrentHash(backup, item.beforeHash);
       }
-      atomicWrite(safePath(root, item.path), item.content);
-      assertCurrentHash(safePath(root, item.path), item.afterHash);
-      written.push(original);
+      attempted.add(item.path);
+      checkpoint("started");
+      atomicWrite(target, item.content);
+      assertCurrentHash(target, item.afterHash);
+      completedWrites += 1;
+      if (args.testInterruptAfterWrites === completedWrites) throw new Error("TEST_FILE_APPLY_INTERRUPT");
     }
     const verification = checkProject(root);
     if (!verification.ok) {
@@ -1431,12 +1707,24 @@ function applyFilePlan(args: {
         .map((item) => `${item.id}: ${item.detail}`);
       throw new Error(`POST_APPLY_VERIFICATION_FAILED: ${failures.join("; ")}`);
     }
+    if (args.testFailPostApply) throw new Error("TEST_FILE_POST_APPLY_FAILURE");
   } catch (error) {
-    for (const { item, content } of written.reverse()) {
+    if (error instanceof Error && error.message === "TEST_FILE_APPLY_INTERRUPT") throw error;
+    let uncompensated = false;
+    for (const item of [...plan.operations].reverse()) {
+      if (!attempted.has(item.path)) continue;
       const target = safePath(root, item.path);
-      if (content === null) rmSync(target, { force: true });
-      else atomicWrite(target, content);
+      const current = fileHash(target);
+      if (current === item.beforeHash) continue;
+      if (current !== item.afterHash) { uncompensated = true; continue; }
+      if (item.beforeHash === null) rmSync(target, { force: true });
+      else {
+        const backup = harnessPath(root, `changes/${plan.id}/before/${item.path}`);
+        if (!existsSync(backup) || fileHash(backup) !== item.beforeHash) { uncompensated = true; continue; }
+        atomicWrite(target, readFileSync(backup, "utf8"));
+      }
     }
+    checkpoint(uncompensated ? "failed-uncompensated" : "failed-compensated");
     throw error;
   }
 
@@ -1450,10 +1738,19 @@ function applyFilePlan(args: {
       path: item.path,
       beforeHash: item.beforeHash,
       afterHash: item.afterHash,
-      backupPath: item.beforeHash === null ? null : `.harness/changes/${plan.id}/before/${item.path}`,
+      backupPath: item.beforeHash === null || item.beforeHash === item.afterHash
+        ? null
+        : `.harness/changes/${plan.id}/before/${item.path}`,
     })),
   };
-  atomicWrite(changeFile, prettyJson(change));
+  const event = appendReceiptEvent({
+    ...fileReceiptKey(context, plan.id),
+    snapshot: change,
+    projection: { root, path: `.harness/changes/${plan.id}/change.json` },
+  });
+  if (args.testInterruptAfterChangeReceipt) throw new Error("TEST_FILE_CHANGE_RECEIPT_INTERRUPT");
+  recordFileApplyLkg(context, change, event);
+  rmSync(journalFile, { force: true });
   return change;
 }
 
@@ -1468,36 +1765,134 @@ function latestChangeId(root: string): string {
 export function rollbackChange(args: {
   projectRoot: string;
   changeId?: string;
+  recoveryApprovalRef?: string;
   now?: Date;
+  testInterruptAfterRestores?: number;
+  testInterruptAfterRollbackReceipt?: boolean;
 }): { id: string; restored: string[] } | WorkspaceReceipt {
-  const root = resolve(args.projectRoot);
+  const context = resolveProjectContext(args.projectRoot);
+  const root = context.projectDir;
   const id = args.changeId ?? latestChangeId(root);
   const directory = harnessPath(root, `changes/${id}`);
   if (!existsSync(join(directory, "change.json")) && args.changeId) {
     return rollbackWorkspaceChange({
       projectRoot: root,
       changeId: args.changeId,
+      recoveryApprovalRef: args.recoveryApprovalRef,
       now: args.now,
     });
   }
-  const marker = join(directory, "rolled-back.json");
-  const change = readJson<AppliedChange>(join(directory, "change.json"));
-  if (existsSync(marker)) return readJson<{ id: string; restored: string[] }>(marker);
-  for (const item of change.operations) assertCurrentHash(safePath(root, item.path), item.afterHash);
-  for (const item of [...change.operations].reverse()) {
-    const target = safePath(root, item.path);
-    if (item.beforeHash === null) {
-      rmSync(target, { force: true });
-    } else {
-      if (!item.backupPath) throw new Error(`BACKUP_MISSING: ${item.path}`);
-      const backup = safePath(root, item.backupPath);
-      assertCurrentHash(backup, item.beforeHash);
-      atomicWrite(target, readFileSync(backup, "utf8"));
+  const lock = acquireMutationLock(context);
+  try {
+    const planPath = harnessPath(root, `plans/${id}.json`);
+    if (!existsSync(planPath)) throw new Error(`CHANGE_PLAN_MISSING: ${id}`);
+    const plan = readJson<ChangePlan>(planPath);
+    if (plan.id !== id || hashObject(withoutHash(plan)) !== plan.planHash ||
+        realpathSync.native(resolve(plan.projectDir)) !== realpathSync.native(root)) {
+      throw new Error("PLAN_TAMPERED: rollback plan does not match its embedded hash or project");
     }
+    const applied = appliedChangeReceipt(context, id, plan);
+    if (!applied) throw new Error(`APPLIED_CHANGE_RECEIPT_MISSING: ${id}`);
+    const change = applied.change;
+    const completed = completedFileRollbackReceipt(context, change);
+    const journalPath = join(directory, "rollback.json");
+    if (completed) {
+      rmSync(journalPath, { force: true });
+      return completed;
+    }
+
+    const operations = change.operations.map(({ path, beforeHash, afterHash }) => ({ path, beforeHash, afterHash }));
+    const reversible = [...change.operations].reverse().filter((item) => item.beforeHash !== item.afterHash);
+    const existingJournal = existsSync(journalPath) ? readJson<FileRollbackJournal>(journalPath) : null;
+    if (existingJournal) {
+      validateFileRollbackJournal(existingJournal);
+      if (existingJournal.planHash !== plan.planHash ||
+          existingJournal.appliedReceiptEventHash !== applied.event.eventHash ||
+          hashObject(existingJournal.operations) !== hashObject(operations)) {
+        throw new Error(`RECOVERY_REQUIRED: ${id}`);
+      }
+      requireMutationAllowed(context, {
+        kind: "file-rollback",
+        id,
+        action: "resume-rollback",
+        approvalRef: args.recoveryApprovalRef,
+        now: args.now,
+      });
+    } else {
+      requireMutationAllowed(context);
+    }
+
+    let restoredCount = 0;
+    let encounteredAfter = false;
+    for (const item of reversible) {
+      const current = fileHash(safePath(root, item.path));
+      if (current === item.beforeHash) {
+        if (encounteredAfter) throw new Error(`ROLLBACK_PARTIAL_ORDER_INVALID: ${item.path}`);
+        restoredCount += 1;
+      } else if (current === item.afterHash) {
+        encounteredAfter = true;
+      } else {
+        throw new Error(`ROLLBACK_DRIFT: ${item.path}`);
+      }
+    }
+    if (!existingJournal && restoredCount > 0) throw new Error(`ROLLBACK_UNJOURNALED_PARTIAL: ${id}`);
+    const observedRestored = reversible.slice(0, restoredCount).map((item) => item.path);
+    if (existingJournal && (
+      existingJournal.restored.length > observedRestored.length ||
+      existingJournal.restored.some((path, index) => path !== observedRestored[index]) ||
+      observedRestored.length - existingJournal.restored.length > 1
+    )) throw new Error(`RECOVERY_REQUIRED: ${id}`);
+    for (const item of reversible.slice(restoredCount)) {
+      if (item.beforeHash === null) continue;
+      if (!item.backupPath) throw new Error(`BACKUP_MISSING: ${item.path}`);
+      assertCurrentHash(safePath(root, item.backupPath), item.beforeHash);
+    }
+
+    const recoveryId = existingJournal?.recoveryId ?? randomUUID();
+    const restored = new Set(observedRestored);
+    const checkpoint = (): void => atomicWrite(journalPath, prettyJson(createFileRollbackJournal({
+      recoveryId,
+      planHash: plan.planHash,
+      appliedReceiptEventHash: applied.event.eventHash,
+      operations,
+      status: "started",
+      restored: [...restored],
+    })));
+    checkpoint();
+    let completedRestores = 0;
+    for (const item of reversible.slice(restoredCount)) {
+      const target = safePath(root, item.path);
+      if (item.beforeHash === null) rmSync(target, { force: true });
+      else atomicWrite(target, readFileSync(safePath(root, item.backupPath!), "utf8"));
+      assertCurrentHash(target, item.beforeHash);
+      restored.add(item.path);
+      checkpoint();
+      completedRestores += 1;
+      if (args.testInterruptAfterRestores === completedRestores) throw new Error("TEST_FILE_ROLLBACK_INTERRUPT");
+    }
+    const receipt: FileRollbackReceipt = {
+      schemaVersion: "file-rollback/1.0",
+      kind: "file-rollback-receipt",
+      id,
+      planHash: change.planHash,
+      appliedReceiptEventHash: applied.event.eventHash,
+      status: "rolled-back",
+      restored: change.operations.map((item) => item.path),
+      rolledBackAt: (args.now ?? new Date()).toISOString(),
+      observedHash: rollbackObservedHash(root, change),
+    };
+    const event = appendReceiptEvent({
+      ...fileReceiptKey(context, id, "file-rollback"),
+      snapshot: receipt,
+      projection: { root, path: `.harness/changes/${id}/rolled-back.json` },
+    });
+    if (args.testInterruptAfterRollbackReceipt) throw new Error("TEST_FILE_ROLLBACK_RECEIPT_INTERRUPT");
+    recordFileRollbackLkg(context, receipt, event);
+    rmSync(journalPath, { force: true });
+    return receipt;
+  } finally {
+    releaseMutationLock(lock);
   }
-  const result = { id, restored: change.operations.map((item) => item.path), rolledBackAt: (args.now ?? new Date()).toISOString() };
-  atomicWrite(marker, prettyJson(result));
-  return result;
 }
 
 interface Manifest {
@@ -1591,15 +1986,49 @@ export function checkProject(projectRoot: string, observedDrift?: ReturnType<typ
   const hardPassing = hardResults.every((item) => item.passing);
   const stackAdapters = policy.project.stacks.map<StackAdapterResult>((stack) => {
     const support = stackAdapterSupport(stack);
+    const checker = stack === "typescript" ? naming.typescript
+      : stack === "python" ? naming.python
+      : stack === "go" ? naming.go
+      : null;
+    const ruleId = stack === "typescript" ? "typescript-naming"
+      : stack === "python" ? "python-naming"
+      : stack === "go" ? "go-naming"
+      : null;
+    const gate = ruleId ? results.find((item) => item.id === ruleId) : null;
+    const evidenceGaps = checker ? [
+      ...(checker.adapterReachable ? [] : ["adapter is unreachable"]),
+      ...(checker.knownBadRejected ? [] : ["known-bad fixture was not rejected"]),
+      ...(gate ? [] : ["project check gate is not connected"]),
+    ] : [];
+    const supported = checker !== null && checker.adapterReachable && checker.knownBadRejected;
+    const enforced = supported && gate?.enforced === true;
+    const passing = enforced && gate?.passing === true;
     const available = support !== "none";
     return {
       stack,
       support,
       available,
-      status: available ? "available" : "blocked",
-      detail: available
-        ? `Harness provides ${support} policy support for '${stack}'.`
-        : `No built-in adapter for '${stack}'; generic continuity policies are active, but stack-specific enforcement is unavailable.`,
+      supported,
+      enforced,
+      passing,
+      status: checker
+        ? evidenceGaps.length > 0 ? "blocked" : passing ? "verified" : "failing"
+        : support === "guidance" || support === "procedural" ? "guidance" : "blocked",
+      evidence: {
+        adapterReachable: checker?.adapterReachable ?? false,
+        knownBadRejected: checker?.knownBadRejected ?? false,
+        projectGateConnected: gate !== null,
+      },
+      evidenceGaps,
+      detail: checker
+        ? evidenceGaps.length > 0
+          ? `Naming adapter for '${stack}' is blocked: ${evidenceGaps.join("; ")}.`
+          : passing
+            ? `Naming adapter for '${stack}' is supported and enforced by the project check gate.`
+            : `Naming adapter for '${stack}' is supported and enforced, but the project check is failing.`
+        : available
+          ? `Harness provides ${support} guidance for '${stack}', not stack-specific enforced support.`
+          : `No built-in adapter for '${stack}'; generic continuity policies are active, but stack-specific enforcement is unavailable.`,
     };
   });
   const agents = policy.agents.adapters.map((adapter) => {
@@ -1624,7 +2053,7 @@ export function checkProject(projectRoot: string, observedDrift?: ReturnType<typ
     agents,
     results,
     stackAdapters,
-    stackCoverageComplete: stackAdapters.every((adapter) => adapter.available),
+    stackCoverageComplete: stackAdapters.every((adapter) => adapter.supported && adapter.enforced),
     violations,
   };
 }
@@ -1636,6 +2065,46 @@ export interface TrustedCommandResult {
   exitCode: number | null;
   output: string;
   outputSha256: string;
+  negativeReport?: NegativeControlReport;
+  validationError?: string;
+}
+
+interface NegativeControlReport {
+  schemaVersion: "evaluation-negative-report/1";
+  suiteId: string;
+  fixture: string;
+  executed: Array<{ id: string; status: "failed" }>;
+  failures: Array<{ assertionId: string; category: string }>;
+}
+
+function exactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  return Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
+function negativeControlReport(
+  stdout: string,
+  stderr: string,
+  suiteId: string,
+  control: EvalNegativeControl,
+): { report?: NegativeControlReport; error?: string } {
+  if (!control.expectedReport) return { error: "EVAL_NEGATIVE_REPORT_REQUIRED" };
+  if (stderr !== "") return { error: "EVAL_NEGATIVE_STDERR_UNEXPECTED" };
+  let value: unknown;
+  try { value = JSON.parse(stdout); } catch { return { error: "EVAL_NEGATIVE_REPORT_INVALID" }; }
+  if (!value || typeof value !== "object" || Array.isArray(value) || !exactKeys(value as Record<string, unknown>, ["schemaVersion", "suiteId", "fixture", "executed", "failures"])) {
+    return { error: "EVAL_NEGATIVE_REPORT_INVALID" };
+  }
+  const report = value as Record<string, unknown>;
+  if (report.schemaVersion !== "evaluation-negative-report/1" || report.suiteId !== suiteId || report.fixture !== control.fixture ||
+      !Array.isArray(report.executed) || !Array.isArray(report.failures)) return { error: "EVAL_NEGATIVE_REPORT_MISMATCH" };
+  const executed = report.executed;
+  const failures = report.failures;
+  if (executed.length !== 1 || failures.length !== 1 || !executed.every((item) => item && typeof item === "object" && !Array.isArray(item) &&
+      exactKeys(item as Record<string, unknown>, ["id", "status"]) && (item as Record<string, unknown>).id === control.expectedReport!.testId &&
+      (item as Record<string, unknown>).status === "failed") || !failures.every((item) => item && typeof item === "object" && !Array.isArray(item) &&
+      exactKeys(item as Record<string, unknown>, ["assertionId", "category"]) && (item as Record<string, unknown>).assertionId === control.expectedReport!.assertionId &&
+      (item as Record<string, unknown>).category === control.expectedReport!.category)) return { error: "EVAL_NEGATIVE_TARGET_NOT_OBSERVED" };
+  return { report: value as NegativeControlReport };
 }
 
 function executableOnPath(command: string): boolean {
@@ -1697,18 +2166,41 @@ function executableAvailable(command: string, root: string): boolean {
 function trustedCommands(root: string, discovery: Discovery, mode: "session" | "commit" | "ci"): Array<{ id: string; command: string[] }> {
   if (mode === "session") return [];
   const selected: Array<{ id: string; command: string[] }> = [];
+  const commandName = (id: string): string => {
+    const parts = id.split(":");
+    return parts.length >= 3 ? parts.slice(2).join(":").toLowerCase() : parts.at(-1)?.toLowerCase() ?? "";
+  };
+  const packageScript = (id: string): { scope: string; name: string } | null => {
+    const parts = id.split(":");
+    if (parts.length < 3 || !["npm", "pnpm", "yarn", "bun"].includes(parts[0])) return null;
+    return { scope: `${parts[0]}:${parts[1]}`, name: parts.slice(2).join(":").toLowerCase() };
+  };
+  const packageScriptNames = new Map<string, Set<string>>();
+  for (const id of Object.keys(discovery.commands)) {
+    const script = packageScript(id);
+    if (!script) continue;
+    const names = packageScriptNames.get(script.scope) ?? new Set<string>();
+    names.add(script.name);
+    packageScriptNames.set(script.scope, names);
+  }
   const add = (id: string, command: string[] | undefined): void => {
     if (command && !selected.some((item) => JSON.stringify(item.command) === JSON.stringify(command))) selected.push({ id, command });
   };
   for (const [id, command] of Object.entries(discovery.commands)) {
-    const parts = id.split(":");
-    const name = parts.length >= 3 ? parts.slice(2).join(":").toLowerCase() : parts.at(-1)?.toLowerCase() ?? "";
+    const name = commandName(id);
     const commitGate = ["lint", "typecheck", "check", "format:check"].includes(name) ||
       name.startsWith("verify:") ||
       name.endsWith(":check");
-    const ciGate = ["test", "build", "test:ci"].includes(name) ||
+    const script = packageScript(id);
+    const siblingNames = script ? packageScriptNames.get(script.scope) : undefined;
+    const redundantBaseTest = Boolean(script && siblingNames && (siblingNames.has("test:ci")
+      ? name === "test" || name === "test:coverage"
+      : siblingNames.has("test:coverage") && name === "test"));
+    const ciGate = !redundantBaseTest && !name.split(":").some((segment) => segment.startsWith("watch")) && (
+      ["test", "build", "test:ci"].includes(name) ||
       name.startsWith("test:") ||
-      name.startsWith("build:");
+      name.startsWith("build:")
+    );
     if (commitGate) add(id, command);
     if (mode === "ci" && ciGate) add(id, command);
     if (mode === "ci" && (id.startsWith("eval:") || id.startsWith("eval-negative:"))) add(id, command);
@@ -1742,6 +2234,7 @@ function runTrustedCommand(
   mode: "session" | "commit" | "ci",
   expectedExitCode = 0,
   timeoutMs?: number,
+  negative?: { suiteId: string; control: EvalNegativeControl },
 ): TrustedCommandResult {
   if (!executableAvailable(command[0], root)) {
     return {
@@ -1776,8 +2269,10 @@ function runTrustedCommand(
     };
   }
   const gofmtDirty = id === "go:format" && output.length > 0;
-  const passed = result.status === expectedExitCode && !gofmtDirty;
-  return { id, command, status: passed ? "passed" : "failed", exitCode: result.status, output, outputSha256 };
+  const evidence = negative ? negativeControlReport(stdout, stderr, negative.suiteId, negative.control) : {};
+  const passed = result.status === expectedExitCode && !gofmtDirty && !evidence.error;
+  return { id, command, status: passed ? "passed" : "failed", exitCode: result.status, output, outputSha256,
+    ...(evidence.report ? { negativeReport: evidence.report } : {}), ...(evidence.error ? { validationError: evidence.error } : {}) };
 }
 
 export function runTrustedChecks(args: {
@@ -1944,7 +2439,7 @@ export function runTrustedChecks(args: {
           requirementIds: (suite.traceability ?? []).map((trace) => trace.requirementId),
           ruleIds: (suite.traceability ?? []).flatMap((trace) => trace.ruleIds),
           positive: runTrustedCommand(root, `eval:${suite.id}`, suite.command, args.mode, 0, args.commandTimeoutMs),
-          negative: contract.schemaVersion === "1.1" && suite.negativeControl
+          negative: contract.schemaVersion === "1.2" && suite.negativeControl
             ? runTrustedCommand(
                 root,
                 `eval-negative:${suite.id}`,
@@ -1952,6 +2447,7 @@ export function runTrustedChecks(args: {
                 args.mode,
                 suite.negativeControl.expectedExitCode,
                 args.commandTimeoutMs,
+                { suiteId: suite.id, control: suite.negativeControl },
               )
             : null,
         }));
@@ -1962,7 +2458,7 @@ export function runTrustedChecks(args: {
     );
     const negativeFailed = suites.some((suite) => suite.negative?.status === "failed");
     const passing = suites.length > 0 && suites.every((suite) => suite.positive.status === "passed");
-    const enforced = contractVersion === "1.1" && suites.length > 0 && suites.every((suite) => suite.negative?.status === "passed");
+    const enforced = contractVersion === "1.2" && suites.length > 0 && suites.every((suite) => suite.negative?.status === "passed");
     const available = !unavailable;
     const status = unavailable
       ? "blocked" as const
@@ -1992,6 +2488,8 @@ export function runTrustedChecks(args: {
           status: suite.negative.status,
           exitCode: suite.negative.exitCode,
           outputSha256: suite.negative.outputSha256,
+          report: suite.negative.negativeReport ?? null,
+          validationError: suite.negative.validationError ?? null,
         },
       })),
       error: contractError,

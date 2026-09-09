@@ -2,6 +2,7 @@
 """操作 TASK.json 任务看板。
 
 用法:
+  添加 --local-only 可改用 <git-common-dir>/harness/local-tracking/TASK.json；不得因 GitHub 故障自动添加。
   python3 scripts/task.py add <phase> <title> <description> [--priority high|medium|low] [--blocked-by id1,id2] [--blocks id1,id2] [--files path1,path2] [--by agent-name]
   python3 scripts/task.py list [--status pending|completed|in_progress|deleted] [--phase <n>] [--priority high|medium|low|critical]
   python3 scripts/task.py show <id>
@@ -26,11 +27,16 @@ TASK.json 每条任务的结构:
 
 import json
 import sys
+from contextlib import nullcontext
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from local_tracking import atomic_write, load_json, locked, reject_symlink, storage_root
 
+LOCAL_ONLY = "--local-only" in sys.argv[1:]
+ARGV = [argument for argument in sys.argv[1:] if argument != "--local-only"]
 ROOT = Path(__file__).resolve().parent.parent
-TASK_FILE = ROOT / "TASK.json"
+TRACKING_ROOT = storage_root() if LOCAL_ONLY else ROOT
+TASK_FILE = TRACKING_ROOT / "TASK.json"
 TZ = timezone(timedelta(hours=8))
 
 VALID_STATUS = {"pending", "in_progress", "completed", "deleted"}
@@ -41,45 +47,104 @@ def now_iso() -> str:
     return datetime.now(TZ).strftime("%Y-%m-%dT%H:%M:%S+08:00")
 
 
-def load_tasks() -> list[dict]:
+TASK_FIELDS = {
+    "id", "phase", "status", "title", "description", "priority",
+    "blockedBy", "blocks", "createdAt", "updatedAt", "createdBy",
+    "updatedBy", "relatedFiles",
+}
+
+
+def validate_task(task: object, index: int) -> dict:
+    if not isinstance(task, dict) or set(task) != TASK_FIELDS:
+        raise ValueError(f"LOCAL_TRACKING_TASK_SCHEMA_INVALID: task[{index}] fields")
+    if not isinstance(task["id"], str) or not task["id"]:
+        raise ValueError(f"LOCAL_TRACKING_TASK_SCHEMA_INVALID: task[{index}].id")
+    if not isinstance(task["phase"], int) or isinstance(task["phase"], bool) or task["phase"] < 0:
+        raise ValueError(f"LOCAL_TRACKING_TASK_SCHEMA_INVALID: task[{index}].phase")
+    if task["status"] not in VALID_STATUS or task["priority"] not in VALID_PRIORITY:
+        raise ValueError(f"LOCAL_TRACKING_TASK_SCHEMA_INVALID: task[{index}] status/priority")
+    for field in ("title", "description", "createdAt", "updatedAt", "createdBy", "updatedBy"):
+        if not isinstance(task[field], str) or not task[field]:
+            raise ValueError(f"LOCAL_TRACKING_TASK_SCHEMA_INVALID: task[{index}].{field}")
+    for field in ("blockedBy", "blocks", "relatedFiles"):
+        if not isinstance(task[field], list) or not all(isinstance(value, str) and value for value in task[field]):
+            raise ValueError(f"LOCAL_TRACKING_TASK_SCHEMA_INVALID: task[{index}].{field}")
+    return task
+
+
+def validate_tasks(tasks: object) -> list[dict]:
+    if not isinstance(tasks, list):
+        raise ValueError("LOCAL_TRACKING_TASK_SCHEMA_INVALID: tasks")
+    validated = [validate_task(task, index) for index, task in enumerate(tasks)]
+    identifiers = [task["id"] for task in validated]
+    if len(identifiers) != len(set(identifiers)):
+        raise ValueError("LOCAL_TRACKING_TASK_SCHEMA_INVALID: duplicate task id")
+    return validated
+
+
+def load_board() -> dict:
+    reject_symlink(TASK_FILE)
     if not TASK_FILE.exists():
+        return {"schemaVersion": "1.0", "meta": {"project": "local", "updated": now_iso()}, "tasks": []}
+    data = load_json(TASK_FILE)
+    if not isinstance(data, dict) or set(data) != {"schemaVersion", "meta", "tasks"} or data["schemaVersion"] != "1.0":
+        raise ValueError("LOCAL_TRACKING_TASK_SCHEMA_INVALID: root")
+    meta = data["meta"]
+    if not isinstance(meta, dict) or set(meta) != {"project", "updated"} or not all(isinstance(meta[key], str) and meta[key] for key in meta):
+        raise ValueError("LOCAL_TRACKING_TASK_SCHEMA_INVALID: meta")
+    tasks = validate_tasks(data["tasks"])
+    return {"schemaVersion": "1.0", "meta": meta, "tasks": tasks}
+
+
+def load_tasks() -> list[dict]:
+    if not LOCAL_ONLY:
+        if not TASK_FILE.exists():
+            return []
+        with open(TASK_FILE, encoding="utf-8") as handle:
+            data = json.load(handle)
+        if isinstance(data, dict) and isinstance(data.get("tasks"), list):
+            return data["tasks"]
+        if isinstance(data, list):
+            return data
         return []
-    with open(TASK_FILE) as f:
-        data = json.load(f)
-    if isinstance(data, dict) and "tasks" in data:
-        return data["tasks"]
-    if isinstance(data, list):
-        return data
-    return []
+    return load_board()["tasks"]
 
 
 def save_tasks(tasks: list[dict]) -> None:
-    # Preserve meta section if it exists, or create one
-    meta = {
-        "project": ROOT.name,
-        "updated": now_iso(),
-    }
-    if TASK_FILE.exists():
-        try:
-            with open(TASK_FILE) as f:
-                existing = json.load(f)
-            if isinstance(existing, dict) and "meta" in existing:
-                meta = {**existing["meta"], **meta}
-        except (json.JSONDecodeError, KeyError):
-            pass
-    with open(TASK_FILE, "w") as f:
-        json.dump({"meta": meta, "tasks": tasks}, f, indent=2, ensure_ascii=False)
-        f.write("\n")
+    if not LOCAL_ONLY:
+        meta = {"project": ROOT.name, "updated": now_iso()}
+        if TASK_FILE.exists():
+            try:
+                with open(TASK_FILE, encoding="utf-8") as handle:
+                    existing = json.load(handle)
+                if isinstance(existing, dict) and isinstance(existing.get("meta"), dict):
+                    meta = {**existing["meta"], **meta}
+            except (json.JSONDecodeError, KeyError):
+                pass
+        with open(TASK_FILE, "w", encoding="utf-8") as handle:
+            json.dump({"meta": meta, "tasks": tasks}, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        return
+    board = load_board()
+    validated = validate_tasks(tasks)
+    board["meta"]["updated"] = now_iso()
+    board["tasks"] = validated
+    atomic_write(TASK_FILE, json.dumps(board, indent=2, ensure_ascii=False) + "\n")
+
+
+def command_lock():
+    return locked(TRACKING_ROOT) if LOCAL_ONLY else nullcontext()
 
 
 def next_id(phase: int, tasks: list[dict]) -> str:
     """生成下一个任务 ID: P{phase}-{counter}"""
-    existing = [t for t in tasks if t.get("phase") == phase]
+    prefix = f"P{phase}-"
     max_counter = 0
-    for t in existing:
+    for t in tasks:
         tid = t.get("id", "")
-        if tid.startswith(f"P{phase}-") and tid[3:].isdigit():
-            max_counter = max(max_counter, int(tid[3:]))
+        suffix = tid[len(prefix):] if tid.startswith(prefix) else ""
+        if suffix.isdigit():
+            max_counter = max(max_counter, int(suffix))
     return f"P{phase}-{max_counter + 1}"
 
 
@@ -134,30 +199,32 @@ def cmd_add(args: list[str]) -> None:
         print(f"Invalid priority: {priority}. Valid: {VALID_PRIORITY}", file=sys.stderr)
         sys.exit(1)
 
-    tasks = load_tasks()
-    agent = opts.get("by", "unknown")
-    task = {
-        "id": next_id(phase, tasks),
-        "phase": phase,
-        "status": "pending",
-        "title": title,
-        "description": description,
-        "priority": priority,
-        "blockedBy": parse_list_arg(opts.get("blocked_by")) or [],
-        "blocks": parse_list_arg(opts.get("blocks")) or [],
-        "createdAt": now_iso(),
-        "updatedAt": now_iso(),
-        "createdBy": agent,
-        "updatedBy": agent,
-        "relatedFiles": parse_list_arg(opts.get("files")) or [],
-    }
-    tasks.append(task)
-    save_tasks(tasks)
+    with command_lock():
+        tasks = load_tasks()
+        agent = opts.get("by", "unknown")
+        task = {
+            "id": next_id(phase, tasks),
+            "phase": phase,
+            "status": "pending",
+            "title": title,
+            "description": description,
+            "priority": priority,
+            "blockedBy": parse_list_arg(opts.get("blocked_by")) or [],
+            "blocks": parse_list_arg(opts.get("blocks")) or [],
+            "createdAt": now_iso(),
+            "updatedAt": now_iso(),
+            "createdBy": agent,
+            "updatedBy": agent,
+            "relatedFiles": parse_list_arg(opts.get("files")) or [],
+        }
+        tasks.append(task)
+        save_tasks(tasks)
     print(f"Created {task['id']}: [{priority}] {title}")
 
 
 def cmd_list(args: list[str]) -> None:
-    tasks = load_tasks()
+    with command_lock():
+        tasks = load_tasks()
     opts: dict = {}
     i = 0
     while i < len(args):
@@ -200,9 +267,11 @@ def cmd_show(args: list[str]) -> None:
         print("Usage: task.py show <id>", file=sys.stderr)
         sys.exit(1)
     task_id = args[0]
-    tasks = load_tasks()
-    for t in tasks:
-        if t["id"] == task_id:
+    with command_lock():
+        tasks = load_tasks()
+        for t in tasks:
+            if t["id"] != task_id:
+                continue
             for k, v in t.items():
                 if isinstance(v, list):
                     print(f"{k:20s} [{', '.join(v)}]")
@@ -225,9 +294,11 @@ def cmd_update(args: list[str]) -> None:
         print("No fields to update.", file=sys.stderr)
         sys.exit(1)
 
-    tasks = load_tasks()
-    for t in tasks:
-        if t["id"] == task_id:
+    with command_lock():
+        tasks = load_tasks()
+        for t in tasks:
+            if t["id"] != task_id:
+                continue
             if "status" in opts:
                 s = opts["status"]
                 if s not in VALID_STATUS:
@@ -267,7 +338,8 @@ def cmd_update(args: list[str]) -> None:
 
 
 def cmd_summary() -> None:
-    tasks = load_tasks()
+    with command_lock():
+        tasks = load_tasks()
     if not tasks:
         print("No tasks.")
         return
@@ -314,10 +386,16 @@ CMDS = {
 }
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
+    if not ARGV or ARGV[0] not in CMDS:
         print(__doc__, file=sys.stderr)
         sys.exit(1)
-    if not TASK_FILE.exists() and sys.argv[1] != "add":
-        print(f"TASK.json not found at {TASK_FILE}", file=sys.stderr)
+    try:
+        if LOCAL_ONLY:
+            reject_symlink(TASK_FILE)
+        if not TASK_FILE.exists() and ARGV[0] != "add":
+            print(f"TASK.json not found at {TASK_FILE}", file=sys.stderr)
+            sys.exit(1)
+        CMDS[ARGV[0]](ARGV[1:])
+    except (json.JSONDecodeError, OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
         sys.exit(1)
-    CMDS[sys.argv[1]](sys.argv[2:])

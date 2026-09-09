@@ -2,10 +2,10 @@
   "schemaVersion": "2.0",
   "compiler": {
     "package": "@realpkuasule/harness-automation",
-    "version": "2.8.10"
+    "version": "2.8.11"
   },
   "evaluations": {
-    "schemaVersion": "1.1",
+    "schemaVersion": "1.2",
     "suites": [
       {
         "id": "npm-release-worktree-policy",
@@ -76,7 +76,12 @@
             "evals/fixtures/known-bad-npm-release-policy.md"
           ],
           "fixture": "evals/fixtures/known-bad-npm-release-policy.md",
-          "expectedExitCode": 1
+          "expectedExitCode": 1,
+          "expectedReport": {
+            "testId": "npm-release-worktree-policy",
+            "assertionId": "npm-release-policy-required-strings",
+            "category": "required-string-missing"
+          }
         }
       }
     ]
@@ -139,6 +144,34 @@
       "approved": true
     },
     {
+      "id": "design-result-01-branch-worktree-collaboration-target",
+      "kind": "design",
+      "path": "docs/design/result-01-branch-worktree-collaboration-target.md",
+      "sha256": "83f8bacbfc1472a6e581d23fe1c4c492421f9a9b1da497e85458701b465d27f4",
+      "approved": true
+    },
+    {
+      "id": "design-result-02-harness-v3-scenario-feature-inventory",
+      "kind": "design",
+      "path": "docs/design/result-02-harness-v3-scenario-feature-inventory.md",
+      "sha256": "1f362297ec7b6be694a90efb63523e0ff137c48f1e6eb95467562327948d0ce2",
+      "approved": true
+    },
+    {
+      "id": "design-result-03-harness-v3-feature-contract",
+      "kind": "design",
+      "path": "docs/design/result-03-harness-v3-feature-contract.md",
+      "sha256": "f2689c89fef25c5ed544c16657988767551bde8b1d460fb8817b0ae193840d60",
+      "approved": true
+    },
+    {
+      "id": "design-result-04-harness-v3-requirements",
+      "kind": "design",
+      "path": "docs/design/result-04-harness-v3-requirements.md",
+      "sha256": "e7b598310403f7d7212075f59bad3ebf0b28698c3c842ec0e6829edcc6aa8ce6",
+      "approved": true
+    },
+    {
       "id": "design-typescript-naming-adoption-baseline",
       "kind": "design",
       "path": "docs/design/typescript-naming-adoption-baseline.md",
@@ -149,7 +182,7 @@
       "id": "design-worktree-delivery",
       "kind": "design",
       "path": "docs/design/worktree-delivery.md",
-      "sha256": "aaa32ed7b25f4870c8e8a0ca61a0f6fdd68698a85d8f2134c47d4c3e4f89a641",
+      "sha256": "31cd4272386dc703b4b033140636b0eae522cbe67f202396a5e1831753f91bbb",
       "approved": true
     },
     {
@@ -191,7 +224,7 @@
       "id": "eval-evals",
       "kind": "eval",
       "path": "evals/evals.json",
-      "sha256": "aefc091356b5b5f23e14945ab48d1468599fc51cda211f94c07956d89022b794",
+      "sha256": "91848287fea3b58a2951731c1864e20a6f231287adab026c1ff9a66e735eae0d",
       "approved": true
     },
     {
@@ -205,7 +238,7 @@
       "id": "eval-run-npm-release-policy",
       "kind": "eval",
       "path": "evals/run_npm_release_policy.mjs",
-      "sha256": "715d3320bf661d48b1d477592da4a077ef025eb8a41f48704dbfae032c54847a",
+      "sha256": "51e140657de71a9b7f45e93a4c8eb2ab47d7008c90780571c7b5f84c0bf35110",
       "approved": true
     },
     {
@@ -294,6 +327,10 @@
         "design-harness-design-comparison",
         "design-harness-skill-v2",
         "design-project-governance-upgrade",
+        "design-result-01-branch-worktree-collaboration-target",
+        "design-result-02-harness-v3-scenario-feature-inventory",
+        "design-result-03-harness-v3-feature-contract",
+        "design-result-04-harness-v3-requirements",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",
@@ -352,6 +389,10 @@
         "design-harness-design-comparison",
         "design-harness-skill-v2",
         "design-project-governance-upgrade",
+        "design-result-01-branch-worktree-collaboration-target",
+        "design-result-02-harness-v3-scenario-feature-inventory",
+        "design-result-03-harness-v3-feature-contract",
+        "design-result-04-harness-v3-requirements",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",
@@ -413,6 +454,10 @@
         "design-harness-design-comparison",
         "design-harness-skill-v2",
         "design-project-governance-upgrade",
+        "design-result-01-branch-worktree-collaboration-target",
+        "design-result-02-harness-v3-scenario-feature-inventory",
+        "design-result-03-harness-v3-feature-contract",
+        "design-result-04-harness-v3-requirements",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",
@@ -487,6 +532,10 @@
         "design-harness-design-comparison",
         "design-harness-skill-v2",
         "design-project-governance-upgrade",
+        "design-result-01-branch-worktree-collaboration-target",
+        "design-result-02-harness-v3-scenario-feature-inventory",
+        "design-result-03-harness-v3-feature-contract",
+        "design-result-04-harness-v3-requirements",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",
@@ -541,6 +590,10 @@
         "design-harness-design-comparison",
         "design-harness-skill-v2",
         "design-project-governance-upgrade",
+        "design-result-01-branch-worktree-collaboration-target",
+        "design-result-02-harness-v3-scenario-feature-inventory",
+        "design-result-03-harness-v3-feature-contract",
+        "design-result-04-harness-v3-requirements",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",
@@ -605,6 +658,10 @@
         "design-harness-design-comparison",
         "design-harness-skill-v2",
         "design-project-governance-upgrade",
+        "design-result-01-branch-worktree-collaboration-target",
+        "design-result-02-harness-v3-scenario-feature-inventory",
+        "design-result-03-harness-v3-feature-contract",
+        "design-result-04-harness-v3-requirements",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",
@@ -660,6 +717,10 @@
         "design-harness-design-comparison",
         "design-harness-skill-v2",
         "design-project-governance-upgrade",
+        "design-result-01-branch-worktree-collaboration-target",
+        "design-result-02-harness-v3-scenario-feature-inventory",
+        "design-result-03-harness-v3-feature-contract",
+        "design-result-04-harness-v3-requirements",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",
@@ -713,6 +774,10 @@
         "design-harness-design-comparison",
         "design-harness-skill-v2",
         "design-project-governance-upgrade",
+        "design-result-01-branch-worktree-collaboration-target",
+        "design-result-02-harness-v3-scenario-feature-inventory",
+        "design-result-03-harness-v3-feature-contract",
+        "design-result-04-harness-v3-requirements",
         "design-typescript-naming-adoption-baseline",
         "design-worktree-delivery",
         "research-github-wheels-2026-08-31",

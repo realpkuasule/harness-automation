@@ -16,5 +16,16 @@ const results = tasks.map((task) => {
 });
 const score = results.every((result) => result.passed) ? 1 : 0;
 
-console.log(JSON.stringify({ metric: "pass-all-trials", score, trials: results.length, results }, null, 2));
+if (overrideSource) {
+  const failed = results.filter((result) => !result.passed);
+  console.log(JSON.stringify({
+    schemaVersion: "evaluation-negative-report/1",
+    suiteId: "npm-release-worktree-policy",
+    fixture: overrideSource,
+    executed: [{ id: "npm-release-worktree-policy", status: score === 1 ? "passed" : "failed" }],
+    failures: failed.length === 0 ? [] : [{ assertionId: "npm-release-policy-required-strings", category: "required-string-missing" }],
+  }));
+} else {
+  console.log(JSON.stringify({ metric: "pass-all-trials", score, trials: results.length, results }, null, 2));
+}
 process.exitCode = score === 1 ? 0 : 1;

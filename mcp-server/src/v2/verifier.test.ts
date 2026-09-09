@@ -161,15 +161,21 @@ describe("naming verifiers", () => {
     writeFileSync(join(projectRoot, "node_modules", "ignored.ts"), "const bad_name = 1;\n");
     symlinkSync(join(projectRoot, "invalid.tsx"), join(projectRoot, "linked.ts"));
 
-    expect(checkTypeScript(projectRoot)).toMatchObject({ enforced: true, passing: false, violations: [
+    expect(checkTypeScript(projectRoot)).toMatchObject({
+      adapterReachable: true,
+      knownBadRejected: true,
+      enforced: true,
+      passing: false,
+      violations: [
       expect.stringContaining("invalid.tsx"),
-    ] });
+      ],
+    });
   });
 
   it("reports configured and unconfigured external naming checkers", () => {
     const projectRoot = root();
-    expect(checkPython(projectRoot)).toMatchObject({ enforced: false, passing: false, detail: "Python naming checker is not configured" });
-    expect(checkGo(projectRoot)).toMatchObject({ enforced: false, passing: false, detail: "Go naming checker is not configured" });
+    expect(checkPython(projectRoot)).toMatchObject({ adapterReachable: false, knownBadRejected: false, enforced: false, passing: false, detail: "Python naming checker is not configured" });
+    expect(checkGo(projectRoot)).toMatchObject({ adapterReachable: false, knownBadRejected: false, enforced: false, passing: false, detail: "Go naming checker is not configured" });
 
     const generated = join(projectRoot, ".harness", "generated");
     mkdirSync(generated, { recursive: true });
@@ -177,6 +183,6 @@ describe("naming verifiers", () => {
     writeFileSync(checker, "import sys\nif '--self-test' in sys.argv: raise SystemExit(1)\nprint('naming violation')\nraise SystemExit(1)\n");
     chmodSync(checker, 0o755);
 
-    expect(checkPython(projectRoot)).toMatchObject({ enforced: true, passing: false, violations: ["naming violation"] });
+    expect(checkPython(projectRoot)).toMatchObject({ adapterReachable: true, knownBadRejected: true, enforced: true, passing: false, violations: ["naming violation"] });
   });
 });

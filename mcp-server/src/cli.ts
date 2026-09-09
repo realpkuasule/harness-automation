@@ -66,6 +66,24 @@ import {
 import { runSessionCommand } from "./session/cli.js";
 import { auditGitHubGovernance } from "./github/governance.js";
 import { authorizeDelivery, deliveryStatus, mergeDelivery, pushDelivery, upsertDeliveryPullRequest } from "./delivery/service.js";
+import {
+  createRecoveryApproval,
+  inspectRecoveryState,
+  quarantineInvalidEvidence,
+  recordRecoveryApproval,
+} from "./recovery/service.js";
+import { readLkgChain } from "./receipt/service.js";
+import { resolveProjectContext } from "./repository/git.js";
+import {
+  createGitHubWorkItem,
+  listGitHubWorkItems,
+  loadGitHubTrackingConfig,
+  readGitHubWorkItem,
+  updateGitHubWorkItem,
+} from "./tracking/service.js";
+import { coordinationStatus, requireEnabledCoordination } from "./coordination/service.js";
+import { runCredentialCommand } from "./credentials/cli.js";
+import { runQualificationCommand } from "./coordination/cli.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -141,6 +159,51 @@ function reviewReceiptScope(args: ParsedArguments): ReviewReceiptScope {
 
 function printJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function trackingIssue(args: ParsedArguments): number {
+  const selected = Number(required(args, "issue"));
+  if (!Number.isInteger(selected) || selected < 1) throw new Error("GITHUB_TRACKING_ISSUE_INVALID");
+  return selected;
+}
+
+function runTrackingCommand(root: string, args: ParsedArguments): void {
+  const loaded = loadGitHubTrackingConfig(root);
+  switch (args.positionals[0]) {
+    case "list":
+      printJson(listGitHubWorkItems(loaded));
+      return;
+    case "show":
+      printJson(readGitHubWorkItem({ ...loaded, issue: trackingIssue(args) }));
+      return;
+    case "create":
+      printJson(createGitHubWorkItem({
+        ...loaded,
+        title: required(args, "title"),
+        body: value(args, "body"),
+        status: value(args, "status"),
+        priority: value(args, "priority"),
+      }));
+      return;
+    case "update": {
+      const state = value(args, "state");
+      if (state !== undefined && state !== "open" && state !== "closed") {
+        throw new Error("GITHUB_TRACKING_STATE_INVALID: choose open or closed");
+      }
+      printJson(updateGitHubWorkItem({
+        ...loaded,
+        issue: trackingIssue(args),
+        title: value(args, "title"),
+        body: value(args, "body"),
+        state,
+        status: value(args, "status"),
+        priority: value(args, "priority"),
+      }));
+      return;
+    }
+    default:
+      throw new Error("TRACKING_COMMAND_REQUIRED: choose list, show, create, or update");
+  }
 }
 
 function getGlobalPackagePath(): string | null {
@@ -459,6 +522,7 @@ function runWorktreeCommand(
           projectRoot: root,
           planPath: required(args, "plan"),
           approval: required(args, "approve"),
+          recoveryApprovalRef: value(args, "recovery-approval"),
         }));
         return;
       }
@@ -611,6 +675,20 @@ function runDeliveryCommand(root: string, args: ParsedArguments): void {
   }
 }
 
+async function runCoordinationCommand(root: string, args: ParsedArguments): Promise<void> {
+  const action = args.positionals[0];
+  if (action === "qualification") {
+    const result = await runQualificationCommand(root, args); printJson(result.value); process.exitCode = result.exitCode; return;
+  }
+  if (action === "status") { printJson(coordinationStatus(root)); return; }
+  if (["acquire", "renew", "rebind", "transfer", "takeover", "terminal-claim"].includes(action ?? "")) {
+    // The production composition is deliberately gated; this is the same entrypoint future qualification enables.
+    requireEnabledCoordination(root);
+    return;
+  }
+  throw new Error("COORDINATION_COMMAND_REQUIRED: choose status, acquire, renew, rebind, transfer, takeover, or terminal-claim");
+}
+
 function usage(): void {
   console.log(`Harness Automation v2
 
@@ -626,31 +704,43 @@ Usage:
   harness-automation plan [--quality-profile eval-driven-development] [--adopt-typescript-naming] [--project .]
   harness-automation update plan --project <absolute-path> [--adopt-typescript-naming]
   harness-automation update legacy-eval-snapshot plan --project <absolute-path>
-  harness-automation apply --plan <relative-path> --approve <sha256> [--project .]
+  harness-automation apply --plan <relative-path> --approve <sha256> [--recovery-approval <recovery-id>] [--project .]
   harness-automation context [--project .]
   harness-automation check [--project .] [--mode session|commit|ci]
   harness-automation drift [--project .]
   harness-automation explain <policy-id> [--project .]
-  harness-automation rollback [--project .] [--change <id>]
+  harness-automation rollback [--project .] [--change <id>] [--recovery-approval <recovery-id>]
+  harness-automation recovery status [--project .]
+  harness-automation recovery approve --id <finding-id> --approved-by <person> --expires-at <ISO-8601> [--project .]
+  harness-automation recovery quarantine --id <finding-id> --approval <approval-id> [--project .]
+  harness-automation lkg [--project .]
   harness-automation worktree status|audit [--project .]
   harness-automation worktree retention-audit [--receipt-scope host-global|project] [--project .]
   harness-automation worktree integration-check --work-item <provider:id> [--target <local-ref>] [--project .]
   harness-automation github audit --project <absolute-repository> [--organization <github-organization>]
-  harness-automation worktree configure [--mode audit-only|enforced] [--management-branch <branch>] [--topology container-v1 --workspace-container <absolute-path>] [--allow-root <absolute-path>] [--approval-mode manual|delegated-ai] [--reviewer-model <model>] [--delegate-operation <kind>] [--project .]
+  harness-automation tracking list|show|create|update --project <repository> [--issue <number>] [--title <text>] [--body <text>] [--state open|closed] [--status <value>] [--priority <value>]
+  harness-automation worktree configure [--mode audit-only|enforced] [--management-branch <branch>] [--topology container-v1 --workspace-container <absolute-path>] [--allow-root <absolute-path>] [--approval-mode manual] [--project .]
   harness-automation worktree migrate --workspace-container <absolute-path> [--project .]
-  harness-automation worktree migrate apply --plan <relative-plan-path> --approve <sha256> [--project .]
+  harness-automation worktree migrate apply --plan <relative-plan-path> --approve <sha256> [--recovery-approval <recovery-id>] [--project .]
   harness-automation worktree allocate --work-item <provider:id> --branch <name> [--path <absolute-path>] --owner <name> [--project .]
   harness-automation worktree adopt --manifest <json-path> [--project .]
   harness-automation worktree review [--commit <sha>] [--project .] -- <command> [args...]
   harness-automation worktree close --work-item <provider:id> --accepted-commit <sha> [--project .]
   harness-automation worktree renew --work-item <provider:id> [--project .]
   harness-automation worktree recover --path <absolute-path> [--project .]
-  harness-automation worktree apply-ai --plan <relative-path> --intent <plain-language intent> [--project .]
+  harness-automation worktree apply-ai --plan <relative-path> --intent <plain-language intent> [--project .]  # legacy bindings return ReviewPending until DG-02
   harness-automation delivery authorize --work-item <github:owner/repo#issue> --base <branch> --allow-path <path-or-directory/> [--allow-path <path-or-directory/>...] --intent <approved-intent> --approval-source <immutable-user-authorization-reference> [--branch <branch>] [--repository <owner/repo>] [--remote <name>] [--merge-mode manual|checks-green] [--retry-limit <n>] [--supersedes <authorization-hash>] [--project .]
   harness-automation delivery status --authorization <sha256> [--project .]
   harness-automation delivery push --authorization <sha256> [--project .]
   harness-automation delivery pr --authorization <sha256> --title <title> [--body <body>] [--project .]
   harness-automation delivery merge --authorization <sha256> --pull-request <number> [--project .]
+  harness-automation coordination status|acquire|renew|rebind|transfer|takeover|terminal-claim [--project .]
+  harness-automation coordination qualification plan --input <request.json> [--project .]
+  harness-automation coordination qualification approve --plan <saved-plan> --approve <sha256> --approved-by <person> --approval-source <message-reference> [--project .]
+  harness-automation coordination qualification run --plan <saved-plan> [--project .]
+  harness-automation coordination qualification recover-cleanup --approval <receipt-ref> --attempt <uuid> [--project .]
+  harness-automation credentials plan --input <non-secret-binding.json> [--remote origin] [--project .]
+  harness-automation credentials apply --plan <plan.json> --approve <exact-hash> [--remote origin] [--project .]
   harness-automation session handoff --work-item <provider:repo#issue> --session <session-id> [--to-status in-progress|ready-for-review] [--dry-run] [--project .]
   harness-automation session status [--work-item <provider:repo#issue>] [--project .]
   harness-automation session seed --work-item <provider:repo#issue> [--project .]
@@ -659,11 +749,52 @@ All workflow commands emit stable JSON. Apply requires the exact hash printed by
 Custom stack identifiers use lowercase kebab-case. Unknown stacks retain generic policies and report stack-specific enforcement as blocked.`);
 }
 
-function runWorkflow(argv: string[]): void {
+function runRecoveryCommand(root: string, args: ParsedArguments): void {
+  const context = resolveProjectContext(root);
+  const action = args.positionals[0];
+  if (action === "status") {
+    printJson({ findings: inspectRecoveryState(context) });
+    return;
+  }
+  if (action === "approve") {
+    const id = required(args, "id");
+    const finding = inspectRecoveryState(context).find((item) => item.id === id);
+    if (!finding) throw new Error(`RECOVERY_FINDING_NOT_FOUND: ${id}`);
+    const expiresAt = required(args, "expires-at");
+    if (!Number.isFinite(Date.parse(expiresAt))) throw new Error("RECOVERY_APPROVAL_EXPIRY_INVALID");
+    const approval = createRecoveryApproval({
+      context,
+      finding,
+      approvedBy: required(args, "approved-by"),
+      approvedAt: new Date().toISOString(),
+      expiresAt,
+    });
+    printJson({ approval, path: recordRecoveryApproval(context, approval) });
+    return;
+  }
+  if (action === "quarantine") {
+    printJson({ path: quarantineInvalidEvidence(context, required(args, "approval"), required(args, "id")) });
+    return;
+  }
+  throw new Error("RECOVERY_COMMAND_REQUIRED: choose recovery status, recovery approve, or recovery quarantine");
+}
+
+function printLkg(root: string): void {
+  const context = resolveProjectContext(root);
+  const stateDirectory = context.repository ? "harness" : ".harness";
+  const receiptRoot = context.repository ? context.commonDir : context.projectDir;
+  printJson({
+    records: ["file-apply", "file-rollback", "workspace"].flatMap((domain) =>
+      readLkgChain({ root: receiptRoot, stateDirectory, domain }).map((record) => ({ ...record, domain }))),
+  });
+}
+
+async function runWorkflow(argv: string[]): Promise<void> {
   const separator = argv.indexOf("--");
   const workflowArguments = separator === -1 ? argv : argv.slice(0, separator);
   const trailingCommand = separator === -1 ? [] : argv.slice(separator + 1);
   const command = workflowArguments[0];
+  if (command === "coordination" && separator !== -1) throw new Error("QUALIFICATION_ARGUMENTS_INVALID");
   const args = parseArguments(workflowArguments.slice(1));
   const root = projectRoot(args);
   switch (command) {
@@ -761,7 +892,12 @@ function runWorkflow(argv: string[]): void {
       return;
     }
     case "apply":
-      printJson(applyPlan({ projectRoot: root, planPath: required(args, "plan"), approval: required(args, "approve") }));
+      printJson(applyPlan({
+        projectRoot: root,
+        planPath: required(args, "plan"),
+        approval: required(args, "approve"),
+        recoveryApprovalRef: value(args, "recovery-approval"),
+      }));
       return;
     case "context":
       {
@@ -788,13 +924,29 @@ function runWorkflow(argv: string[]): void {
       printJson(explainPolicy(root, args.positionals[0] ?? required(args, "policy")));
       return;
     case "rollback":
-      printJson(rollbackChange({ projectRoot: root, changeId: value(args, "change") }));
+      printJson(rollbackChange({
+        projectRoot: root,
+        changeId: value(args, "change"),
+        recoveryApprovalRef: value(args, "recovery-approval"),
+      }));
+      return;
+    case "recovery":
+      runRecoveryCommand(root, args);
+      return;
+    case "lkg":
+      printLkg(root);
       return;
     case "worktree":
       runWorktreeCommand(root, args, trailingCommand);
       return;
     case "delivery":
       runDeliveryCommand(root, args);
+      return;
+    case "coordination":
+      await runCoordinationCommand(root, args);
+      return;
+    case "credentials":
+      printJson(runCredentialCommand(root, args));
       return;
     case "github": {
       if (args.positionals[0] !== "audit") throw new Error("GITHUB_COMMAND_REQUIRED: choose audit");
@@ -803,6 +955,9 @@ function runWorkflow(argv: string[]): void {
       if (report.status === "blocked") process.exitCode = 2;
       return;
     }
+    case "tracking":
+      runTrackingCommand(root, args);
+      return;
     case "session":
       runSessionCommand(root, args);
       return;
@@ -816,17 +971,17 @@ function runWorkflow(argv: string[]): void {
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   try {
     if (argv.length === 0 || argv[0] === "install") install({ syncGlobal: !argv.includes("--no-global") });
-    else runWorkflow(argv);
+    else await runWorkflow(argv);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (argv.length === 0 || argv[0] === "install") fail(message);
     else console.error(JSON.stringify({ ok: false, error: message }, null, 2));
-    process.exitCode = 1;
+    process.exitCode = ["credentials", "coordination"].includes(argv[0]) && message.startsWith("ENVIRONMENT_BLOCKED:") ? 3 : 1;
   }
 }
 
-main();
+void main();

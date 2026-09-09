@@ -1,9 +1,9 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWrite, readJson, safePath, sha256 } from "../v2/fs.js";
 import { observeProvider } from "../worktree/provider.js";
-import { loadConfig } from "../worktree/service.js";
+import { loadWorktreeConfig } from "../worktree/config.js";
+import { runGitCommand } from "../repository/git.js";
 import { deliveryStatus, latestDeliveryAuthorization } from "../delivery/service.js";
 import type { WorktreeDeliveryConfig } from "../worktree/types.js";
 import {
@@ -46,9 +46,9 @@ const REFERENCE_SECTION = "## 引用文件（路径列表，新会话必须读�
 const COMPLETED_SECTION = "## 已完成（附 commit / 回执）";
 
 function git(root: string, args: string[]): string {
-  const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+  const result = runGitCommand(root, args, process.env);
   if (result.status !== 0) {
-    throw new Error(`GIT_REPOSITORY_REQUIRED: git ${args.join(" ")} failed (${result.stderr?.trim() || result.status})`);
+    throw new Error(`GIT_REPOSITORY_REQUIRED: git ${args.join(" ")} failed (${result.stderr.trim() || result.status})`);
   }
   return result.stdout;
 }
@@ -316,7 +316,7 @@ function githubProviderConfig(root: string): {
   configured: boolean;
   config: WorktreeDeliveryConfig;
 } {
-  const loaded = loadConfig(root);
+  const loaded = loadWorktreeConfig(root);
   if (!loaded.configured || loaded.config.provider.kind !== "github") {
     throw new Error("SESSION_PROVIDER_UNSUPPORTED: session commands require a GitHub provider in .harness/worktree-delivery.json");
   }
@@ -347,7 +347,7 @@ export function sessionSeed(options: SessionCommandOptions): { ok: true; seed: s
   const workItem = parsedWorkItem(options.workItem);
   const loaded = loadSessionWorkflow(root);
   const authorization = latestDeliveryAuthorization(root, workItem.workItem);
-  const configured = loadConfig(root);
+  const configured = loadWorktreeConfig(root);
   if (configured.config.provider.kind === "github") assertRepositoryMatch(configured.config, workItem);
   let issue: { title: string; body: string; url: string };
   try {

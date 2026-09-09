@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 // ============================================================
@@ -371,6 +371,36 @@ export class SetupValidator {
   }
 
   private _checkDependencies(findings: ValidationFinding[]): void {
+    const helper = "scripts/local_tracking.py";
+    const dependents = ["scripts/task.py", "scripts/changelog.py"]
+      .filter((file) => {
+        const path = join(this.options.projectDir, file);
+        if (!existsSync(path)) return false;
+        try {
+          const content = readFileSync(path, "utf8");
+          return content.includes("from local_tracking import") || content.includes("import local_tracking");
+        } catch {
+          return false;
+        }
+      });
+    if (dependents.length > 0) {
+      const helperPath = join(this.options.projectDir, helper);
+      let usable = false;
+      try {
+        usable = lstatSync(helperPath).isFile() && readFileSync(helperPath, "utf8").trim().length > 0;
+      } catch {
+        usable = false;
+      }
+      if (!usable) {
+        findings.push({
+          file: helper,
+          type: "error",
+          message: `${helper} must be a readable, non-empty regular file because it is required by ${dependents.join(" and ")}`,
+          fix: `Run init_harness or generate_config to create ${helper}`,
+        });
+      }
+    }
+
     const pkgPath = join(this.options.projectDir, "package.json");
     if (!existsSync(pkgPath)) return;
 

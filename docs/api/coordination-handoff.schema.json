@@ -1,0 +1,314 @@
+{
+  "type": "object",
+  "properties": {
+    "transferId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "machine": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "generation": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "epoch": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "head": {
+          "type": "string",
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "owner",
+        "machine",
+        "generation",
+        "epoch",
+        "head",
+        "expiresAt"
+      ],
+      "additionalProperties": false
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "machine": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "owner",
+        "machine"
+      ],
+      "additionalProperties": false
+    },
+    "sourceProof": {
+      "type": "object",
+      "properties": {
+        "freezeRecordHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "facts": {
+          "type": "object",
+          "properties": {
+            "sourceRepositoryId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "sourceRef": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "endpointHash": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "sourceHead": {
+              "type": "string",
+              "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+            },
+            "remoteHead": {
+              "type": "string",
+              "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+            },
+            "workspace": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "commonDir": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "trackedClean": {
+              "type": "boolean",
+              "const": true
+            },
+            "untracked": {
+              "type": "array",
+              "minItems": 0,
+              "maxItems": 0,
+              "items": []
+            },
+            "ignored": {
+              "type": "array",
+              "minItems": 0,
+              "maxItems": 0,
+              "items": []
+            },
+            "uniqueCommits": {
+              "type": "number",
+              "const": 0
+            },
+            "unpushedCommits": {
+              "type": "number",
+              "const": 0
+            },
+            "observer": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "hostId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "observedAt": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "sourceRepositoryId",
+            "sourceRef",
+            "endpointHash",
+            "sourceHead",
+            "remoteHead",
+            "workspace",
+            "commonDir",
+            "trackedClean",
+            "untracked",
+            "ignored",
+            "uniqueCommits",
+            "unpushedCommits",
+            "observer",
+            "hostId",
+            "observedAt"
+          ],
+          "additionalProperties": false
+        },
+        "coverage": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "isolated-qualification",
+                "host-verified"
+              ]
+            },
+            "observerId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "entrypoints": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "minItems": 1,
+              "maxItems": 32
+            },
+            "quiescenceHash": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "kind",
+            "observerId",
+            "entrypoints",
+            "quiescenceHash"
+          ],
+          "additionalProperties": false
+        },
+        "proofHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "freezeRecordHash",
+        "facts",
+        "coverage",
+        "proofHash"
+      ],
+      "additionalProperties": false
+    },
+    "targetAcceptance": {
+      "type": "object",
+      "properties": {
+        "sourceProofHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "sourceRepositoryId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "sourceRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "endpointHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "sourceHead": {
+          "type": "string",
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+        },
+        "remoteHead": {
+          "type": "string",
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+        },
+        "retrievedHead": {
+          "type": "string",
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+        },
+        "targetHead": {
+          "type": "string",
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+        },
+        "workspace": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "commonDir": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "observer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "hostId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "acceptanceHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "sourceProofHash",
+        "sourceRepositoryId",
+        "sourceRef",
+        "endpointHash",
+        "sourceHead",
+        "remoteHead",
+        "retrievedHead",
+        "targetHead",
+        "workspace",
+        "commonDir",
+        "observer",
+        "hostId",
+        "observedAt",
+        "acceptanceHash"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "transferId",
+    "source",
+    "target"
+  ],
+  "additionalProperties": false,
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "Generated from coordination/handoff_record.ts; runtime additionally checks canonical hashes, source/target identity, generation, expiry and acceptance consistency. Stored proof shape is not authorization."
+}

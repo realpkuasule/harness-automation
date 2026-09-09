@@ -214,6 +214,8 @@ export interface WorkspaceStatus {
   capacity: { limit: number; used: number; available: number };
   worktrees: WorktreeRecord[];
   leases: WorkspaceLease[];
+  qualificationResources?: Array<{ approvalRef: string; resourceId: string; path: string; branch: string;
+    phase: "reserved" | "mkdir-owned" | "add-started" | "ready" | "released"; status: "reserved" | "mkdir-owned" | "add-started" | "ready" | "released" | "retained" }>;
   provider: ProviderObservation;
   errors: string[];
   observedHash: string;
@@ -425,8 +427,10 @@ export interface WorkspaceAiDecision {
 }
 
 export interface WorkspaceAiReviewResult {
-  decisionPath: string;
-  decision: WorkspaceAiDecision;
+  status?: "ReviewPending" | "NeedsHuman";
+  code?: string;
+  decisionPath?: string;
+  decision?: WorkspaceAiDecision;
   receipt?: WorkspaceReceipt;
 }
 
@@ -450,7 +454,10 @@ export interface WorkspaceReceipt {
   rollbackObservedHash?: string;
   rollbackAfter?: WorkspaceStatus;
   leaseChanges?: WorkspaceLeaseChange[];
+  mutationStarted?: boolean;
   compensationStatus?: "not-required" | "completed" | "failed";
+  compensationObservedHash?: string;
+  rollbackStatus?: "started" | "completed" | "failed";
   createdDirectories?: string[];
   migration?: {
     sourceProjectDir: string;

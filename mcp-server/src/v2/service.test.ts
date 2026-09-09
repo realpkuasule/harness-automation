@@ -19,7 +19,10 @@ import {
   runTrustedChecks,
 } from "./service.js";
 import { planWorkspaceConfiguration } from "../worktree/service.js";
-import { hashObject, sha256 } from "./fs.js";
+import { createRecoveryApproval, inspectRecoveryState, recordRecoveryApproval } from "../recovery/service.js";
+import { resolveProjectContext } from "../repository/git.js";
+import { fileHash, hashObject, sha256 } from "./fs.js";
+import { readLatestLkgRecord, readReceiptChain } from "../receipt/service.js";
 import { PYTHON_NAMING_CHECKER } from "./policy.js";
 
 const roots: string[] = [];
@@ -85,24 +88,26 @@ function hardenedEvaluationContract(root: string, positiveExitCode = 0, negative
   write(root, "evals/baselines/adoption.json", "{\"score\":0}\n");
   write(root, "evals/fixtures/known-bad.json", "{\"bad\":true}\n");
   write(root, "evals/runner-manifest.json", "{\"runner\":\"node\"}\n");
+  write(root, "evals/run-negative.mjs", `process.stdout.write(JSON.stringify({ schemaVersion: "evaluation-negative-report/1", suiteId: "representative-quality", fixture: "evals/fixtures/known-bad.json", executed: [{ id: "representative-quality", status: "failed" }], failures: [{ assertionId: "representative-quality-gate", category: "fixture-violation" }] })); process.exit(${negativeExitCode});\n`);
   write(root, "evals/evals.json", JSON.stringify({
-    schemaVersion: "1.1",
+    schemaVersion: "1.2",
     suites: [{
       id: "representative-quality",
       kind: "capability",
       owner: "owner",
       description: "Representative project behavior.",
       command: ["node", "-e", `process.exit(${positiveExitCode})`],
-      runnerSources: ["evals/runner-manifest.json"],
+      runnerSources: ["evals/runner-manifest.json", "evals/run-negative.mjs"],
       tasks: ["evals/tasks.jsonl"],
       traceability: [{ requirementId: "PRD-AI-004", ruleIds: ["representative-quality-gate"] }],
       baseline: { origin: "adoption", score: 0, trials: 1, evidence: "evals/baselines/adoption.json" },
       target: { metric: "pass-at-1", threshold: 1, trials: 1 },
       graders: [{ id: "outcome-test", kind: "code", role: "gate" }],
       negativeControl: {
-        command: ["node", "-e", `process.exit(${negativeExitCode})`],
+        command: ["node", "evals/run-negative.mjs"],
         fixture: "evals/fixtures/known-bad.json",
         expectedExitCode: 1,
+        expectedReport: { testId: "representative-quality", assertionId: "representative-quality-gate", category: "fixture-violation" },
       },
     }],
   }));
@@ -391,6 +396,42 @@ describe("v2 custom stack planning", () => {
       .toContain("generic policies apply and stack-specific enforcement is blocked");
   });
 
+  it("reports naming adapter evidence through the project check gate", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    applyCurrentPolicy(root);
+
+    expect(checkProject(root).stackAdapters).toEqual([
+      expect.objectContaining({
+        stack: "typescript",
+        support: "deterministic",
+        supported: true,
+        enforced: true,
+        passing: true,
+        status: "verified",
+        evidence: {
+          adapterReachable: true,
+          knownBadRejected: true,
+          projectGateConnected: true,
+        },
+        evidenceGaps: [],
+      }),
+      expect.objectContaining({ stack: "postgresql", status: "guidance", supported: false, enforced: false }),
+    ]);
+
+    write(root, "src/invalid.ts", "export const invalid_name = 1;\n");
+    expect(checkProject(root).stackAdapters).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stack: "typescript",
+        supported: true,
+        enforced: true,
+        passing: false,
+        status: "failing",
+        evidenceGaps: [],
+      }),
+    ]));
+  });
+
   it("keeps delivery and domain profiles orthogonal to stack selection", () => {
     const root = temporaryProject();
     approvedSources(root);
@@ -643,6 +684,119 @@ describe("v2 plan/apply/check/rollback", () => {
     expect(readFileSync(join(root, ".harness/generated/effective-policy.md"), "utf8")).toBe("original nested content\n");
   });
 
+  it("resumes one interrupted file apply only with persisted human recovery approval and compensates the whole plan", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    write(root, "AGENTS.md", "original instructions\n");
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    const planned = planProject({ projectRoot: root });
+
+    expect(() => applyPlan({
+      projectRoot: root, planPath: planned.path, approval: planned.plan.planHash,
+      testInterruptAfterWrites: 1,
+    })).toThrow("TEST_FILE_APPLY_INTERRUPT");
+    expect(() => applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash }))
+      .toThrow("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+
+    const recoveryContext = resolveProjectContext(root);
+    const finding = inspectRecoveryState(recoveryContext).find((item) =>
+      item.kind === "file-apply" && item.id === planned.plan.id)!;
+    const approval = createRecoveryApproval({
+      context: recoveryContext,
+      finding,
+      approvedBy: "owner",
+      approvedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:01:00.000Z",
+    });
+    recordRecoveryApproval(recoveryContext, approval);
+    expect(() => applyPlan({
+      projectRoot: root,
+      planPath: planned.path,
+      approval: planned.plan.planHash,
+      recoveryApprovalRef: approval.id,
+      now: new Date("2099-01-01T00:00:30.000Z"),
+      testFailPostApply: true,
+    })).toThrow("TEST_FILE_POST_APPLY_FAILURE");
+    for (const operation of planned.plan.operations) {
+      expect(fileHash(join(root, operation.path))).toBe(operation.beforeHash);
+    }
+    expect(inspectRecoveryState(recoveryContext)).toEqual([]);
+    expect(applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash }))
+      .toMatchObject({ id: planned.plan.id });
+  });
+
+  it("treats an exact completed change receipt as authoritative after cleanup interruption", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    const planned = planProject({ projectRoot: root });
+    expect(() => applyPlan({
+      projectRoot: root, planPath: planned.path, approval: planned.plan.planHash,
+      testInterruptAfterChangeReceipt: true,
+    })).toThrow("TEST_FILE_CHANGE_RECEIPT_INTERRUPT");
+    expect(inspectRecoveryState(resolveProjectContext(root))).toEqual([]);
+    expect(applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash }))
+      .toMatchObject({ id: planned.plan.id, planHash: planned.plan.planHash });
+  });
+
+  it("resumes an interrupted rollback only with evidence-bound approval and keeps immutable receipts", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    write(root, "AGENTS.md", "original instructions\n");
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    const planned = planProject({ projectRoot: root });
+    const change = applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+
+    expect(() => rollbackChange({ projectRoot: root, changeId: change.id, testInterruptAfterRestores: 1 }))
+      .toThrow("TEST_FILE_ROLLBACK_INTERRUPT");
+    expect(() => rollbackChange({ projectRoot: root, changeId: change.id }))
+      .toThrow("RECOVERY_HUMAN_APPROVAL_REQUIRED");
+    const recoveryContext = resolveProjectContext(root);
+    const finding = inspectRecoveryState(recoveryContext).find((item) => item.kind === "file-rollback")!;
+    expect(finding).toMatchObject({ id: change.id, action: "resume-rollback" });
+    const approval = createRecoveryApproval({
+      context: recoveryContext,
+      finding,
+      approvedBy: "owner",
+      approvedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:01:00.000Z",
+    });
+    recordRecoveryApproval(recoveryContext, approval);
+    expect(rollbackChange({
+      projectRoot: root,
+      changeId: change.id,
+      recoveryApprovalRef: approval.id,
+      now: new Date("2099-01-01T00:00:30.000Z"),
+    })).toMatchObject({ id: change.id, status: "rolled-back" });
+    expect(inspectRecoveryState(recoveryContext)).toEqual([]);
+    expect(readReceiptChain({ root, stateDirectory: ".harness", domain: "file-apply", transactionId: change.id })).toHaveLength(1);
+    expect(readReceiptChain({ root, stateDirectory: ".harness", domain: "file-rollback", transactionId: change.id })).toHaveLength(1);
+    expect(readLatestLkgRecord({ root, stateDirectory: ".harness", domain: "file-rollback" }))
+      .toMatchObject({ transactionId: change.id, planHash: planned.plan.planHash });
+  });
+
+  it("does not overwrite post-apply drift during rollback and detects receipt projection tampering", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    const planned = planProject({ projectRoot: root });
+    const change = applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+    write(root, "AGENTS.md", "user edit after apply\n");
+    expect(() => rollbackChange({ projectRoot: root, changeId: change.id })).toThrow("ROLLBACK_DRIFT: AGENTS.md");
+    expect(readFileSync(join(root, "AGENTS.md"), "utf8")).toBe("user edit after apply\n");
+
+    const changePath = join(root, ".harness", "changes", change.id, "change.json");
+    const tampered = JSON.parse(readFileSync(changePath, "utf8"));
+    tampered.appliedAt = "2099-01-01T00:00:00.000Z";
+    write(root, ".harness/changes/" + change.id + "/change.json", `${JSON.stringify(tampered, null, 2)}\n`);
+    expect(() => applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash }))
+      .toThrow("RECEIPT_PROJECTION_DIVERGED");
+  });
+
   it("rejects stale source and target preconditions", () => {
     const sourceRoot = temporaryProject();
     fullTypeScriptProject(sourceRoot);
@@ -791,7 +945,7 @@ describe("v2 plan/apply/check/rollback", () => {
     });
     expect(planned.plan.commands).toEqual(expect.arrayContaining([
       ["node", "-e", "process.exit(0)"],
-      ["node", "-e", "process.exit(1)"],
+      ["node", "evals/run-negative.mjs"],
     ]));
     applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
 
@@ -824,7 +978,9 @@ describe("v2 plan/apply/check/rollback", () => {
       requirementIds: ["PRD-AI-004"],
       ruleIds: ["representative-quality-gate"],
       positive: { command: ["node", "-e", "process.exit(0)"], status: "passed", exitCode: 0 },
-      negative: { command: ["node", "-e", "process.exit(1)"], status: "passed", exitCode: 1 },
+      negative: { command: ["node", "evals/run-negative.mjs"], status: "passed", exitCode: 1,
+        report: { schemaVersion: "evaluation-negative-report/1", suiteId: "representative-quality", fixture: "evals/fixtures/known-bad.json",
+          executed: [{ id: "representative-quality", status: "failed" }], failures: [{ assertionId: "representative-quality-gate", category: "fixture-violation" }] } },
     });
     expect(JSON.stringify(receipt)).not.toContain("stdout");
     expect(JSON.stringify(receipt)).not.toContain("stderr");
@@ -903,6 +1059,26 @@ describe("v2 plan/apply/check/rollback", () => {
     const ci = runTrustedChecks({ projectRoot: root, mode: "ci" });
     expect(ci.ok).toBe(false);
     expect(ci.evaluations).toMatchObject({ status: "blocked", passing: exitCode === 0, enforced: false });
+  });
+
+  it.each([
+    ["unrelated assertion", "JSON.stringify({ schemaVersion: 'evaluation-negative-report/1', suiteId: 'representative-quality', fixture: 'evals/fixtures/known-bad.json', executed: [{ id: 'representative-quality', status: 'failed' }], failures: [{ assertionId: 'other-assertion', category: 'fixture-violation' }] })", "EVAL_NEGATIVE_TARGET_NOT_OBSERVED"],
+    ["target words in an ordinary log", "'representative-quality representative-quality-gate fixture-violation'", "EVAL_NEGATIVE_REPORT_INVALID"],
+    ["no executed target", "JSON.stringify({ schemaVersion: 'evaluation-negative-report/1', suiteId: 'representative-quality', fixture: 'evals/fixtures/known-bad.json', executed: [], failures: [{ assertionId: 'representative-quality-gate', category: 'fixture-violation' }] })", "EVAL_NEGATIVE_TARGET_NOT_OBSERVED"],
+  ])("rejects a same-exit negative control with %s", (_name, output, validationError) => {
+    const root = temporaryProject();
+    approvedSources(root);
+    hardenedEvaluationContract(root);
+    write(root, "evals/run-negative.mjs", `process.stdout.write(${output}); process.exit(1);\n`);
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    const planned = planProject({ projectRoot: root, profile: "custom", stacks: ["typescript"], qualityProfiles: ["eval-driven-development"] });
+    applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+
+    const ci = runTrustedChecks({ projectRoot: root, mode: "ci" });
+    expect(ci.evaluations).toMatchObject({ available: true, status: "failing", enforced: false, passing: true });
+    const receipt = JSON.parse(readFileSync(join(root, String(ci.evaluations.receiptPath)), "utf8"));
+    expect(receipt.suites[0].negative).toMatchObject({ exitCode: 1, validationError, outputSha256: expect.stringMatching(/^[a-f0-9]{64}$/u), report: null });
   });
 
   it.each([
@@ -1025,6 +1201,11 @@ describe("v2 plan/apply/check/rollback", () => {
     approvedSources(root);
     write(root, "package.json", JSON.stringify({ scripts: {
       test: "node -e \"require('node:fs').appendFileSync('ordinary-count.txt', 'x')\"",
+      "test:watch": "node -e \"require('node:fs').appendFileSync('watch-count.txt', 'x')\"",
+      "test:watchAll": "node -e \"require('node:fs').appendFileSync('watch-all-count.txt', 'x')\"",
+      "test:watch-all": "node -e \"require('node:fs').appendFileSync('watch-dash-count.txt', 'x')\"",
+      "test:watch:unit": "node -e \"require('node:fs').appendFileSync('watch-unit-count.txt', 'x')\"",
+      "build:watch-ci": "node -e \"require('node:fs').appendFileSync('build-watch-count.txt', 'x')\"",
     } }));
     intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
     write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
@@ -1033,6 +1214,66 @@ describe("v2 plan/apply/check/rollback", () => {
     expect(runTrustedChecks({ projectRoot: root, mode: "ci" }).commands)
       .toEqual(expect.arrayContaining([expect.objectContaining({ command: ["npm", "run", "test"], status: "passed" })]));
     expect(readFileSync(join(root, "ordinary-count.txt"), "utf8")).toBe("x");
+    expect(() => readFileSync(join(root, "watch-count.txt"), "utf8")).toThrow();
+    expect(() => readFileSync(join(root, "watch-all-count.txt"), "utf8")).toThrow();
+    expect(() => readFileSync(join(root, "watch-dash-count.txt"), "utf8")).toThrow();
+    expect(() => readFileSync(join(root, "watch-unit-count.txt"), "utf8")).toThrow();
+    expect(() => readFileSync(join(root, "build-watch-count.txt"), "utf8")).toThrow();
+  });
+
+  it("prefers the strongest base test script without suppressing specialized suites", () => {
+    const scenarios = [
+      {
+        scripts: {
+          test: "node -e \"require('node:fs').appendFileSync('base-count.txt', 'x')\"",
+          "test:coverage": "node -e \"require('node:fs').appendFileSync('coverage-count.txt', 'x')\"",
+          "test:ci": "node -e \"require('node:fs').appendFileSync('ci-count.txt', 'x')\"",
+          "test:unit": "node -e \"require('node:fs').appendFileSync('unit-count.txt', 'x')\"",
+        },
+        selected: ["ci-count.txt", "unit-count.txt"],
+        skipped: ["base-count.txt", "coverage-count.txt"],
+      },
+      {
+        scripts: {
+          test: "node -e \"require('node:fs').appendFileSync('base-count.txt', 'x')\"",
+          "test:coverage": "node -e \"require('node:fs').appendFileSync('coverage-count.txt', 'x')\"",
+        },
+        selected: ["coverage-count.txt"],
+        skipped: ["base-count.txt"],
+      },
+    ];
+    for (const scenario of scenarios) {
+      const root = temporaryProject();
+      approvedSources(root);
+      write(root, "package.json", JSON.stringify({ scripts: scenario.scripts }));
+      intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+      write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+      const planned = planProject({ projectRoot: root, profile: "custom", stacks: ["typescript"] });
+      applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+
+      expect(runTrustedChecks({ projectRoot: root, mode: "ci" }).ok).toBe(true);
+      for (const marker of scenario.selected) expect(readFileSync(join(root, marker), "utf8")).toBe("x");
+      for (const marker of scenario.skipped) expect(() => readFileSync(join(root, marker), "utf8")).toThrow();
+    }
+
+    const root = temporaryProject();
+    approvedSources(root);
+    write(root, "package.json", JSON.stringify({ scripts: {
+      test: "node -e \"require('node:fs').appendFileSync('root-base-count.txt', 'x')\"",
+      "test:ci": "node -e \"require('node:fs').appendFileSync('root-ci-count.txt', 'x')\"",
+    } }));
+    write(root, "packages/child/package.json", JSON.stringify({ scripts: {
+      test: "node -e \"require('node:fs').appendFileSync('child-base-count.txt', 'x')\"",
+    } }));
+    intakeProject({ projectRoot: root, owner: "owner", approveSources: true });
+    write(root, ".harness/discovery.json", `${JSON.stringify(discoverProject(root), null, 2)}\n`);
+    const planned = planProject({ projectRoot: root, profile: "custom", stacks: ["typescript"] });
+    applyPlan({ projectRoot: root, planPath: planned.path, approval: planned.plan.planHash });
+
+    expect(runTrustedChecks({ projectRoot: root, mode: "ci" }).ok).toBe(true);
+    expect(() => readFileSync(join(root, "root-base-count.txt"), "utf8")).toThrow();
+    expect(readFileSync(join(root, "root-ci-count.txt"), "utf8")).toBe("x");
+    expect(readFileSync(join(root, "packages/child/child-base-count.txt"), "utf8")).toBe("x");
   });
 
   it("uses a PATH runner only for its approved argv, never a preflight --version probe", () => {
@@ -1409,6 +1650,9 @@ describe("v2 project governance upgrade", () => {
       .toThrow(/STALE_PRECONDITION/u);
     write(root, "AGENTS.md", originalAgents);
     const change = applyPlan({ projectRoot: root, planPath: first.planPath!, approval: first.planHash! });
+    expect(change.operations
+      .filter((operation) => operation.beforeHash === operation.afterHash)
+      .every((operation) => operation.backupPath === null)).toBe(true);
     expect(applyPlan({ projectRoot: root, planPath: first.planPath!, approval: first.planHash! })).toEqual(change);
     expect(checkProject(root).ok).toBe(true);
     expect(JSON.parse(readFileSync(join(root, ".harness/policy.yaml"), "utf8")).project).toMatchObject({
@@ -1589,7 +1833,7 @@ describe("v2 project governance upgrade", () => {
       historicalContinuity: "unavailable",
       historicalEvalSources: expect.arrayContaining([expect.objectContaining({ path: "evals/evals.json" })]),
       currentApprovedEvalSources: expect.arrayContaining([expect.objectContaining({ path: "evals/evals.json" })]),
-      candidateEvaluations: expect.objectContaining({ schemaVersion: "1.1" }),
+      candidateEvaluations: expect.objectContaining({ schemaVersion: "1.2" }),
       affectedSuites: [{ suiteId: "representative-quality", requirementIds: ["PRD-AI-004"], ruleIds: ["representative-quality-gate"] }],
     });
     expect(readFileSync(join(root, ".harness/policy.yaml"), "utf8")).toBe(legacyPolicy);
@@ -1630,7 +1874,7 @@ describe("v2 project governance upgrade", () => {
       now: new Date("2026-01-02T00:00:02Z"),
     });
     const migratedPolicy = JSON.parse(readFileSync(join(root, ".harness/policy.yaml"), "utf8"));
-    expect(migratedPolicy.evaluations).toMatchObject({ schemaVersion: "1.1" });
+    expect(migratedPolicy.evaluations).toMatchObject({ schemaVersion: "1.2" });
     const receipt = JSON.parse(readFileSync(join(root, `.harness/changes/${planned.plan!.id}/change.json`), "utf8"));
     expect(receipt).toMatchObject({
       appliedAt: "2026-01-02T00:00:02.000Z",

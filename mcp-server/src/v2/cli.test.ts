@@ -109,6 +109,20 @@ describe("v2 CLI forward flow", () => {
     expect(run(root, ["context", "--agent", "codex"]).agent).toBe("codex");
     const checked = run(root, ["check", "--mode", "session"]);
     expect(checked.ok).toBe(true);
+    expect(checked.stackAdapters).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stack: "typescript",
+        supported: true,
+        enforced: true,
+        passing: true,
+        status: "verified",
+        evidence: {
+          adapterReachable: true,
+          knownBadRejected: true,
+          projectGateConnected: true,
+        },
+      }),
+    ]));
     expect((run(root, ["explain", "typescript-naming"]).id)).toBe("typescript-naming");
     expect(run(root, ["drift"]).clean).toBe(true);
     expect(run(root, ["update", "plan"])).toMatchObject({ status: "current", planPath: null, planHash: null });
@@ -255,7 +269,7 @@ describe("v2 CLI forward flow", () => {
     ]);
   }, 30_000);
 
-  it("runs portable worktree audit without PRD and applies exact-hash configuration", () => {
+  it("runs portable worktree audit and keeps delegated review behind DG-02", () => {
     const root = mkdtempSync(join(tmpdir(), "harness-cli-worktree-"));
     projects.push(root);
     execFileSync("git", ["init", "-b", "main"], { cwd: root });
@@ -267,7 +281,7 @@ describe("v2 CLI forward flow", () => {
 
     expect(run(root, ["worktree", "status"]).configured).toBe(false);
     expect(run(root, ["worktree", "audit"]).passing).toBe(true);
-    const planned = run(root, [
+    expect(() => run(root, [
       "worktree",
       "configure",
       "--mode",
@@ -284,6 +298,18 @@ describe("v2 CLI forward flow", () => {
       "allocate",
       "--delegate-operation",
       "renew",
+    ])).toThrow(/DG02_REVIEWER_CONFIGURATION_REQUIRED/);
+    const planned = run(root, [
+      "worktree",
+      "configure",
+      "--mode",
+      "enforced",
+      "--management-branch",
+      "main",
+      "--allow-root",
+      join(root, ".."),
+      "--approval-mode",
+      "manual",
     ]);
     expect(planned.operation).toBe("configure");
     expect(planned.summary).toMatchObject({ risk: "high" });
@@ -298,11 +324,7 @@ describe("v2 CLI forward flow", () => {
       configured: true,
       config: { managementBranch: "main" },
       hostBinding: {
-        approval: {
-          mode: "delegated-ai",
-          reviewer: { kind: "claude", model: "test-reviewer" },
-          allowedOperations: ["allocate", "renew"],
-        },
+        approval: { mode: "manual" },
       },
     });
   }, 15_000);
@@ -507,24 +529,26 @@ process.stdout.write(JSON.stringify(values[endpoint]));
     write(root, "evals/baseline.json", "{}\n");
     write(root, "evals/fixtures/known-bad.json", "{}\n");
     write(root, "evals/runner-manifest.json", "{}\n");
+    write(root, "evals/run-negative.mjs", `process.stdout.write(JSON.stringify({ schemaVersion: "evaluation-negative-report/1", suiteId: "cli-quality", fixture: "evals/fixtures/known-bad.json", executed: [{ id: "cli-quality", status: "failed" }], failures: [{ assertionId: "cli-quality-gate", category: "known-bad-fixture" }] })); process.exit(1);\n`);
     write(root, "evals/evals.json", JSON.stringify({
-      schemaVersion: "1.1",
+      schemaVersion: "1.2",
       suites: [{
         id: "cli-quality",
         kind: "regression",
         owner: "owner",
         description: "CLI quality regression.",
         command: ["node", "-e", "process.exit(0)"],
-        runnerSources: ["evals/runner-manifest.json"],
+        runnerSources: ["evals/runner-manifest.json", "evals/run-negative.mjs"],
         tasks: ["evals/tasks.jsonl"],
         traceability: [{ requirementId: "PRD-AI-004", ruleIds: ["cli-quality-gate"] }],
         baseline: { origin: "adoption", score: 1, trials: 1, evidence: "evals/baseline.json" },
         target: { metric: "pass-at-1", threshold: 1, trials: 1 },
         graders: [{ id: "tests", kind: "code", role: "gate" }],
         negativeControl: {
-          command: ["node", "-e", "process.exit(1)"],
+          command: ["node", "evals/run-negative.mjs"],
           fixture: "evals/fixtures/known-bad.json",
           expectedExitCode: 1,
+          expectedReport: { testId: "cli-quality", assertionId: "cli-quality-gate", category: "known-bad-fixture" },
         },
       }],
     }));

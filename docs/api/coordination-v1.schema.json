@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://harness-automation.dev/schemas/coordination-v1.schema.json",
+  "title": "GitHub coordination record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "repository", "repositoryId", "workItem", "branch", "sourceRepositoryId", "owner", "machine", "generation", "controlEpochDigest", "createdAt", "expiresAt", "lastObservedHead", "lifecycleState", "transactionId", "recordHash"],
+  "properties": {
+    "schemaVersion": { "const": "github-coordination/1.0" },
+    "repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+    "repositoryId": { "type": "string", "minLength": 1 },
+    "workItem": { "type": "string", "pattern": "^github:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*$" },
+    "branch": { "type": "string", "minLength": 1 },
+    "sourceRepositoryId": { "type": "string", "minLength": 1 },
+    "owner": { "type": "string", "minLength": 1 },
+    "machine": { "type": "string", "minLength": 1 },
+    "sessionRef": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "controlEpochDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": ["string", "null"], "format": "date-time" },
+    "lastObservedHead": { "type": "string", "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" },
+    "lifecycleState": { "enum": ["Admitted", "Prepared", "Active", "Draft", "Ready", "MergeArmed", "Integrated", "Closing", "Closed", "Abandoned"] },
+    "renewal": { "type": "object", "additionalProperties": false, "required": ["transactionId", "proposedExpiresAt", "reservedAt"], "properties": { "transactionId": { "type": "string", "minLength": 1 }, "proposedExpiresAt": { "type": "string", "format": "date-time" }, "reservedAt": { "type": "string", "format": "date-time" } } },
+    "renewalConfirmation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["transactionId", "reservationControlSha", "reservationRecordHash", "oldExpiresAt", "proposedExpiresAt", "serverDate", "roundTripMs", "elapsedMs", "observedUpperBoundAt", "proofHash"],
+      "properties": {
+        "transactionId": { "type": "string", "minLength": 1 },
+        "reservationControlSha": { "type": "string", "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" },
+        "reservationRecordHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "oldExpiresAt": { "type": "string", "format": "date-time" },
+        "proposedExpiresAt": { "type": "string", "format": "date-time" },
+        "serverDate": { "type": "string", "minLength": 1 },
+        "roundTripMs": { "type": "number", "minimum": 0 },
+        "elapsedMs": { "type": "number", "minimum": 0 },
+        "observedUpperBoundAt": { "type": "string", "format": "date-time" },
+        "proofHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "integration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pullRequestNumber", "pullRequestId", "integratedSourceHead", "integratedCommit", "headRef", "headRepositoryId", "baseRef", "baseRepositoryId", "mergedAt", "observedAt", "observer", "hostId", "credentialBindingHash", "evidenceHash"],
+      "properties": {
+        "pullRequestNumber": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "pullRequestId": { "type": "string", "minLength": 1 },
+        "integratedSourceHead": { "type": "string", "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" },
+        "integratedCommit": { "type": "string", "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" },
+        "headRef": { "type": "string", "minLength": 1 },
+        "headRepositoryId": { "type": "string", "minLength": 1 },
+        "baseRef": { "type": "string", "minLength": 1 },
+        "baseRepositoryId": { "type": "string", "minLength": 1 },
+        "mergedAt": { "type": "string", "format": "date-time" },
+        "observedAt": { "type": "string", "minLength": 1 },
+        "observer": { "type": "string", "minLength": 1 },
+        "hostId": { "type": "string", "minLength": 1 },
+        "credentialBindingHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "evidenceHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "handoff": { "$ref": "./coordination-handoff.schema.json" },
+    "closeOwnerGeneration": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "transactionId": { "type": "string", "minLength": 1 },
+    "recordHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  },
+  "$comment": "Runtime additionally enforces Git branch syntax, control-character and text-size limits, work-item/repository identity, safe issue numbers, canonical recordHash, ordered timestamps, renewal transaction/expiry consistency, and matching terminal closeOwnerGeneration. Shape validation alone does not prove ownership, authorization, or server time.",
+  "allOf": [
+    { "if": { "properties": { "lifecycleState": { "const": "Integrated" } } }, "then": { "required": ["integration"] } },
+    {
+      "if": { "properties": { "lifecycleState": { "enum": ["Integrated", "Closing", "Closed", "Abandoned"] } } },
+      "then": { "required": ["closeOwnerGeneration"], "properties": { "expiresAt": { "type": "null" } }, "not": { "anyOf": [{ "required": ["renewal"] }, { "required": ["renewalConfirmation"] }] } },
+      "else": { "properties": { "expiresAt": { "type": "string", "format": "date-time" } }, "not": { "required": ["closeOwnerGeneration"] } }
+    }
+  ]
+}
