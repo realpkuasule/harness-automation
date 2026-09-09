@@ -349,17 +349,7 @@ export function sessionSeed(options: SessionCommandOptions): { ok: true; seed: s
   const authorization = latestDeliveryAuthorization(root, workItem.workItem);
   const configured = loadWorktreeConfig(root);
   if (configured.config.provider.kind === "github") assertRepositoryMatch(configured.config, workItem);
-  let issue: { title: string; body: string; url: string };
-  try {
-    issue = readIssue(root, workItem);
-  } catch (error) {
-    if (!authorization) throw error;
-    issue = {
-      title: authorization.intent,
-      body: "",
-      url: `https://github.com/${workItem.owner}/${workItem.repository}/issues/${workItem.number}`,
-    };
-  }
+  const issue = readIssue(root, workItem);
   const handoffPath = `docs/HANDOFF-${workItem.number}.md`;
   const acceptance = acceptanceValue(loaded, root, configured.config, workItem, issue.body, issue.url);
   const seed = renderSeed(loaded, {

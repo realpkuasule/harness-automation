@@ -38,7 +38,7 @@ if (mode === "ruleset-unavailable" && endpoint === "repos/example/repository/rul
   process.stderr.write("HTTP 500: ruleset unavailable");
   process.exit(1);
 }
-if (mode === "rulesets-unavailable" && endpoint === "repos/example/repository/rulesets") {
+if (mode === "rulesets-unavailable" && endpoint === "repos/example/repository/rulesets?per_page=100") {
   process.stderr.write("HTTP 500: rulesets unavailable");
   process.exit(1);
 }
@@ -50,8 +50,12 @@ if (mode === "project-unavailable" && process.argv.includes("project")) {
   process.stderr.write("HTTP 403: project unavailable");
   process.exit(1);
 }
-if (mode === "organization-edge" && endpoint === "orgs/example-org/rulesets") {
+if (mode === "organization-edge" && endpoint === "orgs/example-org/rulesets?per_page=100") {
   process.stderr.write("HTTP 500: organization rulesets unavailable");
+  process.exit(1);
+}
+if (mode === "organization-ruleset-detail-unavailable" && endpoint === "orgs/example-org/rulesets/4") {
+  process.stderr.write("HTTP 500: organization ruleset unavailable");
   process.exit(1);
 }
 if (mode === "api-unavailable" && /check-runs|actions\\/permissions|environments/u.test(endpoint)) {
@@ -60,55 +64,85 @@ if (mode === "api-unavailable" && /check-runs|actions\\/permissions|environments
 }
 const responses = {
   "repos/example/repository": { id: 12, full_name: "example/repository", private: false, visibility: "public", default_branch: "main", owner: { login: "example", type: "User" } },
-  "repos/example/repository/rulesets": [{ id: 8, name: "main", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } } }],
-  "repos/example/repository/rulesets/8": { id: 8, name: "main", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } }, rules: [{ type: "pull_request", parameters: { required_approving_review_count: 0 } }, { type: "required_status_checks", parameters: { required_status_checks: [{ context: "build-and-test" }] } }, { type: "non_fast_forward" }, { type: "deletion" }] },
+  "repos/example/repository/rulesets?per_page=100": [[{ id: 8, name: "main", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["~DEFAULT_BRANCH"] } } }]],
+  "repos/example/repository/rulesets/8": { id: 8, name: "main", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } }, rules: [{ type: "pull_request", parameters: { required_approving_review_count: 0 } }, { type: "required_status_checks", parameters: { required_status_checks: [{ context: "build-and-test" }] } }, { type: "non_fast_forward" }, { type: "deletion" }] },
   "repos/example/repository/branches/main/protection": { required_status_checks: { contexts: ["build-and-test"] }, required_pull_request_reviews: { required_approving_review_count: 0 }, allow_force_pushes: { enabled: false }, allow_deletions: { enabled: false } },
   "repos/example/repository/actions/permissions": { enabled: true, allowed_actions: "selected", sha_pinning_required: true },
   "repos/example/repository/actions/permissions/workflow": { default_workflow_permissions: "read", can_approve_pull_request_reviews: false },
-  "repos/example/repository/environments": { environments: [] },
-  "repos/example/repository/commits/main/check-runs": { check_runs: [{ name: "build-and-test", conclusion: "success" }] },
+  "repos/example/repository/environments?per_page=100": [{ total_count: 0, environments: [] }],
+  "repos/example/repository/commits/main/check-runs?per_page=100": [{ total_count: 1, check_runs: [{ name: "build-and-test", conclusion: "success" }] }],
   "orgs/example-org/repos?per_page=100": [[{ id: 22, full_name: "example-org/alpha", private: true, visibility: "private", default_branch: "main", owner: { login: "example-org", type: "Organization" } }]],
-  "orgs/example-org/rulesets": [{ id: 4, name: "organization-main", target: "branch", enforcement: "active" }]
+  "orgs/example-org/rulesets?per_page=100": [[{ id: 4, name: "organization-main", target: "branch", enforcement: "active" }]],
+  "orgs/example-org/rulesets/4": { id: 4, name: "organization-main", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } }, rules: [] }
 };
 if (mode === "drift") {
-  responses["repos/example/repository/rulesets"] = [];
+  responses["repos/example/repository/rulesets?per_page=100"] = [[]];
   responses["repos/example/repository/branches/main/protection"] = undefined;
-  responses["repos/example/repository/commits/main/check-runs"] = { check_runs: [] };
+  responses["repos/example/repository/commits/main/check-runs?per_page=100"] = [{ total_count: 0, check_runs: [] }];
   responses["repos/example/repository/actions/permissions"] = { enabled: true, allowed_actions: "all", sha_pinned_required: false };
 }
 if (mode === "organization-success") {
-  responses["repos/example-org/alpha/rulesets"] = [];
+  responses["orgs/example-org/repos?per_page=100"] = [
+    [{ id: 22, full_name: "example-org/alpha", private: true, visibility: "private", default_branch: "main", owner: { login: "example-org", type: "Organization" } }],
+    [{ id: 23, full_name: "example-org/omega", private: false, visibility: "public", default_branch: "trunk", owner: { login: "example-org", type: "Organization" } }]
+  ];
+  responses["repos/example-org/alpha/rulesets?per_page=100"] = [[{ id: 5, name: "alpha-main", target: "branch", enforcement: "active" }]];
+  responses["repos/example-org/alpha/rulesets/5"] = { id: 5, name: "alpha-main", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } }, rules: [] };
   responses["repos/example-org/alpha/branches/main/protection"] = { required_status_checks: null };
+  responses["repos/example-org/omega/rulesets?per_page=100"] = [[], []];
+  responses["repos/example-org/omega/branches/trunk/protection"] = { required_status_checks: null };
 }
 if (mode === "organization-pagination-invalid") responses["orgs/example-org/repos?per_page=100"] = [{}];
+if (mode === "pagination-count-mismatch") responses["repos/example/repository/commits/main/check-runs?per_page=100"] = [{ total_count: 2, check_runs: [{ name: "build-and-test", conclusion: "success" }] }];
 if (mode === "complete-ruleset") {
   responses["repos/example/repository/branches/main/protection"] = undefined;
-  responses["repos/example/repository/rulesets/8"] = { id: 8, name: "main", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["main"] } }, rules: [{ type: "pull_request" }, { type: "non_fast_forward" }, { type: "deletion" }, { type: "required_status_checks", parameters: { required_status_checks: [{ context: "build-and-test" }] } }] };
+  responses["repos/example/repository/rulesets/8"] = { id: 8, name: "main", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["main"], exclude: [] } }, rules: [{ type: "pull_request" }, { type: "non_fast_forward" }, { type: "deletion" }, { type: "required_status_checks", parameters: { required_status_checks: [{ context: "build-and-test" }] } }] };
+}
+if (mode === "excluded-default") {
+  responses["repos/example/repository/branches/main/protection"] = undefined;
+  responses["repos/example/repository/rulesets/8"] = { id: 8, name: "main", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: ["~DEFAULT_BRANCH"] } }, rules: [{ type: "pull_request" }, { type: "non_fast_forward" }, { type: "deletion" }, { type: "required_status_checks", parameters: { required_status_checks: [{ context: "build-and-test" }] } }] };
+}
+if (mode === "empty-include") {
+  responses["repos/example/repository/branches/main/protection"] = undefined;
+  responses["repos/example/repository/rulesets/8"] = { id: 8, name: "main", target: "branch", enforcement: "active", conditions: { ref_name: { include: [], exclude: [] } }, rules: [{ type: "pull_request" }, { type: "non_fast_forward" }, { type: "deletion" }, { type: "required_status_checks", parameters: { required_status_checks: [{ context: "build-and-test" }] } }] };
+}
+if (mode === "invalid-required-check") {
+  responses["repos/example/repository/rulesets/8"] = { id: 8, name: "main", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } }, rules: [{ type: "required_status_checks", parameters: { required_status_checks: [{}] } }] };
+}
+if (mode === "invalid-ruleset-conditions") {
+  responses["repos/example/repository/rulesets/8"] = { id: 8, name: "main", target: "branch", enforcement: "active", rules: [{ type: "pull_request" }, { type: "non_fast_forward" }, { type: "deletion" }, { type: "required_status_checks", parameters: { required_status_checks: [{ context: "build-and-test" }] } }] };
+}
+if (mode === "organization-ruleset-invalid") {
+  responses["orgs/example-org/rulesets?per_page=100"] = [[{}]];
+  responses["repos/example-org/alpha/rulesets?per_page=100"] = [[{}]];
+  responses["repos/example-org/alpha/branches/main/protection"] = { required_status_checks: null };
 }
 if (mode === "visibility-fallback") responses["repos/example/repository"] = { id: 12, private: false, default_branch: "main", owner: {} };
 if (mode === "edge") {
   responses["repos/example/repository"] = { id: 12, private: true, owner: {} };
-  responses["repos/example/repository/rulesets"] = [
+  responses["repos/example/repository/rulesets?per_page=100"] = [[
     { id: "not-a-number" },
     { id: 9, name: "inactive", target: "branch", enforcement: "disabled" },
     { id: 10, name: "tag", target: "tag", enforcement: "active" },
     { id: 11, name: "other", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["other"] } } },
     { id: 12, name: "default", target: "branch", enforcement: "active", conditions: { ref_name: { include: [] } } }
-  ];
-  responses["repos/example/repository/rulesets/9"] = { id: 9, name: "inactive", target: "branch", enforcement: "disabled", rules: [] };
+  ]];
+  responses["repos/example/repository/rulesets/9"] = { id: 9, name: "inactive", target: "branch", enforcement: "disabled", conditions: { ref_name: { include: ["other"], exclude: [] } }, rules: [] };
   responses["repos/example/repository/rulesets/10"] = { id: 10, name: "tag", target: "tag", enforcement: "active", rules: [] };
-  responses["repos/example/repository/rulesets/11"] = { id: 11, name: "other", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["other"] } }, rules: [] };
-  responses["repos/example/repository/rulesets/12"] = { id: 12, name: "default", target: "branch", enforcement: "active", conditions: { ref_name: { include: [] } }, rules: [{ type: "pull_request" }, { type: "required_status_checks", parameters: { required_status_checks: [{}, { context: "edge-check" }] } }] };
+  responses["repos/example/repository/rulesets/11"] = { id: 11, name: "other", target: "branch", enforcement: "active", conditions: { ref_name: { include: ["other"], exclude: [] } }, rules: [] };
+  responses["repos/example/repository/rulesets/12"] = { id: 12, name: "default", target: "branch", enforcement: "active", conditions: { ref_name: { include: [], exclude: [] } }, rules: [{ type: "pull_request" }, { type: "required_status_checks", parameters: { required_status_checks: [{ context: "edge-check" }] } }] };
   responses["repos/example/repository/branches/main/protection"] = { required_status_checks: { contexts: [null, "edge-check"] } };
-  responses["repos/example/repository/commits/main/check-runs"] = { check_runs: [{ name: "edge-check", conclusion: "failure" }, {}] };
-  responses["repos/example/repository/environments"] = {};
+  responses["repos/example/repository/commits/main/check-runs?per_page=100"] = [{ total_count: 2, check_runs: [{ name: "edge-check", conclusion: "failure" }, {}] }];
+  responses["repos/example/repository/environments?per_page=100"] = [{ total_count: 1, environments: [{}] }];
 }
 if (mode === "organization-edge") responses["orgs/example-org/repos?per_page=100"] = [[
   { id: 23, private: true },
   { id: 24, full_name: "example-org/beta", private: false, owner: {} }
 ]];
 if (process.argv.includes("project")) {
-  process.stdout.write(JSON.stringify({ number: 2, owner: { login: "example" }, title: "Development" }));
+  process.stdout.write(JSON.stringify(mode === "project-partial"
+    ? { number: 2, owner: { login: "example" }, title: "Development" }
+    : { id: "PVT_2", number: 2, owner: { login: "example", type: "User" }, title: "Development" }));
   process.exit(0);
 }
 const response = responses[endpoint];
@@ -229,13 +263,19 @@ describe("GitHub governance audit", () => {
     process.env.HARNESS_GITHUB_AUDIT_MODE = "organization-success";
     const complete = auditGitHubGovernance({ projectRoot, organization: "example-org" });
     expect(complete.organization).toMatchObject({ login: "example-org", available: true, repositories: [
-      expect.objectContaining({ name: "example-org/alpha", defaultBranchProtected: true }),
+      expect.objectContaining({ name: "example-org/alpha", defaultBranchProtected: true, effectiveRulesets: [expect.objectContaining({ id: 5, rules: [] })] }),
+      expect.objectContaining({ name: "example-org/omega", defaultBranchProtected: true }),
     ] });
 
     process.env.HARNESS_GITHUB_AUDIT_MODE = "organization-pagination-invalid";
     const incomplete = auditGitHubGovernance({ projectRoot, organization: "example-org" });
     expect(incomplete.organization).toMatchObject({ login: "example-org", available: false, repositories: [] });
     expect(incomplete.unavailable).toContain("organization repositories: pagination response was incomplete");
+
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "organization-ruleset-detail-unavailable";
+    const unavailableDetail = auditGitHubGovernance({ projectRoot, organization: "example-org" });
+    expect(unavailableDetail.organization).toMatchObject({ available: false });
+    expect(unavailableDetail.unavailable).toContain("organization ruleset 4: HTTP 500: organization ruleset unavailable");
   });
 
   it("records unavailable rule details without assuming their rules", () => {
@@ -266,13 +306,18 @@ describe("GitHub governance audit", () => {
     const report = auditGitHubGovernance({ projectRoot });
 
     expect(report.repository).toMatchObject({ defaultBranch: "main", visibility: "private" });
-    expect(report.rulesets).toEqual(expect.arrayContaining([expect.objectContaining({ id: "not-a-number", rules: [] })]));
+    expect(report.unavailable).toContain("repository rulesets item 0: response was incomplete");
     expect(report.checks).toMatchObject({ required: ["edge-check"], latest: expect.arrayContaining([expect.objectContaining({ name: "edge-check", conclusion: "failure" })]) });
     expect(report.codeowners).toMatchObject({ path: "docs/CODEOWNERS", owners: ["@owner"] });
     expect(report.actions).toMatchObject({ leastPrivilegeDeclared: false, unpinnedUses: ["edge.yml:owner/action"] });
     expect(report.project).toMatchObject({ configured: true, mapping: "incomplete" });
     expect(report.blockers).toEqual(expect.arrayContaining(["PROJECT_MAPPING_DRIFT: configured other/repository, observed example/repository"]));
     expect(report.warnings).toContain("REQUIRED_CHECK_NOT_PASSING: edge-check");
+    expect(report.unavailable).toEqual(expect.arrayContaining([
+      "repository: response was incomplete",
+      "latest checks item 1: response was incomplete",
+      "environments item 0: response was incomplete",
+    ]));
   });
 
   it("fails closed when optional repository settings, project reads, or organization evidence are unavailable", () => {
@@ -296,18 +341,46 @@ describe("GitHub governance audit", () => {
     const project = auditGitHubGovernance({ projectRoot });
     expect(project.project).toMatchObject({ mapping: "unavailable" });
 
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "project-partial";
+    const partialProject = auditGitHubGovernance({ projectRoot });
+    expect(partialProject.project).toMatchObject({ mapping: "unavailable" });
+    expect(partialProject.unavailable).toContain("project mapping: response was incomplete");
+
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "pagination-count-mismatch";
+    expect(auditGitHubGovernance({ projectRoot }).unavailable)
+      .toContain("latest checks: pagination response was incomplete");
+
     process.env.HARNESS_GITHUB_AUDIT_MODE = "organization-edge";
     const organization = auditGitHubGovernance({ projectRoot, organization: "example-org" });
-    expect(organization.organization).toMatchObject({ available: false, repositories: [
-      expect.objectContaining({ name: "example-org/beta", visibility: "public", defaultBranchProtected: false }),
-      expect.objectContaining({ name: undefined, visibility: "private", defaultBranchProtected: false }),
-    ] });
+    expect(organization.organization).toMatchObject({ available: false, repositories: [] });
     expect(organization.unavailable).toEqual(expect.arrayContaining([
-      "organization rulesets: HTTP 500: organization rulesets unavailable",
-      "organization repository rulesets unknown: repository name unavailable",
-      "organization branch protection unknown: default branch unavailable",
-      "organization repository rulesets example-org/beta: HTTP 404: Not Found",
+      "organization repositories item 0: response was incomplete",
+      "organization repositories item 1: response was incomplete",
     ]));
+  });
+
+  it("fails closed on incomplete repository and organization ruleset evidence", () => {
+    const projectRoot = root();
+    const bin = mkdtempSync(join(tmpdir(), "harness-github-audit-bin-"));
+    roots.push(bin);
+    installGh(bin);
+
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "invalid-ruleset-conditions";
+    const repository = auditGitHubGovernance({ projectRoot });
+    expect(repository.status).toBe("blocked");
+    expect(repository.unavailable).toContain("ruleset 8: branch conditions were incomplete");
+
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "organization-ruleset-invalid";
+    const organization = auditGitHubGovernance({ projectRoot, organization: "example-org" });
+    expect(organization.organization).toMatchObject({ available: false });
+    expect(organization.unavailable).toEqual(expect.arrayContaining([
+      "organization rulesets item 0: response was incomplete",
+      "organization repository rulesets example-org/alpha item 0: response was incomplete",
+    ]));
+
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "invalid-required-check";
+    expect(auditGitHubGovernance({ projectRoot }).unavailable)
+      .toContain("ruleset 8: required checks were incomplete");
   });
 
   it("does not assume that failed Git metadata, rulesets, or branch protection are safe", () => {
@@ -332,6 +405,18 @@ describe("GitHub governance audit", () => {
     process.env.HARNESS_GITHUB_AUDIT_MODE = "complete-ruleset";
     const complete = auditGitHubGovernance({ projectRoot });
     expect(complete.blockers).not.toContain("DEFAULT_BRANCH_UNPROTECTED: main");
+
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "excluded-default";
+    const excluded = auditGitHubGovernance({ projectRoot });
+    expect(excluded.blockers).toEqual(expect.arrayContaining([
+      "DEFAULT_BRANCH_UNPROTECTED: main",
+      "PULL_REQUEST_RULE_MISSING: main",
+      "REQUIRED_CHECK_RULE_MISSING: main",
+    ]));
+
+    process.env.HARNESS_GITHUB_AUDIT_MODE = "empty-include";
+    expect(auditGitHubGovernance({ projectRoot }).blockers)
+      .toContain("DEFAULT_BRANCH_UNPROTECTED: main");
 
     process.env.HARNESS_GITHUB_AUDIT_MODE = "visibility-fallback";
     expect(auditGitHubGovernance({ projectRoot }).repository).toMatchObject({ visibility: "public" });

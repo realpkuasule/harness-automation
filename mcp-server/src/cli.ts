@@ -241,6 +241,7 @@ function registerMcpViaCli(mcpServerPath: string): boolean {
 
 function registerMcpViaJson(mcpServerPath: string): void {
   const configPath = getClaudeJsonPath();
+  mkdirSync(dirname(configPath), { recursive: true });
   let config: Record<string, unknown> = {};
   if (existsSync(configPath)) {
     try { config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>; } catch { config = {}; }

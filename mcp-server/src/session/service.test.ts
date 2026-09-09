@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
+import { authorizeDelivery } from "../delivery/service.js";
 import { sha256 } from "../v2/fs.js";
 import { sessionHandoff, sessionSeed, sessionStatus } from "./service.js";
 
@@ -232,6 +233,25 @@ describe("session seed", () => {
     installGh(root);
     const seed = sessionSeed({ ...HANDOFF_ARGS, projectRoot: root });
     expect(seed.seed).toContain("能登录");
+  });
+
+  it("does not substitute local delivery intent when the GitHub Issue is unavailable", () => {
+    const root = fixture();
+    const baseBranch = git(root, ["branch", "--show-current"]);
+    git(root, ["remote", "add", "origin", "git@github.com:example/project.git"]);
+    git(root, ["switch", "-c", "codex/issue-24"]);
+    authorizeDelivery({
+      projectRoot: root,
+      workItem: HANDOFF_ARGS.workItem,
+      baseBranch,
+      allowedPaths: ["README.md"],
+      intent: "Local intent must not replace remote evidence",
+      approvalSource: "test",
+    });
+    process.env.HARNESS_TEST_GH_MODE = "fail-issue";
+
+    expect(() => sessionSeed({ ...HANDOFF_ARGS, projectRoot: root }))
+      .toThrow(/GITHUB_ISSUE_QUERY_FAILED/);
   });
 });
 

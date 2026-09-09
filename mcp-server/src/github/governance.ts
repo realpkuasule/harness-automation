@@ -1,6 +1,6 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { runGitCommand } from "../repository/git.js";
 import { hashObject } from "../v2/fs.js";
 import { commandJson } from "../worktree/provider.js";
 
@@ -46,20 +46,20 @@ function sorted(values: Iterable<string>): string[] {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
-function commandText(cwd: string, command: string, args: string[]): string {
-  const result = spawnSync(command, args, { cwd, encoding: "utf8", timeout: 30_000, maxBuffer: 10 * 1024 * 1024 });
-  if (result.error || result.status !== 0) throw new Error(`${command} failed: ${(result.stderr || result.stdout || result.error?.message || "unknown error").trim()}`);
+function git(cwd: string, args: string[]): string {
+  const result = runGitCommand(cwd, args, process.env);
+  if (result.error || result.status !== 0) throw new Error(`git failed: ${(result.stderr || result.stdout || result.error || "unknown error").trim()}`);
   return result.stdout.trim();
 }
 
 function githubRepository(projectRoot: string): { owner: string; name: string; slug: string; head: string } {
-  const remote = commandText(projectRoot, "git", ["remote", "get-url", "origin"]);
+  const remote = git(projectRoot, ["remote", "get-url", "origin"]);
   const matched = remote.match(/github\.com(?::|\/)([^/:\s]+)\/([^/\s]+?)(?:\.git)?$/u);
   if (!matched) throw new Error(`GITHUB_REMOTE_REQUIRED: origin is not a github.com repository: ${remote}`);
   const owner = matched[1];
   const name = matched[2].replace(/\.git$/u, "");
   if (!owner || !name) throw new Error(`GITHUB_REMOTE_REQUIRED: origin is not a repository: ${remote}`);
-  return { owner, name, slug: `${owner}/${name}`, head: commandText(projectRoot, "git", ["rev-parse", "HEAD"]) };
+  return { owner, name, slug: `${owner}/${name}`, head: git(projectRoot, ["rev-parse", "HEAD"]) };
 }
 
 function isNotFound(error: string | undefined): boolean {
@@ -68,6 +68,61 @@ function isNotFound(error: string | undefined): boolean {
 
 function sanitized(error: string | undefined): string {
   return (error ?? "unknown error").replace(/(token|authorization)\s*[:=]\s*\S+/giu, "$1=[redacted]").slice(0, 300);
+}
+
+function paginatedArray(root: string, endpoint: string, label: string, unavailable: string[]): unknown[] {
+  const result = commandJson(root, "gh", [
+    "api", "--method", "GET", "--paginate", "--slurp", endpoint,
+  ]);
+  if (!result.ok) {
+    unavailable.push(`${label}: ${sanitized(result.error)}`);
+    return [];
+  }
+  if (!Array.isArray(result.value) || result.value.length === 0 || !result.value.every(Array.isArray)) {
+    unavailable.push(`${label}: pagination response was incomplete`);
+    return [];
+  }
+  return result.value.flatMap((page) => page);
+}
+
+function paginatedObjectArray(
+  root: string,
+  endpoint: string,
+  key: string,
+  label: string,
+  unavailable: string[],
+): unknown[] {
+  const result = commandJson(root, "gh", [
+    "api", "--method", "GET", "--paginate", "--slurp", endpoint,
+  ]);
+  if (!result.ok) {
+    unavailable.push(`${label}: ${sanitized(result.error)}`);
+    return [];
+  }
+  if (!Array.isArray(result.value) || result.value.length === 0) {
+    unavailable.push(`${label}: pagination response was incomplete`);
+    return [];
+  }
+  const pages = result.value.map(record);
+  const totals = pages.map((page) => page.total_count);
+  const values = pages.flatMap((page) => array(page[key]));
+  if (pages.some((page) => !Array.isArray(page[key])) ||
+      totals.some((total) => !Number.isSafeInteger(total) || Number(total) < 0) ||
+      totals.some((total) => total !== totals[0]) || values.length !== totals[0]) {
+    unavailable.push(`${label}: pagination response was incomplete`);
+    return [];
+  }
+  return values;
+}
+
+function rulesetSummaries(values: unknown[], label: string, unavailable: string[]): Json[] {
+  return values.map(record).map((item, index) => {
+    if (typeof item.id !== "number" || !Number.isSafeInteger(item.id) || typeof item.name !== "string" ||
+        typeof item.target !== "string" || typeof item.enforcement !== "string") {
+      unavailable.push(`${label} item ${index}: response was incomplete`);
+    }
+    return item;
+  });
 }
 
 function localWorkflows(projectRoot: string): { files: string[]; unpinnedUses: string[]; leastPrivilegeDeclared: boolean } {
@@ -101,16 +156,53 @@ function localCodeowners(projectRoot: string): Json {
   return { exists: true, path, syntaxAvailable: true, owners: sorted(owners), resolution: "not-queried" };
 }
 
-function ruleDetails(root: string, slug: string, list: unknown[], unavailable: string[]): Json[] {
-  return array(list).map((item) => record(item)).map((item) => {
+function ruleDetails(root: string, endpoint: string, label: string, list: unknown[], unavailable: string[]): Json[] {
+  return array(list).map((item) => record(item)).map((item, index) => {
     const id = item.id;
-    if (typeof id !== "number") return { ...item, rules: [] };
-    const result = commandJson(root, "gh", ["api", "--method", "GET", `repos/${slug}/rulesets/${id}`]);
-    if (!result.ok) {
-      unavailable.push(`ruleset ${id}: ${sanitized(result.error)}`);
+    if (typeof id !== "number" || !Number.isSafeInteger(id)) {
+      unavailable.push(`${label} list item ${index}: identity was incomplete`);
       return { ...item, rules: [] };
     }
-    return record(result.value);
+    const result = commandJson(root, "gh", ["api", "--method", "GET", `${endpoint}/${id}`]);
+    if (!result.ok) {
+      unavailable.push(`${label} ${id}: ${sanitized(result.error)}`);
+      return { ...item, rules: [] };
+    }
+    const detail = record(result.value);
+    if (detail.id !== id || typeof detail.name !== "string" || typeof detail.target !== "string" ||
+        typeof detail.enforcement !== "string" || !Array.isArray(detail.rules)) {
+      unavailable.push(`${label} ${id}: response was incomplete`);
+      return { ...item, rules: [] };
+    }
+    if (detail.target === "branch") {
+      const refName = record(record(detail.conditions).ref_name);
+      const include = refName.include;
+      const exclude = refName.exclude;
+      if (!Array.isArray(include) || !include.every((value) => typeof value === "string") ||
+          !Array.isArray(exclude) || !exclude.every((value) => typeof value === "string")) {
+        unavailable.push(`${label} ${id}: branch conditions were incomplete`);
+        return { ...item, rules: [] };
+      }
+      if ([...include, ...exclude].some((value) => /[*?[\]]/u.test(value))) {
+        unavailable.push(`${label} ${id}: branch conditions use unsupported patterns`);
+        return { ...item, rules: [] };
+      }
+    }
+    for (const [ruleIndex, ruleValue] of detail.rules.entries()) {
+      const rule = record(ruleValue);
+      if (typeof rule.type !== "string") {
+        unavailable.push(`${label} ${id}: rule ${ruleIndex} was incomplete`);
+        return { ...item, rules: [] };
+      }
+      if (rule.type === "required_status_checks") {
+        const checks = record(rule.parameters).required_status_checks;
+        if (!Array.isArray(checks) || checks.some((check) => !text(record(check).context))) {
+          unavailable.push(`${label} ${id}: required checks were incomplete`);
+          return { ...item, rules: [] };
+        }
+      }
+    }
+    return detail;
   }).sort((left, right) => String(left.name ?? left.id).localeCompare(String(right.name ?? right.id)));
 }
 
@@ -122,8 +214,15 @@ function hasRule(rulesets: Json[], type: string): boolean {
 function defaultBranchRulesets(rulesets: Json[], defaultBranch: string): Json[] {
   return rulesets.filter((ruleset) => {
     if (text(ruleset.enforcement) !== "active" || text(ruleset.target) !== "branch") return false;
-    const include = array(record(record(ruleset.conditions).ref_name).include).flatMap(text);
-    return include.length === 0 || include.includes(defaultBranch) || include.includes("~DEFAULT_BRANCH");
+    const refName = record(record(ruleset.conditions).ref_name);
+    const rawInclude = refName.include;
+    const rawExclude = refName.exclude;
+    if (!Array.isArray(rawInclude) || !Array.isArray(rawExclude)) return false;
+    const include = rawInclude.filter((value): value is string => typeof value === "string");
+    const exclude = rawExclude.filter((value): value is string => typeof value === "string");
+    const matches = (value: string) => value === defaultBranch || value === `refs/heads/${defaultBranch}` ||
+      value === "~DEFAULT_BRANCH" || value === "~ALL";
+    return include.some(matches) && !exclude.some(matches);
   });
 }
 
@@ -158,36 +257,64 @@ function projectObservation(root: string, slug: string, unavailable: string[], b
   const project = record(config.project);
   const owner = text(project.owner);
   const number = project.number;
-  if (!owner || typeof number !== "number") return { configured: true, mapping: "incomplete", owner, number };
+  if (!owner || !Number.isSafeInteger(number) || Number(number) < 1) {
+    unavailable.push("project mapping: configuration was incomplete");
+    return { configured: true, mapping: "incomplete", owner, number };
+  }
   const result = commandJson(root, "gh", ["project", "view", String(number), "--owner", owner, "--format", "json"]);
   if (!result.ok) {
     unavailable.push(`project mapping: ${sanitized(result.error)}`);
     return { configured: true, mapping: "unavailable", owner, number };
   }
-  return { configured: true, mapping: "available", owner, number, fields: Object.keys(record(result.value)).sort() };
+  const observed = record(result.value);
+  const observedOwner = record(observed.owner);
+  if (!text(observed.id) || observed.number !== number || text(observedOwner.login)?.toLowerCase() !== owner.toLowerCase() ||
+      !["User", "Organization"].includes(text(observedOwner.type) ?? "") || !text(observed.title)) {
+    unavailable.push("project mapping: response was incomplete");
+    return { configured: true, mapping: "unavailable", owner, number };
+  }
+  return { configured: true, mapping: "available", owner, number, fields: Object.keys(observed).sort() };
 }
 
 function organizationObservation(root: string, organization: string, unavailable: string[]): Json {
-  const repositories = commandJson(root, "gh", ["api", "--method", "GET", "--paginate", "--slurp", `orgs/${organization}/repos?per_page=100`]);
-  if (!repositories.ok) {
-    unavailable.push(`organization repositories: ${sanitized(repositories.error)}`);
+  const initialUnavailable = unavailable.length;
+  const repositoryUnavailable = unavailable.length;
+  const repositories = paginatedArray(root, `orgs/${organization}/repos?per_page=100`, "organization repositories", unavailable)
+    .map(record);
+  repositories.forEach((repository, index) => {
+    const owner = record(repository.owner);
+    if (!Number.isSafeInteger(repository.id) || !text(repository.full_name) || !text(repository.default_branch) ||
+        !text(repository.visibility) || typeof repository.private !== "boolean" ||
+        !text(owner.login) || !text(owner.type)) {
+      unavailable.push(`organization repositories item ${index}: response was incomplete`);
+    }
+  });
+  if (unavailable.length !== repositoryUnavailable) {
     return { login: organization, available: false, repositories: [] };
   }
-  const pages = array(repositories.value);
-  if (!pages.every(Array.isArray)) {
-    unavailable.push("organization repositories: pagination response was incomplete");
-    return { login: organization, available: false, repositories: [] };
-  }
-  const rulesets = commandJson(root, "gh", ["api", "--method", "GET", `orgs/${organization}/rulesets`]);
-  if (!rulesets.ok) unavailable.push(`organization rulesets: ${sanitized(rulesets.error)}`);
-  const repos = pages.flatMap((page) => array(page)).map((item) => {
-    const repository = record(item);
+  const rulesetUnavailable = unavailable.length;
+  const rulesetSummariesObserved = rulesetSummaries(
+    paginatedArray(root, `orgs/${organization}/rulesets?per_page=100`, "organization rulesets", unavailable),
+    "organization rulesets",
+    unavailable,
+  );
+  const rulesets = ruleDetails(root, `orgs/${organization}/rulesets`, "organization ruleset", rulesetSummariesObserved, unavailable);
+  const rulesetsAvailable = unavailable.length === rulesetUnavailable;
+  const repos = repositories.map((repository) => {
     const name = text(repository.full_name);
     const defaultBranch = text(repository.default_branch);
+    const beforeRulesets = unavailable.length;
+    const effectiveRulesetSummaries = name
+      ? rulesetSummaries(
+          paginatedArray(root, `repos/${name}/rulesets?per_page=100`, `organization repository rulesets ${name}`, unavailable),
+          `organization repository rulesets ${name}`,
+          unavailable,
+        )
+      : (unavailable.push("organization repository rulesets unknown: repository name unavailable"), []);
     const effectiveRulesets = name
-      ? commandJson(root, "gh", ["api", "--method", "GET", `repos/${name}/rulesets`])
-      : { ok: false, error: "repository name unavailable" };
-    if (!effectiveRulesets.ok) unavailable.push(`organization repository rulesets ${name ?? "unknown"}: ${sanitized(effectiveRulesets.error)}`);
+      ? ruleDetails(root, `repos/${name}/rulesets`, `organization repository ruleset ${name}`, effectiveRulesetSummaries, unavailable)
+      : [];
+    const rulesetsComplete = unavailable.length === beforeRulesets;
     const protection = name && defaultBranch
       ? commandJson(root, "gh", ["api", "--method", "GET", `repos/${name}/branches/${defaultBranch}/protection`])
       : { ok: false, error: "default branch unavailable" };
@@ -199,10 +326,10 @@ function organizationObservation(root: string, organization: string, unavailable
       defaultBranch,
       ownerType: text(record(repository.owner).type),
       defaultBranchProtected: protection.ok,
-      effectiveRulesets: effectiveRulesets.ok ? array(effectiveRulesets.value).map(record).sort((left, right) => String(left.name).localeCompare(String(right.name))) : [],
+      effectiveRulesets: rulesetsComplete ? effectiveRulesets.map(record).sort((left, right) => String(left.name).localeCompare(String(right.name))) : [],
     };
   }).sort((left, right) => String(left.name).localeCompare(String(right.name)));
-  return { login: organization, available: rulesets.ok, repositories: repos, rulesets: array(rulesets.value).map(record).sort((left, right) => String(left.name).localeCompare(String(right.name))) };
+  return { login: organization, available: rulesetsAvailable && unavailable.length === initialUnavailable, repositories: repos, rulesets: rulesets.map(record).sort((left, right) => String(left.name).localeCompare(String(right.name))) };
 }
 
 export function auditGitHubGovernance(input: { projectRoot: string; organization?: string }): GitHubGovernanceReport {
@@ -227,10 +354,19 @@ export function auditGitHubGovernance(input: { projectRoot: string; organization
     return { ...report, observedHash: hashObject({ ...report, observedHash: undefined }) };
   }
   const repo = record(repoResult.value);
+  const repoOwner = record(repo.owner);
+  if (!Number.isSafeInteger(repo.id) || text(repo.full_name) !== local.slug || !text(repo.default_branch) ||
+      !text(repo.visibility) || typeof repo.private !== "boolean" ||
+      !text(repoOwner.login) || !text(repoOwner.type)) {
+    unavailable.push("repository: response was incomplete");
+  }
   const defaultBranch = text(repo.default_branch) ?? "main";
-  const rulesetList = commandJson(projectRoot, "gh", ["api", "--method", "GET", `repos/${local.slug}/rulesets`]);
-  if (!rulesetList.ok) unavailable.push(`repository rulesets: ${sanitized(rulesetList.error)}`);
-  const rulesets = ruleDetails(projectRoot, local.slug, array(rulesetList.value), unavailable);
+  const rulesetList = rulesetSummaries(
+    paginatedArray(projectRoot, `repos/${local.slug}/rulesets?per_page=100`, "repository rulesets", unavailable),
+    "repository rulesets",
+    unavailable,
+  );
+  const rulesets = ruleDetails(projectRoot, `repos/${local.slug}/rulesets`, "ruleset", rulesetList, unavailable);
   const branch = commandJson(projectRoot, "gh", ["api", "--method", "GET", `repos/${local.slug}/branches/${defaultBranch}/protection`]);
   const branchProtection = branch.ok ? record(branch.value) : isNotFound(branch.error) ? null : (unavailable.push(`branch protection: ${sanitized(branch.error)}`), null);
   const branchRulesets = defaultBranchRulesets(rulesets, defaultBranch);
@@ -244,9 +380,21 @@ export function auditGitHubGovernance(input: { projectRoot: string; organization
   if (requiredChecks.length === 0) blockers.push(`REQUIRED_CHECK_RULE_MISSING: ${defaultBranch}`);
   if (!forceBlocked) blockers.push(`FORCE_PUSH_ALLOWED: ${defaultBranch}`);
   if (!deletionBlocked) blockers.push(`BRANCH_DELETION_ALLOWED: ${defaultBranch}`);
-  const checksResult = commandJson(projectRoot, "gh", ["api", "--method", "GET", `repos/${local.slug}/commits/${defaultBranch}/check-runs`]);
-  const latest = checksResult.ok ? array(record(checksResult.value).check_runs).map((item) => ({ name: text(record(item).name), conclusion: text(record(item).conclusion) })).sort((left, right) => String(left.name).localeCompare(String(right.name))) : [];
-  if (!checksResult.ok) unavailable.push(`latest checks: ${sanitized(checksResult.error)}`);
+  const latestValues = paginatedObjectArray(
+    projectRoot,
+    `repos/${local.slug}/commits/${defaultBranch}/check-runs?per_page=100`,
+    "check_runs",
+    "latest checks",
+    unavailable,
+  );
+  latestValues.forEach((item, index) => {
+    const check = record(item);
+    if (!text(check.name) || !(check.conclusion === null || typeof check.conclusion === "string")) {
+      unavailable.push(`latest checks item ${index}: response was incomplete`);
+    }
+  });
+  const latest = latestValues.map((item) => ({ name: text(record(item).name), conclusion: text(record(item).conclusion) }))
+    .sort((left, right) => String(left.name).localeCompare(String(right.name)));
   const observedChecks = new Map(latest.map((check) => [check.name, check.conclusion]));
   for (const check of requiredChecks) {
     if (!observedChecks.has(check)) blockers.push(`REQUIRED_CHECK_MISSING: ${check}`);
@@ -258,13 +406,33 @@ export function auditGitHubGovernance(input: { projectRoot: string; organization
   if (!workflowPermissions.ok) unavailable.push(`Actions workflow permissions: ${sanitized(workflowPermissions.error)}`);
   const workflows = localWorkflows(projectRoot);
   const actions = record(actionsResult.value);
+  if (actionsResult.ok && (typeof actions.enabled !== "boolean" || !text(actions.allowed_actions) ||
+      typeof actions.sha_pinning_required !== "boolean")) {
+    unavailable.push("Actions settings: response was incomplete");
+  }
+  const workflowSettings = record(workflowPermissions.value);
+  if (workflowPermissions.ok && (!text(workflowSettings.default_workflow_permissions) ||
+      typeof workflowSettings.can_approve_pull_request_reviews !== "boolean")) {
+    unavailable.push("Actions workflow permissions: response was incomplete");
+  }
   const shaPinnedRequired = bool(actions.sha_pinning_required) === true;
   if (shaPinnedRequired && workflows.unpinnedUses.length > 0) blockers.push(...workflows.unpinnedUses.map((entry) => `UNPINNED_ACTION: ${entry}`));
   else if (workflows.unpinnedUses.length > 0) warnings.push(...workflows.unpinnedUses.map((entry) => `UNPINNED_ACTION_OBSERVED: ${entry}`));
-  const environmentsResult = commandJson(projectRoot, "gh", ["api", "--method", "GET", `repos/${local.slug}/environments`]);
-  if (!environmentsResult.ok) unavailable.push(`environments: ${sanitized(environmentsResult.error)}`);
+  const environments = paginatedObjectArray(
+    projectRoot,
+    `repos/${local.slug}/environments?per_page=100`,
+    "environments",
+    "environments",
+    unavailable,
+  );
+  environments.forEach((item, index) => {
+    const environment = record(item);
+    if (!Number.isSafeInteger(environment.id) || !text(environment.name)) {
+      unavailable.push(`environments item ${index}: response was incomplete`);
+    }
+  });
   const project = projectObservation(projectRoot, local.slug, unavailable, blockers);
-  const owner = record(repo.owner);
+  const owner = repoOwner;
   if (text(owner.type) === "User") warnings.push("USER_OWNED_REPOSITORY: organization Team controls do not apply");
   const organization = input.organization ? organizationObservation(projectRoot, input.organization, unavailable) : undefined;
   const report = {
@@ -276,7 +444,7 @@ export function auditGitHubGovernance(input: { projectRoot: string; organization
     checks: { required: requiredChecks, latest },
     codeowners: localCodeowners(projectRoot),
     actions: { enabled: bool(actions.enabled), allowedActions: text(actions.allowed_actions), shaPinnedRequired, workflowPermissions: record(workflowPermissions.value), workflows: workflows.files, leastPrivilegeDeclared: workflows.leastPrivilegeDeclared, unpinnedUses: workflows.unpinnedUses },
-    environments: array(record(environmentsResult.value).environments).map(record).sort((left, right) => String(left.name).localeCompare(String(right.name))),
+    environments: environments.map(record).sort((left, right) => String(left.name).localeCompare(String(right.name))),
     project,
     ...(organization ? { organization } : {}),
     capabilityLimits: ["Audit is read-only and does not change GitHub settings", "Unavailable token scopes are blockers for an explicitly requested scope", "GitHub Team and Enterprise-only settings are reported only when observable"],
