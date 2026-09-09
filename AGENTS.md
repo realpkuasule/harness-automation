@@ -1,67 +1,7 @@
-# Harness Automation Repository Workflow
+## 单人维护与主线基准
 
-This repository now uses GitHub Issues and one configured GitHub Project as the
-active development source of truth.
-
-## Source Of Truth
-
-- GitHub Issues track every non-trivial development task.
-- The configured GitHub Project tracks workflow state as `Todo`,
-  `In Progress`, and `Done`, plus `critical`, `high`, `medium`, and `low`
-  priority.
-- `TASK.json` is a historical archive only. Do not add new entries or treat it
-  as the active tracker for this repository.
-
-## Repo Commands
-
-Use these commands instead of `scripts/task.py` for repository work:
-
-```bash
-python3 scripts/github_tracker.py doctor
-python3 scripts/github_tracker.py summary
-python3 scripts/github_tracker.py list --state open
-python3 scripts/github_tracker.py show 123
-python3 scripts/github_tracker.py create --title "Title" --body "Details" --priority high
-python3 scripts/github_tracker.py status 123 "In Progress"
-python3 scripts/github_tracker.py priority 123 critical
-python3 scripts/github_tracker.py close 123 --comment "Done"
-```
-
-The tracker reads `.github/project-workflow.json`. Set the GitHub Project number
-there once the repository project exists.
-
-## Changelog
-
-Keep using `scripts/changelog.py`, but reference GitHub issues instead of local
-task IDs:
-
-```bash
-python3 scripts/changelog.py add feat 11 "Implement x" --issue realpkuasule/harness-automation#123
-```
-
-## Workflow
-
-1. Create or identify the GitHub Issue before starting meaningful work.
-2. Move the issue into the configured GitHub Project and set its status.
-3. Implement the change.
-4. Record user-facing or repository-significant changes in `CHANGELOG.jsonl`.
-5. Close the issue and update the project status when done.
-
-Compatibility note: the product still ships legacy `task-board` support for
-existing users. That compatibility layer is not the source of truth for this
-repository's own development workflow.
-
-<!-- harness-automation:v2:start -->
-## Harness engineering continuity
-
-Effective policy digest: `b3f6dd79d12f08a28a8c44fd0a9c6731e44cc0d369f2287f2493a9f5079a7f23`
-
-Before editing code in a new session:
-
-1. Run `harness-automation context --project .` and read `.harness/generated/effective-policy.md`.
-2. Search for the existing implementation and identify the owning module before adding a new one.
-3. Treat shared APIs, RPC, database schemas, queues, and generated code as contracts.
-4. Run `harness-automation check --project .` before declaring work complete.
-5. Never edit `.harness/generated/**` or this managed block directly.
-
-<!-- harness-automation:v2:end -->
+- 本仓库由本人单人维护。本地管理检出的 `main` 是核心工作成果和默认集成基线；`origin/main` 用于同步，不因位于远端而具有更高优先级。
+- 新开发分支或 worktree 默认基于当前本地 `main`。不得仅因本地领先远端，就从 `origin/main` 重建基线、重置本地主线，或通过重新挑选提交替代已有完整成果。
+- 保护本地独有提交及未提交内容；未提交内容不会自动进入新 worktree，接续相关工作前须核对其归属。
+- 已授权的交付按“验证并合入本地 `main` → 普通推送同步远端 → 确认远端包含交付提交后清理”推进。
+- 若远端出现本地没有的提交，先检查来源和差异；不得自动丢弃任一侧成果或强推覆盖，无法稳妥整合时交由本人决定。
