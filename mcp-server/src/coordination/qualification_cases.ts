@@ -4,6 +4,7 @@ import type { QualificationManifest } from "./manifest.js";
 const assertions = {
   "dg01-identity-scope": ["actor-repository-credential", "distinct-installation-identity", "readonly-no-installation-created", "wrong-repository-id", "fork-source-mapping", "endpoint-rewrite", "multiple-push-urls", "secret-leak-prevention", "ambient-credential-rejected"],
   "dg01-cas": ["dual-acquire-single-winner", "stale-sha", "stale-generation", "stale-owner", "stale-head", "stale-epoch", "stale-record-hash", "other-work-items-preserved", "same-sha-update", "same-sha-noop-rejected", "same-sha-unique-winner"],
+  "dg01-acquire-contention": ["dual-contention-single-winner", "stale-tuple-rebind-rejected", "per-transaction-differentiator", "bounded-cleanup-authority", "verifier-report-subassertion"],
   "dg01-objects-history": ["no-checkout", "unknown-path-mode", "symlink", "truncation", "read-failure-not-absent", "source-ancestor-rejected", "broken-chain", "unknown-intermediate-version", "cold-cache-resume", "long-history-batches", "checkpoint-not-authority"],
   "dg01-time-renew": ["timely-renew-same-generation", "expiry-boundary", "second-resolution-date", "round-trip-delay", "stale-time", "missing-time", "backward-time", "local-clock-jump", "suspend", "timeout-no-extension"],
   "dg01-late-renew": ["late-reservation-no-write-authority", "new-process-no-unproven-extension", "timely-proof-recovery", "takeover-competing-confirmation", "terminal-competing-confirmation", "unconfirmed-expiry-no-authority"],
