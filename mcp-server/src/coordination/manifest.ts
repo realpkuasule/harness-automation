@@ -9,7 +9,7 @@ const digest = bindingSchema.shape.endpointHash;
 const ref = qualificationScopeSchema.shape.refs.element;
 const count = z.number().int().nonnegative().max(4096 * 32);
 const definition = qualificationScopeSchema.omit({ manifest: true }).extend({ synthetic: syntheticScopeSchema });
-export const qualificationCaseSchema = z.enum(["dg01-identity-scope", "dg01-cas", "dg01-objects-history", "dg01-time-renew", "dg01-late-renew",
+export const qualificationCaseSchema = z.enum(["dg01-identity-scope", "dg01-cas", "dg01-acquire-contention", "dg01-objects-history", "dg01-time-renew", "dg01-late-renew",
   "dg01-recovery", "dg01-handoff", "dg01-drain", "dg01-terminal", "dg01-cli-gates", "dg01-human-budget"]);
 const inputSchema = z.object({
   schemaVersion: z.literal("qualification-run-manifest/1"), runId: id,
