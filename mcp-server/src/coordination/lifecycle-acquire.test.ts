@@ -89,4 +89,25 @@ describe("local-acquire-contention/1 (LOCAL native fixtures)", () => {
     expect(() => store.compareAndSwap({ workItem: "github:owner/repo#86", expectedControlSha: a1Result.candidate!.controlSha, expected: staleExpected, next: a2Next }))
       .toThrow(/^COORDINATION_STALE_/);
   });
+
+  it("per-transactionId differentiator: two A workers with different transactionIds produce different recordHashes", () => {
+    // The per-transaction differentiator is what allows the CAS guard to detect
+    // that A2's commit is a DIFFERENT candidate from A1's even when both A's
+    // share the same parent. If transactionId were excluded from the recordHash,
+    // both A's would hash to the same candidate SHA, and git would reject A2's
+    // commit as a duplicate rather than as a stale CAS.
+    const clock = new CoordinationClock(() => ({ monotonicMs: 0, wallMs: 0 }));
+    clock.observe("Fri, 04 Sep 2026 04:00:00 GMT", clock.start());
+    const a1Next = nextLease({ repository: "owner/repo", repositoryId: "R_1", workItem: "github:owner/repo#86", branch: "codex/feature", sourceRepositoryId: "R_1",
+      owner: "octo", machine: "machine-a1", controlEpochDigest: "a".repeat(64), ttlMs: 60_000, head: "b".repeat(40), transactionId: "tx-a1" }, clock);
+    const a2Args = { repository: "owner/repo", repositoryId: "R_1", workItem: "github:owner/repo#86", branch: "codex/feature", sourceRepositoryId: "R_1",
+      owner: "octo", machine: "machine-a2", controlEpochDigest: "a".repeat(64), ttlMs: 60_000, head: "b".repeat(40), transactionId: "tx-a2" };
+    const a2Next = nextLease(a2Args, clock);
+    expect(a1Next.transactionId).toBe("tx-a1");
+    expect(a2Next.transactionId).toBe("tx-a2");
+    expect(a1Next.recordHash).not.toBe(a2Next.recordHash);
+    expect(a1Next.workItem).toBe(a2Next.workItem);
+    expect(a1Next.branch).toBe(a2Next.branch);
+    expect(a1Next.generation).toBe(a2Next.generation);
+  });
 });
