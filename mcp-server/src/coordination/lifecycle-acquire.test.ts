@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { GitCoordinationStore } from "./store.js";
 import { seedLocalGenesis, localTransport, localHistory } from "./__fixtures__/transport.js";
+import { requiredQualificationCases } from "./qualification_cases.js";
 import { CoordinationClock } from "./clock.js";
 import { nextLease } from "./leases.js";
 import { createCoordinationRecord, expectedRecord } from "./record.js";
@@ -109,5 +110,23 @@ describe("local-acquire-contention/1 (LOCAL native fixtures)", () => {
     expect(a1Next.workItem).toBe(a2Next.workItem);
     expect(a1Next.branch).toBe(a2Next.branch);
     expect(a1Next.generation).toBe(a2Next.generation);
+  });
+
+  it("verifier-report subassertions: dg01-acquire-contention exposes the 5 plan §6.1.7 subassertions as not-run until evaluateQualificationRun runs them", () => {
+    // The plan defines 5 subassertions for dg01-acquire-contention. requiredQualificationCases()
+    // must register them in the fixed inventory (qualification_cases.ts) so that
+    // evaluateQualificationRun can mark them passed once the test runner observes them.
+    const cases = requiredQualificationCases(["dg01-acquire-contention"]);
+    expect(cases).toEqual([{
+      id: "dg01-acquire-contention",
+      status: "not-run",
+      subassertions: [
+        "dual-contention-single-winner",
+        "stale-tuple-rebind-rejected",
+        "per-transaction-differentiator",
+        "bounded-cleanup-authority",
+        "verifier-report-subassertion",
+      ].map((id) => ({ id, status: "not-run", evidenceHash: null })),
+    }]);
   });
 });
