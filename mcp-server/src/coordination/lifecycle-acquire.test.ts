@@ -112,7 +112,7 @@ describe("local-acquire-contention/1 (LOCAL native fixtures)", () => {
     expect(a1Next.generation).toBe(a2Next.generation);
   });
 
-  it("verifier-report subassertions: dg01-acquire-contention exposes the 5 plan §6.1.7 subassertions as not-run until evaluateQualificationRun runs them", () => {
+  it("verifier-report-subassertion: requiredQualificationCases registers the 5 plan §6.1.7 subassertions as not-run until evaluateQualificationRun runs them", () => {
     // The plan defines 5 subassertions for dg01-acquire-contention. requiredQualificationCases()
     // must register them in the fixed inventory (qualification_cases.ts) so that
     // evaluateQualificationRun can mark them passed once the test runner observes them.
