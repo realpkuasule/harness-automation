@@ -2058,6 +2058,46 @@ describe("hash-approved worktree lifecycle", () => {
     expect(closed.plan.operation.disposedIgnoredPathsHash).toMatch(/^[a-f0-9]{64}$/u);
   });
 
+  it("rejects a close whose disposable ignored set changed after the owner approved the plan", () => {
+    const root = repositoryWithRemote();
+    const worktreePath = `${root}-disposable-drift`;
+    repositories.push(worktreePath);
+    configure(root, { managementBranch: "main" });
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#59",
+      branch: "issue-59-disposable-drift",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    git(worktreePath, "push", "-u", "origin", "issue-59-disposable-drift");
+    writeFileSync(join(root, ".git", "info", "exclude"), "deps/\n", "utf8");
+    mkdirSync(join(worktreePath, "deps"), { recursive: true });
+    writeFileSync(join(worktreePath, "deps", "one.js"), "one\n", "utf8");
+    const acceptedCommit = git(worktreePath, "rev-parse", "HEAD");
+
+    const closed = planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#59",
+      acceptedCommit,
+      disposeIgnoredPaths: ["deps/"],
+    });
+    expect(closed.plan.operation.disposedIgnoredPathCount).toBe(1);
+
+    writeFileSync(join(worktreePath, "deps", "two.js"), "two\n", "utf8");
+    expect(() => applyWorkspacePlan({
+      projectRoot: root,
+      planPath: closed.path,
+      approval: closed.plan.planHash,
+    })).toThrow(/WORKSPACE_DRIFT: ignored close content changed/u);
+    expect(existsSync(worktreePath)).toBe(true);
+  });
+
   it("accepts exact GitHub squash-merge evidence before deleting the feature branch", () => {
     installMergedPullRequestGh();
     const root = repositoryWithRemote();

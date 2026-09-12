@@ -28,6 +28,10 @@ skipped test, or a different failed test is not a caught protection.
 | W-07, D-02 | exact old-SHA CAS and preservation of another Work Item (`exact-cas`, `other-work-item`) | stale-dispatch / tree-preservation assertions fail at their declared locations |
 | L-03, L-04 | exact remote-delete result and no replay after unknown result (`remote-delete`, `unknown-replay`) | porcelain and recovery-write-count assertions fail at their declared locations |
 | W-06, W-13 | canonical local path, empty assets and stable directory identity (`local-canonical-path`, `local-assets`, `local-directory-identity`) | local-resource assertions fail at their declared locations, with primary assets still preserved |
+| D-01 | scope binding between the approved `localResources` and the runtime workspace context (`local-runtime-context-leak`) | the binding-drift assertion fails at its declared location with `HUMAN_AUTHORIZATION_BINDING_MISMATCH` |
+| W-07 | two local writers competing for one control ref resolve to one winner (`local-acquire-contention`) | the contention assertion fails at its declared location with `COORDINATION_CAS_CONFLICT` for the loser |
+| L-03 | a local branch advanced past its recorded source SHA is retained rather than deleted (`local-close-branch-drift`) | the exact-SHA retention assertion fails at its declared location |
+| L-02 | the disposable ignored set cannot change between the approved plan and close (`local-disposable-drift`) | the disposed count and hash recheck fails at its declared location with `WORKSPACE_DRIFT: ignored close content changed` |
 
 The structured report, rather than this table, is the source of case-level evidence: it records the exact source SHA,
 patch hash, setup and test argv, sanitized execution environment, test ID, assertion location, and output hashes.
