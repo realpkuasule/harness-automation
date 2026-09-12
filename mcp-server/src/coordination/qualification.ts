@@ -50,6 +50,10 @@ export function collectSettledEvidence(handle: SettledQualification, held?: Evid
 export async function runLocalQualification(input: QualificationManifest, inputTargets: QualificationClientTarget[]) {
   const manifest = validateQualificationManifest(input); const targets = z.array(targetSchema).min(1).max(32).parse(inputTargets);
   if (!manifest.execution) throw new Error("QUALIFICATION_EXECUTION_REQUIRED");
+  // Fail closed rather than run a publication-and-fixtures sequence that silently skips the
+  // contention this profile exists to prove. Same stance as rejecting undeclared resource
+  // descriptors: an unexecutable profile is refused, never quietly reduced.
+  if (manifest.execution.kind === "local-acquire-contention/1") throw new Error("QUALIFICATION_ACQUIRE_EXECUTION_UNSUPPORTED");
   if (targets.length !== manifest.clients.length || new Set(targets.map((target) => target.clientId)).size !== targets.length ||
       targets.some((target) => !manifest.clients.some((client) => client.clientId === target.clientId))) throw new Error("QUALIFICATION_CLIENT_EVIDENCE_MISMATCH");
   const prepared = targets.map((target) => {

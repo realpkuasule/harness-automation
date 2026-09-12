@@ -11,6 +11,11 @@ const count = z.number().int().nonnegative().max(4096 * 32);
 const definition = qualificationScopeSchema.omit({ manifest: true }).extend({ synthetic: syntheticScopeSchema });
 export const qualificationCaseSchema = z.enum(["dg01-identity-scope", "dg01-cas", "dg01-acquire-contention", "dg01-objects-history", "dg01-time-renew", "dg01-late-renew",
   "dg01-recovery", "dg01-handoff", "dg01-drain", "dg01-terminal", "dg01-cli-gates", "dg01-human-budget"]);
+const publicationStepsSchema = z.array(z.object({ stepId: id, clientId: id, operation: z.enum(["bootstrap", "publish-source"]), fixtureId: id, transactionId: id }).strict()).min(1).max(4096);
+// Runs in the parent, after every listed step, and creates that client's whole approved
+// localResources batch under one locked reservation. It is not a client step: the fixed order is
+// publication first, then fixture allocation.
+const resourceStepSchema = z.object({ stepId: id, clientId: id }).strict();
 const inputSchema = z.object({
   schemaVersion: z.literal("qualification-run-manifest/1"), runId: id,
   repository: bindingSchema.shape.repository, repositoryId: bindingSchema.shape.repositoryId, endpointHash: digest,
@@ -29,14 +34,13 @@ const inputSchema = z.object({
   acquireContention: z.object({ caseId: z.literal("dg01-acquire-contention"), controlRef: ref,
     contenders: z.array(z.object({ clientId: id, transactionId: id }).strict()).length(2),
   }).strict().optional(),
-  execution: z.discriminatedUnion("kind", [z.object({ kind: z.literal("local-synthetic-publication/1"),
-    steps: z.array(z.object({ stepId: id, clientId: id, operation: z.enum(["bootstrap", "publish-source"]), fixtureId: id, transactionId: id }).strict()).min(1).max(4096),
-    // Runs in the parent, after every listed step, and creates that client's whole approved
-    // localResources batch under one locked reservation. It is not a client step: the fixed
-    // order is publication first, then fixture allocation. Optional, so every already-written
-    // manifest stays byte-identical.
-    resourceStep: z.object({ stepId: id, clientId: id }).strict().optional(),
-  }).strict(), z.object({ kind: z.literal("local-same-sha-publication/1") }).strict()]).optional(),
+  execution: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("local-synthetic-publication/1"), steps: publicationStepsSchema, resourceStep: resourceStepSchema.optional() }).strict(),
+    // Its own profile rather than a publication variant: this one contends for a control ref, so it
+    // declares acquireContention and the runner schedules prepare-both-then-dispatch-both.
+    z.object({ kind: z.literal("local-acquire-contention/1"), steps: publicationStepsSchema, resourceStep: resourceStepSchema.optional() }).strict(),
+    z.object({ kind: z.literal("local-same-sha-publication/1") }).strict(),
+  ]).optional(),
 }).strict();
 const manifestSchema = inputSchema.extend({ manifestHash: digest });
 export type QualificationManifest = z.infer<typeof manifestSchema>;
@@ -107,7 +111,13 @@ export function prepareQualificationManifest(input: QualificationManifestInput):
   // Existing publication profiles allocate no workspaces. Only a profile that explicitly
   // declares the parent-executed resource step owns that capability; every other execution
   // block still rejects resource descriptors instead of silently allocating them.
-  const resourceStep = value.execution?.kind === "local-synthetic-publication/1" ? value.execution.resourceStep : undefined;
+  const profile = value.execution?.kind === "local-synthetic-publication/1" || value.execution?.kind === "local-acquire-contention/1"
+    ? value.execution : undefined;
+  // The contention profile and the declared contention are one thing: a runnable acquire profile
+  // without a contention would silently prove nothing, and a contention without its profile would
+  // never run. Both directions are therefore errors.
+  if ((value.execution?.kind === "local-acquire-contention/1") !== Boolean(value.acquireContention)) invalid();
+  const resourceStep = profile?.resourceStep;
   if (value.execution && value.clients.some((client) => client.scope.localResources) && !resourceStep) {
     throw new Error("QUALIFICATION_LOCAL_RESOURCE_EXECUTION_UNSUPPORTED");
   }
@@ -157,7 +167,7 @@ export function validateQualificationManifest(input: unknown): QualificationMani
 /** Fixed actions only; same-SHA scheduling is not supplied by a request file. */
 export function qualificationSteps(manifest: QualificationManifest) {
   if (!manifest.execution) throw new Error("QUALIFICATION_EXECUTION_REQUIRED");
-  if (manifest.execution.kind === "local-synthetic-publication/1") return manifest.execution.steps;
+  if (manifest.execution.kind === "local-synthetic-publication/1" || manifest.execution.kind === "local-acquire-contention/1") return manifest.execution.steps;
   return manifest.sameShaPublicationNegativeControl!.publications.map((publication, index) => ({ ...publication,
     stepId: `same-sha-${index + 1}`, operation: "bootstrap" as const, fixtureId: manifest.sameShaPublicationNegativeControl!.fixtureId }));
 }

@@ -136,7 +136,12 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
   two contenders, requires each contender's client to list that ref and the `cas` operation, and
   requires the two contenders to sit in different common dirs so the winner is decided by the remote
   CAS rather than by one lock. Contention is modelled explicitly, like the same-SHA negative control,
-  instead of being inferred from two clients naming one ref.
+  instead of being inferred from two clients naming one ref. It lives in its own
+  `local-acquire-contention/1` execution profile, and the profile and the declared contention must
+  both be present or the manifest is invalid. `runLocalQualification` refuses that profile with
+  `QUALIFICATION_ACQUIRE_EXECUTION_UNSUPPORTED` until the contention is actually scheduled: running
+  the publication and fixture phases while silently skipping the contention would prove nothing,
+  which is the same stance as refusing undeclared resource descriptors.
   Per-worktree configuration is explicitly unsupported for these fixed fixtures; Harness does not
   copy or rewrite it.
 

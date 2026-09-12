@@ -10,7 +10,8 @@ import { appendReceiptEvent } from "../receipt/service.js";
 import { hashObject } from "../v2/fs.js";
 import { CoordinationClock } from "./clock.js";
 import { humanCoordinationGuards } from "./authorization.js";
-import { prepareQualificationManifest, saveQualificationManifest, scopeForClient, loadQualificationManifest, type QualificationManifestInput } from "./manifest.js";
+import { runLocalQualification } from "./qualification.js";
+import { prepareQualificationManifest, qualificationSteps, saveQualificationManifest, scopeForClient, loadQualificationManifest, type QualificationManifestInput } from "./manifest.js";
 import { fixtureGenesis } from "./__fixtures__/transport.js";
 import { prepareSyntheticObject } from "./synthetic.js";
 
@@ -62,11 +63,17 @@ it("binds ordered fixed publication steps without inferring missing dependencies
   const reordered = structuredClone(f.input); reordered.execution!.steps.reverse(); expect(() => prepareQualificationManifest(reordered)).toThrow("QUALIFICATION_MANIFEST_INVALID");
 });
 
-it("binds an explicit two-client acquire contention instead of inferring one", () => {
+it("binds an explicit two-client acquire contention to its own execution profile", async () => {
   const f = fixture(); f.input.requiredCases = ["dg01-acquire-contention"];
   const contenders = [{ clientId: "a", transactionId: "acquire-a" }, { clientId: "b", transactionId: "acquire-b" }];
   f.input.acquireContention = { caseId: "dg01-acquire-contention", controlRef, contenders };
+  f.input.execution = { kind: "local-acquire-contention/1", steps: [
+    { stepId: "init", clientId: "a", operation: "bootstrap", fixtureId: "genesis", transactionId: "bootstrap" },
+    { stepId: "source", clientId: "b", operation: "publish-source", fixtureId: "source", transactionId: "source-create" },
+  ] };
   const manifest = prepareQualificationManifest(f.input);
+  expect(manifest.execution?.kind).toBe("local-acquire-contention/1");
+  expect(qualificationSteps(manifest).map((step) => step.stepId)).toEqual(["init", "source"]);
   expect(manifest.acquireContention?.contenders.map((item) => item.clientId)).toEqual(["a", "b"]);
   expect(readdirSync(f.dirs[0])).toEqual([]);
 
@@ -79,11 +86,16 @@ it("binds an explicit two-client acquire contention instead of inferring one", (
     { why: "an unknown client", patch: (value) => { value.acquireContention!.contenders[1].clientId = "missing"; } },
     { why: "both contenders sharing one common dir", patch: (value) => { value.clients[1].scope.binding.commonDir = value.clients[0].scope.binding.commonDir; } },
     { why: "an unknown field", patch: (value) => { (value.acquireContention as Record<string, unknown>).command = "shell"; } },
+    { why: "contention declared under the publication profile", patch: (value) => { value.execution = { ...f.input.execution!, kind: "local-synthetic-publication/1" }; } },
+    { why: "the acquire profile without a declared contention", patch: (value) => { delete value.acquireContention; } },
   ];
   for (const { why, patch } of cases) {
     const value = structuredClone(f.input); patch(value);
     expect(() => prepareQualificationManifest(value), why).toThrow();
   }
+  // The runner cannot execute the contention yet; refusing is honest, running a reduced sequence is not.
+  await expect(runLocalQualification(manifest, [{ clientId: "a", projectRoot: f.dirs[0], approvalRef: digest }]))
+    .rejects.toThrow("QUALIFICATION_ACQUIRE_EXECUTION_UNSUPPORTED");
 });
 
 it("keeps hashes acyclic, requires exact per-client approval and counts parent budgets including child allocations once", () => {
