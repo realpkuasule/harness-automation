@@ -107,10 +107,19 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
   even a fully observed registration after a nonzero add still preserves failure.
   Read-only observation rechecks directory identity, Git backlinks, exact synthetic
   head, all workspace assets and the original bounded registration metadata.
-  Native close, scoped workspace runtime and acquire profile execution are still
-  pending. Existing publication profiles reject resource descriptors instead of
-  silently allocating them. Per-worktree configuration is explicitly unsupported
-  for these fixed fixtures; Harness does not copy or rewrite it.
+  Native close is implemented for every ownership phase. `reserved` reads the path and the ref
+  and releases only on a real absence; a leftover directory retains as
+  `QUALIFICATION_RESOURCE_OWNERSHIP_UNPROVEN` instead of returning its capacity slot.
+  `mkdir-owned` and `add-started` close through the same checks minus worktree removal, using a
+  non-recursive rmdir for an unregistered directory and retaining as
+  `QUALIFICATION_RESOURCE_DIRECTORY_NOT_EMPTY` when anything unexpected is inside. Every failure
+  path records a `retained` fact carrying its reason and evidence hash, so the last ownership
+  phase, its evidence and the occupied capacity survive the refusal. An already-absent branch
+  counts as removed rather than as `BRANCH_DELETE_FAILED`: git reports that case as
+  "unable to resolve reference", which the previous stderr match never caught. Scoped workspace
+  runtime and acquire profile execution remain pending. Existing publication profiles reject
+  resource descriptors instead of silently allocating them. Per-worktree configuration is
+  explicitly unsupported for these fixed fixtures; Harness does not copy or rewrite it.
 
 Artifact inventory uses Node's package search paths, not dependency execution.
 Type-only packages, hidden/redirected package exports and dependencies sharing a

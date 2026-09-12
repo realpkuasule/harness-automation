@@ -1,14 +1,15 @@
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { planCredentialHostBinding, applyCredentialHostBinding } from "../credentials/host_binding.js";
 import { fileHash, hashObject, sha256 } from "../v2/fs.js";
-import { acquireMutationLock, releaseMutationLock } from "../recovery/service.js";
+import { acquireMutationLock, releaseMutationLock, type MutationLock } from "../recovery/service.js";
 import { createSemanticApprovalPacket } from "../approval/service.js";
-import { closeQualificationWrites, closeQualificationWritesLocked, loadHumanAuthorization, qualificationResourceReservations, recordHumanApproval, revokeHumanAuthorization, type HumanScope } from "../approval/human.js";
+import { qualificationSourceGraph } from "../approval/human_resources.js";
+import { closeQualificationWrites, closeQualificationWritesLocked, loadHumanAuthorization, qualificationResourceReservations, recordHumanApproval, recordQualificationResourceLocked, revokeHumanAuthorization, type HumanScope } from "../approval/human.js";
 import { createQualificationRuntime, createTakeoverRuntime, observeCoordinationBinding } from "./runtime.js";
 import { observeTakeoverRisk } from "./takeover.js";
 import { GitHubCoordinationReader } from "./github.js";
@@ -771,6 +772,80 @@ describe("closeQualificationWorkspaceLocked (LOCAL native-command fixtures)", { 
     } finally { releaseMutationLock(lock); }
   }, 60_000);
 
+  it("retains a reserved resource whose directory exists instead of releasing unproven ownership", () => {
+    const { p, path, approvalRef, runtime } = readyFixture();
+    const lock = acquireMutationLock({ projectDir: p.f.root, commonDir: p.f.commonDir, repository: true });
+    try {
+      reserveQualificationWorkspacesLocked(lock, p.f.root, approvalRef, runtime.binding, runtime.provider.serverClock());
+      mkdirSync(path);                                                                          // crash after mkdir, before the mkdir-owned fact
+      closeQualificationWritesLocked(lock, p.f.commonDir, approvalRef);
+
+      expect(() => closeQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source"))
+        .toThrow(/QUALIFICATION_RESOURCE_OWNERSHIP_UNPROVEN/);
+      const state = loadHumanAuthorization(p.f.commonDir, approvalRef).resourceStates!.source;
+      expect(state.phase).toBe("reserved");
+      expect(state.retained?.reason).toBe("QUALIFICATION_RESOURCE_OWNERSHIP_UNPROVEN");
+      expect(existsSync(path)).toBe(true);
+      expect(qualificationResourceReservations(p.f.commonDir)).toHaveLength(1);
+    } finally { releaseMutationLock(lock); }
+  }, 60_000);
+
+  function driveResourceTo(
+    lock: MutationLock, commonDir: string, approvalRef: string,
+    runtime: ReturnType<typeof readyFixture>["runtime"], path: string, sourceSha: string,
+    target: "mkdir-owned" | "add-started",
+  ): void {
+    const clock = runtime.provider.serverClock();
+    const record = (fact: unknown) => recordQualificationResourceLocked(lock, commonDir, approvalRef, "source", fact, runtime.binding, clock);
+    const graph = qualificationSourceGraph(loadHumanAuthorization(commonDir, approvalRef).approval.scope, "source");
+    record({ type: "import-started", graphHash: hashObject(graph.map((plan) => plan.objectPlanHash)), commits: graph.map((plan) => plan.commitSha) });
+    record({ type: "import-result", status: "imported", evidenceHash: "0".repeat(64) });
+    record({ type: "create-started" });
+    mkdirSync(path);
+    const stat = lstatSync(path); const parent = lstatSync(dirname(path));
+    record({ type: "mkdir-owned", identity: { device: stat.dev, inode: stat.ino, birthtimeMs: stat.birthtimeMs,
+      parentDevice: parent.dev, parentInode: parent.ino, parentBirthtimeMs: parent.birthtimeMs } });
+    if (target === "add-started") {
+      record({ type: "branch-created", head: sourceSha });
+      record({ type: "add-started" });
+    }
+  }
+
+  it("releases a resource that stopped at mkdir-owned by removing only its own empty directory", () => {
+    const { p, path, approvalRef, runtime } = readyFixture();
+    const lock = acquireMutationLock({ projectDir: p.f.root, commonDir: p.f.commonDir, repository: true });
+    try {
+      reserveQualificationWorkspacesLocked(lock, p.f.root, approvalRef, runtime.binding, runtime.provider.serverClock());
+      driveResourceTo(lock, p.f.commonDir, approvalRef, runtime, path, p.source.commitSha, "mkdir-owned");
+      closeQualificationWritesLocked(lock, p.f.commonDir, approvalRef);
+
+      const closed = closeQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source");
+      expect(closed).toMatchObject({ outcome: "released", resourceId: "source" });
+      expect(existsSync(path)).toBe(false);
+      expect(loadHumanAuthorization(p.f.commonDir, approvalRef).resourceStates!.source.phase).toBe("released");
+      expect(qualificationResourceReservations(p.f.commonDir)).toEqual([]);
+    } finally { releaseMutationLock(lock); }
+  }, 60_000);
+
+  it("retains a partially added resource rather than deleting unexpected directory content", () => {
+    const { p, path, approvalRef, runtime } = readyFixture();
+    const lock = acquireMutationLock({ projectDir: p.f.root, commonDir: p.f.commonDir, repository: true });
+    try {
+      reserveQualificationWorkspacesLocked(lock, p.f.root, approvalRef, runtime.binding, runtime.provider.serverClock());
+      driveResourceTo(lock, p.f.commonDir, approvalRef, runtime, path, p.source.commitSha, "add-started");
+      closeQualificationWritesLocked(lock, p.f.commonDir, approvalRef);
+      writeFileSync(join(path, "unexpected"), "keep me\n");
+
+      expect(() => closeQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source"))
+        .toThrow(/QUALIFICATION_RESOURCE_DIRECTORY_NOT_EMPTY/);
+      expect(readFileSync(join(path, "unexpected"), "utf8")).toBe("keep me\n");
+      const state = loadHumanAuthorization(p.f.commonDir, approvalRef).resourceStates!.source;
+      expect(state.phase).toBe("add-started");
+      expect(state.retained?.reason).toBe("QUALIFICATION_RESOURCE_DIRECTORY_NOT_EMPTY");
+      expect(qualificationResourceReservations(p.f.commonDir)).toHaveLength(1);
+    } finally { releaseMutationLock(lock); }
+  }, 60_000);
+
   it("is idempotent on a released resource", () => {
     const { p, approvalRef, runtime } = readyFixture();
     const lock = acquireMutationLock({ projectDir: p.f.root, commonDir: p.f.commonDir, repository: true });
@@ -827,7 +902,9 @@ describe("closeQualificationWorkspaceLocked (LOCAL native-command fixtures)", { 
       expect(git(p.f.root, "rev-parse", `refs/heads/${branch}`)).toBe(otherSha);
       const state = loadHumanAuthorization(p.f.commonDir, approvalRef);
       expect(state.resourceStates!.source.phase).toBe("ready");
-      expect(state.resourceStates!.source.retained?.reason).toBeUndefined();
+      expect(state.resourceStates!.source.retained?.reason).toBe("BRANCH_REF_DRIFT");
+      expect(state.resourceStates!.source.retained?.evidenceHash).toMatch(/^[a-f0-9]{64}$/u);
+      expect(qualificationResourceReservations(p.f.commonDir)).toHaveLength(1);
     } finally { releaseMutationLock(lock); }
   }, 60_000);
 
@@ -842,6 +919,10 @@ describe("closeQualificationWorkspaceLocked (LOCAL native-command fixtures)", { 
       writeFileSync(path, "preserve");
       expect(() => closeQualificationWorkspaceLocked(lock, p.f.root, approvalRef, "source")).toThrow("LOCAL_PATH_REPLACED");
       expect(readFileSync(path, "utf8")).toBe("preserve");
+      const replaced = loadHumanAuthorization(p.f.commonDir, approvalRef).resourceStates!.source;
+      expect(replaced.phase).toBe("ready");
+      expect(replaced.retained?.reason).toBe("LOCAL_PATH_REPLACED");
+      expect(qualificationResourceReservations(p.f.commonDir)).toHaveLength(1);
     } finally { releaseMutationLock(lock); }
   }, 60_000);
 

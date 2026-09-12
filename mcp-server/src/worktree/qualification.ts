@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { qualificationResourcesSchema } from "../approval/human_scope.js";
 import { loadHumanAuthorization, recordQualificationResourceLocked, reserveQualificationResourcesLocked, type HumanScopeBinding } from "../approval/human.js";
@@ -237,36 +237,73 @@ export function closeQualificationWorkspaceLocked(lock: MutationLock, projectRoo
     return records.length ? records[records.length - 1].recordHash : null;
   };
   const observedAt = () => new Date(Math.floor(clock.bounds().lowerMs)).toISOString();
+  // A retention is a result, not a silent refusal: it carries the reason, keeps the last
+  // ownership phase and its evidence, and keeps occupying capacity. Recording it before the
+  // throw is what makes "we stopped instead of over-deleting" observable afterwards.
+  const retain = (reason: string, extra: Record<string, unknown> = {}): never => {
+    record({ type: "retained", reason, evidenceHash: hashObject({ resourceId, path: resource.path, branch: resource.branch,
+      sourceSha: resource.sourceSha, reason, ...extra, recordedAt: lastRecordHash(), observedAt: observedAt() }) });
+    throw new Error(reason);
+  };
   if (progress.phase === "reserved") {                                                                                // NLC-05
+    // A crash after mkdir, before the mkdir-owned fact, leaves a directory this round really
+    // created while the projection still says reserved. Releasing on that state would return
+    // the capacity slot for a directory that still exists, so read the path and the ref instead
+    // of asserting absence. Unproven ownership retains; only a real absence releases.
+    const reservedPath = lstatSync(resource.path, { throwIfNoEntry: false });
+    // --quiet makes rev-parse exit 1 for an absent ref, which is what absentAllowed tolerates;
+    // without it the exit is 128 and the read fails as an observation error instead.
+    const reservedBranch = inspectGit(context.projectDir, ["rev-parse", "--verify", "--quiet", `refs/heads/${resource.branch}^{commit}`], true).trim();
+    if (reservedPath || reservedBranch) {
+      return retain("QUALIFICATION_RESOURCE_OWNERSHIP_UNPROVEN",
+        { pathPresent: Boolean(reservedPath), branchPresent: Boolean(reservedBranch) });
+    }
     const evidenceHash = hashObject({ resourceId, path: resource.path, branch: resource.branch, sourceSha: resource.sourceSha,
-      worktreeRemoved: false, branchRemoved: false, recordedAt: lastRecordHash(), observedAt: observedAt() });
+      worktreeRemoved: true, branchRemoved: true, recordedAt: lastRecordHash(), observedAt: observedAt() });
     record({ type: "released", evidenceHash });
     return { resourceId, path: resource.path, branch: resource.branch, evidenceHash, outcome: "released" };
   }
-  if (progress.phase !== "ready") throw new Error("QUALIFICATION_RESOURCE_CLOSE_PHASE_NOT_READY");
+  // A crash between mkdir and add leaves the resource at mkdir-owned or add-started with no
+  // worktree registration. Refusing to close those states would strand the directory and its
+  // capacity forever, so they close through the same checks, minus the worktree-removal step.
+  if (progress.phase !== "ready" && progress.phase !== "mkdir-owned" && progress.phase !== "add-started") {
+    throw new Error("QUALIFICATION_RESOURCE_CLOSE_PHASE_NOT_READY");
+  }
   validateBranch(context.projectDir, resource.branch);
   const hostBinding = workspaceLocalInventory(projectRoot, true).hostBinding;
-  if (validateTarget(hostBinding, resource.path) !== resource.path) throw new Error("HUMAN_LOCAL_RESOURCE_BINDING_MISMATCH");
+  if (validateTarget(hostBinding, resource.path) !== resource.path) return retain("HUMAN_LOCAL_RESOURCE_BINDING_MISMATCH");
   const pathStat = lstatSync(resource.path, { throwIfNoEntry: false });                                                 // NLC-08
-  if (pathStat && !pathStat.isDirectory()) throw new Error("LOCAL_PATH_REPLACED");
-  const currentBranch = inspectGit(context.projectDir, ["rev-parse", "--verify", `refs/heads/${resource.branch}^{commit}`], true).trim(); // NLC-07
-  if (currentBranch && currentBranch !== resource.sourceSha) throw new Error("BRANCH_REF_DRIFT");
+  if (pathStat && !pathStat.isDirectory()) return retain("LOCAL_PATH_REPLACED");
+  // A partially created resource may legitimately have no branch yet, so this read must
+  // tolerate absence (--quiet exits 1) rather than fail as an observation error.
+  const currentBranch = inspectGit(context.projectDir, ["rev-parse", "--verify", "--quiet", `refs/heads/${resource.branch}^{commit}`], true).trim(); // NLC-07
+  if (currentBranch && currentBranch !== resource.sourceSha) return retain("BRANCH_REF_DRIFT", { currentBranch });
   const porcelain = parseWorktreePorcelain(inspectGit(context.projectDir, ["worktree", "list", "--porcelain", "-z"]));
   const matching = porcelain.filter((record) => record.path === resource.path);
-  if (matching.length && matching.some((record) => record.head !== resource.sourceSha)) throw new Error("WORKTREE_HEAD_DRIFT");
+  if (matching.length && matching.some((record) => record.head !== resource.sourceSha)) return retain("WORKTREE_HEAD_DRIFT");
   let worktreeRemoved = false;                                                                                          // NLC-06 (a)
-  if (pathStat) {
+  if (pathStat && matching.length === 0) {
+    // This round created only the directory; no worktree was ever registered for it. rmdir is
+    // non-recursive on purpose, so anything unexpected inside retains instead of being deleted.
+    try { rmdirSync(resource.path); } catch { return retain("QUALIFICATION_RESOURCE_DIRECTORY_NOT_EMPTY"); }
+    worktreeRemoved = true;
+  } else if (pathStat) {
     const removed = run(["worktree", "remove", resource.path]);
     if (removed.status === 0) worktreeRemoved = true;
     else if (/did not exist/i.test(removed.stderr ?? "")) worktreeRemoved = true;
-    else throw new Error("WORKTREE_REMOVE_FAILED");                                                                     // NLC-09
+    else return retain("WORKTREE_REMOVE_FAILED");                                                                       // NLC-09
   } else worktreeRemoved = true;
-  const deleted = run(["update-ref", "-d", `refs/heads/${resource.branch}`, resource.sourceSha]);                       // NLC-06 (b)
-  let branchRemoved = false;
-  if (deleted.status === 0) branchRemoved = true;
-  else if (/reference does not exist/i.test(deleted.stderr ?? "")) branchRemoved = true;
-  else throw new Error("BRANCH_DELETE_FAILED");                                                                         // NLC-10
-  if (progress.gitDir && lstatSync(progress.gitDir, { throwIfNoEntry: false })) throw new Error("GITDIR_REGISTERED_AFTER_CLOSE"); // NLC-11
+  // An already-absent branch already satisfies the goal state, so it is a removal, not a
+  // failure. Git reports the absent case as "unable to resolve reference", which the previous
+  // stderr match never caught, so decide from the read instead of from the message.
+  let branchRemoved = false;                                                                                            // NLC-06 (b)
+  if (!currentBranch) branchRemoved = true;
+  else {
+    const deleted = run(["update-ref", "-d", `refs/heads/${resource.branch}`, resource.sourceSha]);
+    if (deleted.status === 0) branchRemoved = true;
+    else return retain("BRANCH_DELETE_FAILED");                                                                         // NLC-10
+  }
+  if (progress.gitDir && lstatSync(progress.gitDir, { throwIfNoEntry: false })) return retain("GITDIR_REGISTERED_AFTER_CLOSE"); // NLC-11
   const evidenceHash = hashObject({                                                                                     // NLC-06 (d)
     resourceId, path: resource.path, branch: resource.branch, sourceSha: resource.sourceSha,
     worktreeRemoved, branchRemoved, recordedAt: lastRecordHash(), observedAt: observedAt(),
