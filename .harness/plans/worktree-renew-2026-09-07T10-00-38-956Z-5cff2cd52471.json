@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "worktree-delivery/1.0",
+  "kind": "workspace-plan",
+  "id": "worktree-renew-2026-09-07T10-00-38-956Z-5cff2cd52471",
+  "createdAt": "2026-09-07T10:00:38.956Z",
+  "projectDir": "/Users/zhichao/codex/harness-automation",
+  "commonDir": "/Users/zhichao/codex/harness-automation/.git",
+  "observedHash": "02e347968483e146832359f5b08a809500feccc7385ac7a5bf06715f8bc89359",
+  "operation": {
+    "kind": "renew",
+    "lease": {
+      "schemaVersion": "1.0",
+      "workItem": "github:realpkuasule/harness-automation#86",
+      "branch": "codex/issue-86-remote-coordination-v3",
+      "path": "/Users/zhichao/codex/harness-automation-worktrees/86",
+      "owner": "zhichao",
+      "acceptedCommit": "6059146430fdfe9ab3013841d48e43ac62f5d3eb",
+      "createdAt": "2026-09-04T02:53:34.879Z",
+      "heartbeatAt": "2026-09-04T02:53:34.879Z",
+      "status": "active"
+    },
+    "replacementLease": {
+      "schemaVersion": "1.0",
+      "workItem": "github:realpkuasule/harness-automation#86",
+      "branch": "codex/issue-86-remote-coordination-v3",
+      "path": "/Users/zhichao/codex/harness-automation-worktrees/86",
+      "owner": "zhichao",
+      "acceptedCommit": "45685a7a1a371a3b425a325e9ce6606395c90202",
+      "createdAt": "2026-09-04T02:53:34.879Z",
+      "heartbeatAt": "2026-09-07T10:00:38.956Z",
+      "status": "active"
+    },
+    "expectedHead": "45685a7a1a371a3b425a325e9ce6606395c90202",
+    "expectedLeaseHash": "55e208ab0b57d0a5b286e85c3309f5ef56d384f8ac83b322b42a7033d20afaf0",
+    "afterLeaseHash": "e9b1429f306f1f398591d1c6205d0dcae03c2e9ebf24c82b3703403af5513d06"
+  },
+  "warnings": [
+    "Renew updates only the existing lease heartbeat; the worktree and branches are preserved."
+  ],
+  "planHash": "74acf35f0087ada4e2292be3183190c8698f9963f73a21536371f2f0f16fcc79"
+}

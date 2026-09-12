@@ -8,3 +8,5 @@ docs/tmp
 coverage/
 *.lcov.info
 supplement-info.md
+.DS_Store
+.harness/worktree-delivery.json

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "worktree-delivery/1.0",
+  "kind": "workspace-plan",
+  "id": "worktree-configure-2026-09-04T02-33-18-080Z-beec1876b4f6",
+  "createdAt": "2026-09-04T02:33:18.080Z",
+  "projectDir": "/Users/zhichao/codex/harness-automation",
+  "commonDir": "/Users/zhichao/codex/harness-automation/.git",
+  "observedHash": "1c94664d1ce16d1a53dfcf4f3d31d1a3f0ed6e24cd776fb953389b139caae4d8",
+  "operation": {
+    "kind": "configure",
+    "configPath": ".harness/worktree-delivery.json",
+    "beforeHash": null,
+    "afterHash": "8728eaf57b123139e0404480589b4192e751d099a5beae5f2bc8d0527afe6963",
+    "content": "{\n  \"schemaVersion\": \"1.0\",\n  \"mode\": \"enforced\",\n  \"managementBranch\": \"main\",\n  \"maxPersistentWorktrees\": 2,\n  \"leaseTtlHours\": 72,\n  \"reviewTtlMinutes\": 120,\n  \"remoteBranchRetentionDays\": 1,\n  \"remoteBranchDeletion\": true,\n  \"provider\": {\n    \"kind\": \"github\",\n    \"repository\": \"realpkuasule/harness-automation\",\n    \"project\": {\n      \"owner\": \"realpkuasule\",\n      \"number\": 2,\n      \"statusField\": \"Status\",\n      \"doneValues\": [\n        \"Done\"\n      ]\n    }\n  }\n}\n",
+    "hostBindingPath": "harness/worktree-delivery/host-binding.json",
+    "beforeHostBindingHash": null,
+    "afterHostBindingHash": "64f123f3ea71ee6ebfc5c6278176488f6152c34f56a8688260fc4b4710fd7dfc",
+    "hostBindingContent": "{\n  \"schemaVersion\": \"1.0\",\n  \"allowedRoots\": [\n    \"/Users/zhichao/codex/harness-automation-worktrees\"\n  ],\n  \"protectedRoots\": [\n    \"/Users/zhichao/codex/harness-automation\",\n    \"/Users/zhichao/codex/harness-automation/.git\",\n    \"/\"\n  ],\n  \"approval\": {\n    \"mode\": \"manual\"\n  }\n}\n",
+    "topology": {
+      "kind": "legacy-flat",
+      "managementCheckout": "/Users/zhichao/codex/harness-automation",
+      "allowedRoots": [],
+      "protectedRoots": [
+        "/Users/zhichao/codex/harness-automation",
+        "/Users/zhichao/codex/harness-automation/.git",
+        "/"
+      ],
+      "commonDir": "/Users/zhichao/codex/harness-automation/.git",
+      "worktreeTopLevels": [
+        "/Users/zhichao/.codex/worktrees/c1e7/harness-automation",
+        "/Users/zhichao/codex/harness-automation",
+        "/Users/zhichao/codex/harness-automation-worktrees/60",
+        "/Users/zhichao/codex/harness-automation-worktrees/87",
+        "/Users/zhichao/codex/harness-automation-worktrees/96",
+        "/Users/zhichao/codex/harness-automation-worktrees/release-2.8.0",
+        "/Users/zhichao/codex/harness-automation-worktrees/release-2.8.0-retry"
+      ]
+    }
+  },
+  "warnings": [],
+  "planHash": "b9f6c92d2da6af519f3ddca6bed9a4aa8b13c1866d22f4806dc7f7ffd92f42da"
+}

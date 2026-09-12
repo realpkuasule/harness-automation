@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "worktree-delivery/1.0",
+  "kind": "workspace-plan",
+  "id": "worktree-allocate-2026-09-04T02-53-34-880Z-e083dca49740",
+  "createdAt": "2026-09-04T02:53:34.880Z",
+  "projectDir": "/Users/zhichao/codex/harness-automation",
+  "commonDir": "/Users/zhichao/codex/harness-automation/.git",
+  "observedHash": "475d7c0c32a49eafbb3035e8270ff3039cf39400ffc28e7b3f2b6da1767229cb",
+  "operation": {
+    "kind": "allocate",
+    "lease": {
+      "schemaVersion": "1.0",
+      "workItem": "github:realpkuasule/harness-automation#86",
+      "branch": "codex/issue-86-remote-coordination-v3",
+      "path": "/Users/zhichao/codex/harness-automation-worktrees/86",
+      "owner": "zhichao",
+      "acceptedCommit": "6059146430fdfe9ab3013841d48e43ac62f5d3eb",
+      "createdAt": "2026-09-04T02:53:34.879Z",
+      "heartbeatAt": "2026-09-04T02:53:34.879Z",
+      "status": "active"
+    },
+    "startPoint": "6059146430fdfe9ab3013841d48e43ac62f5d3eb",
+    "createBranch": true,
+    "providerObservationBound": true
+  },
+  "warnings": [],
+  "planHash": "94226d71bcf32ec18e7b32bf0e98b2a9b14335ca104273fc3a2f76059cd810cc"
+}
