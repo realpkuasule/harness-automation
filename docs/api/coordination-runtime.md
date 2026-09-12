@@ -132,6 +132,11 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
   allocating them. `closeQualificationWorkspaceLocked` and the scoped `qualification_runtime`
   wrapper still have no production caller and are exercised only by tests, so native close has no
   runtime path yet and the two-client acquire execution profile is not wired in.
+  Its manifest contract does exist: `acquireContention` names the approved control anchor and exactly
+  two contenders, requires each contender's client to list that ref and the `cas` operation, and
+  requires the two contenders to sit in different common dirs so the winner is decided by the remote
+  CAS rather than by one lock. Contention is modelled explicitly, like the same-SHA negative control,
+  instead of being inferred from two clients naming one ref.
   Per-worktree configuration is explicitly unsupported for these fixed fixtures; Harness does not
   copy or rewrite it.
 

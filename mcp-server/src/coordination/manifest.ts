@@ -23,6 +23,12 @@ const inputSchema = z.object({
     expected: z.string().regex(/^[a-f0-9]{40}$/u).nullable(),
     publications: z.array(z.object({ clientId: id, transactionId: id }).strict()).length(2),
   }).strict().optional(),
+  // Two clients contend for one control ref from different common dirs, so the winner is decided by
+  // the remote CAS rather than by a shared local lock. Modelled explicitly, like the same-SHA
+  // negative control, instead of inferring contention from two clients naming one ref.
+  acquireContention: z.object({ caseId: z.literal("dg01-acquire-contention"), controlRef: ref,
+    contenders: z.array(z.object({ clientId: id, transactionId: id }).strict()).length(2),
+  }).strict().optional(),
   execution: z.discriminatedUnion("kind", [z.object({ kind: z.literal("local-synthetic-publication/1"),
     steps: z.array(z.object({ stepId: id, clientId: id, operation: z.enum(["bootstrap", "publish-source"]), fixtureId: id, transactionId: id }).strict()).min(1).max(4096),
     // Runs in the parent, after every listed step, and creates that client's whole approved
@@ -82,6 +88,20 @@ export function prepareQualificationManifest(input: QualificationManifestInput):
   for (const field of ["maxCommits", "maxWriteAttempts", "maxCleanupAttempts"] as const) {
     // Child allocations are already contained in each parent's total, never added a second time.
     if (value.clients.reduce((sum, client) => sum + client.scope[field], 0) > value[field]) invalid();
+  }
+  const contention = value.acquireContention;
+  if (contention && (!value.requiredCases.includes(contention.caseId) ||
+      new Set(contention.contenders.map((item) => item.clientId)).size !== 2 ||
+      new Set(contention.contenders.map((item) => item.transactionId)).size !== 2 ||
+      !value.synthetic.controls.some((item) => item.ref === contention.controlRef))) invalid();
+  if (contention) {
+    const dirs = contention.contenders.flatMap((item) => {
+      const client = value.clients.find((candidate) => candidate.clientId === item.clientId);
+      return client && client.scope.refs.includes(contention.controlRef) && client.scope.operations.includes("cas")
+        ? [client.scope.binding.commonDir] : [];
+    });
+    // Two common dirs are required: the contention has to be decided by the remote CAS, not by one lock.
+    if (dirs.length !== contention.contenders.length || new Set(dirs).size !== dirs.length) invalid();
   }
   const negative = value.sameShaPublicationNegativeControl;
   // Existing publication profiles allocate no workspaces. Only a profile that explicitly

@@ -62,6 +62,30 @@ it("binds ordered fixed publication steps without inferring missing dependencies
   const reordered = structuredClone(f.input); reordered.execution!.steps.reverse(); expect(() => prepareQualificationManifest(reordered)).toThrow("QUALIFICATION_MANIFEST_INVALID");
 });
 
+it("binds an explicit two-client acquire contention instead of inferring one", () => {
+  const f = fixture(); f.input.requiredCases = ["dg01-acquire-contention"];
+  const contenders = [{ clientId: "a", transactionId: "acquire-a" }, { clientId: "b", transactionId: "acquire-b" }];
+  f.input.acquireContention = { caseId: "dg01-acquire-contention", controlRef, contenders };
+  const manifest = prepareQualificationManifest(f.input);
+  expect(manifest.acquireContention?.contenders.map((item) => item.clientId)).toEqual(["a", "b"]);
+  expect(readdirSync(f.dirs[0])).toEqual([]);
+
+  const cases: Array<{ why: string; patch: (value: QualificationManifestInput) => void }> = [
+    { why: "the case is not selected", patch: (value) => { value.requiredCases = ["dg01-cas"]; } },
+    { why: "a different case id", patch: (value) => { value.acquireContention!.caseId = "dg01-cas"; } },
+    { why: "a ref that is not an approved control anchor", patch: (value) => { value.acquireContention!.controlRef = sourceRef; } },
+    { why: "one client contending twice", patch: (value) => { value.acquireContention!.contenders[1].clientId = "a"; } },
+    { why: "one transaction contending twice", patch: (value) => { value.acquireContention!.contenders[1].transactionId = "acquire-a"; } },
+    { why: "an unknown client", patch: (value) => { value.acquireContention!.contenders[1].clientId = "missing"; } },
+    { why: "both contenders sharing one common dir", patch: (value) => { value.clients[1].scope.binding.commonDir = value.clients[0].scope.binding.commonDir; } },
+    { why: "an unknown field", patch: (value) => { (value.acquireContention as Record<string, unknown>).command = "shell"; } },
+  ];
+  for (const { why, patch } of cases) {
+    const value = structuredClone(f.input); patch(value);
+    expect(() => prepareQualificationManifest(value), why).toThrow();
+  }
+});
+
 it("keeps hashes acyclic, requires exact per-client approval and counts parent budgets including child allocations once", () => {
   const f = fixture(); f.input.clients[0].scope.takeoverAllocations = [{ allocationId: "child-a", workItem: "github:owner/repo#86", controlRef, sourceRef, genesisSha: f.genesis.commitSha, maxCommits: 2, maxWriteAttempts: 2 }];
   const manifest = prepareQualificationManifest(f.input);
