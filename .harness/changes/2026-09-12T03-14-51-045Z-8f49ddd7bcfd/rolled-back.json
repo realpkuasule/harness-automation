@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "file-rollback/1.0",
+  "kind": "file-rollback-receipt",
+  "id": "2026-09-12T03-14-51-045Z-8f49ddd7bcfd",
+  "planHash": "ace374025507c3364ce662f080824c1349259a5d0f3d384f5fd5cd08d8abd47e",
+  "appliedReceiptEventHash": "45b3938a71070778ca854423ab9657a4da3ec5f2e29a2467e071d860b859f706",
+  "status": "rolled-back",
+  "restored": [
+    ".harness/policy.yaml",
+    ".harness/generated/effective-policy.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".harness/.gitignore",
+    ".harness/manifest.json"
+  ],
+  "rolledBackAt": "2026-09-12T03:15:59.678Z",
+  "observedHash": "aa56265049f0049181c470a0e8086a1da1dbea77bb8cd1f22b4846d4efc91935"
+}

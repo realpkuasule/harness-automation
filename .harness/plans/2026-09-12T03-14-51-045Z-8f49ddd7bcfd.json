@@ -1,0 +1,205 @@
+{
+  "schemaVersion": "2.0",
+  "id": "2026-09-12T03-14-51-045Z-8f49ddd7bcfd",
+  "createdAt": "2026-09-12T03:14:51.045Z",
+  "projectDir": "/Users/zhichao/codex/harness-automation",
+  "intakeHash": "ad24c5880d43f1753459a2640e069b66c7002f4b0c196dbb8e824b81ff89baf1",
+  "discoveryHash": "ba91787449dc544fbd8c6390fba9f991c888d1b6d0e7082d9090e0fe70bb4b0b",
+  "sourceHashes": [
+    {
+      "path": "docs/PRD.md",
+      "sha256": "579ce16f28e13a9719ae0928138ec0125c04175d5a2826d07a14e26913bc623b"
+    },
+    {
+      "path": "docs/design/harness-automation-design-v2.0-backup.md",
+      "sha256": "9b27dc8b89be4d84d738e7c1e44ce5efcb4ddabe0f2c7c105f4b16a7fb942bfc"
+    },
+    {
+      "path": "docs/design/harness-automation-design.md",
+      "sha256": "be715a5787993196dd447b70d2db90d448957c54097082608ccb677c1289e507"
+    },
+    {
+      "path": "docs/design/harness-design-comparison.md",
+      "sha256": "1ad7263e9ad68012e8511f0a7b773d97a9c0144690de6b75c644e2e6b97ca0bb"
+    },
+    {
+      "path": "docs/design/harness-skill-v2.md",
+      "sha256": "37448fa527133a99b3dad892f6ba1000493befe64d91c3f06c1a177f98761ab2"
+    },
+    {
+      "path": "docs/design/project-governance-upgrade.md",
+      "sha256": "b8ac3cf666054cd18be53a9c4ca50193988da130eb3ffaa25ead56b0c07ed9d7"
+    },
+    {
+      "path": "docs/design/result-01-branch-worktree-collaboration-target.md",
+      "sha256": "83f8bacbfc1472a6e581d23fe1c4c492421f9a9b1da497e85458701b465d27f4"
+    },
+    {
+      "path": "docs/design/result-02-harness-v3-scenario-feature-inventory.md",
+      "sha256": "1f362297ec7b6be694a90efb63523e0ff137c48f1e6eb95467562327948d0ce2"
+    },
+    {
+      "path": "docs/design/result-03-harness-v3-feature-contract.md",
+      "sha256": "f2689c89fef25c5ed544c16657988767551bde8b1d460fb8817b0ae193840d60"
+    },
+    {
+      "path": "docs/design/result-04-harness-v3-requirements.md",
+      "sha256": "e7b598310403f7d7212075f59bad3ebf0b28698c3c842ec0e6829edcc6aa8ce6"
+    },
+    {
+      "path": "docs/design/typescript-naming-adoption-baseline.md",
+      "sha256": "40de35a515ae50b247d96bd26f031c8518197f87df4807e00655e480022ba42a"
+    },
+    {
+      "path": "docs/design/worktree-delivery.md",
+      "sha256": "31cd4272386dc703b4b033140636b0eae522cbe67f202396a5e1831753f91bbb"
+    },
+    {
+      "path": "docs/research/github-wheels-2026-08-31.json",
+      "sha256": "2ae5dbd6bb795fef6ea10a32cf85159e4e4b2557338c06cc7e40efd9802d87b0"
+    },
+    {
+      "path": "docs/research/github-wheels-2026-08-31.md",
+      "sha256": "e4d10b984d423a6b9b62029954059cb03952939f210e6a3ad118357c9f8d02e3"
+    },
+    {
+      "path": "docs/research/npm-release-worktree.md",
+      "sha256": "83bc604d765cad9b055e6594ceeab292f0cbe439854be006792484e601a523b6"
+    },
+    {
+      "path": "docs/research/project-governance-upgrade-current-state.md",
+      "sha256": "352d12c89b8fc2155608c32701b0035cdd485d05d72ec926c3ffb2cda79fa0e2"
+    },
+    {
+      "path": "evals/baselines/npm-release-worktree-pre-implementation.json",
+      "sha256": "299a5bea6ff72f88e31a805a6b6f7e67d7fcf492ec11da2493f3f96a8f87dd60"
+    },
+    {
+      "path": "evals/evals.json",
+      "sha256": "91848287fea3b58a2951731c1864e20a6f231287adab026c1ff9a66e735eae0d"
+    },
+    {
+      "path": "evals/fixtures/known-bad-npm-release-policy.md",
+      "sha256": "172a210a2f2f59bdd177ca635e937255559dbd22515b1224e633dd776de3bb9f"
+    },
+    {
+      "path": "evals/run_npm_release_policy.mjs",
+      "sha256": "51e140657de71a9b7f45e93a4c8eb2ab47d7008c90780571c7b5f84c0bf35110"
+    },
+    {
+      "path": "evals/tasks/npm-release-worktree.jsonl",
+      "sha256": "3710cc36bcfbb96ee9d76abe997cc56d16e69b997247b2dc9ce566e7326d9cd9"
+    }
+  ],
+  "operations": [
+    {
+      "id": "write-harness-policy-yaml",
+      "kind": "write",
+      "path": ".harness/policy.yaml",
+      "beforeHash": "29c84d5d94db6f65f00574b0f6a21875013265e3c640ae87dbece1991e72cf3a",
+      "afterHash": "1c65e122ea37e4b6c9fe6c1ae46955a1ace74c81dd31343d33f79407a9bf6fae",
+      "content": "{\n  \"schemaVersion\": \"2.0\",\n  \"compiler\": {\n    \"package\": \"@realpkuasule/harness-automation\",\n    \"version\": \"2.8.19\"\n  },\n  \"project\": {\n    \"name\": \"harness-automation\",\n    \"owner\": \"zhichao\",\n    \"phase\": \"design-approved\",\n    \"profile\": \"custom\",\n    \"stacks\": [\n      \"typescript\"\n    ],\n    \"deliveryProfiles\": [],\n    \"domainProfiles\": [],\n    \"qualityProfiles\": []\n  },\n  \"sources\": [\n    {\n      \"id\": \"prd\",\n      \"kind\": \"prd\",\n      \"path\": \"docs/PRD.md\",\n      \"sha256\": \"579ce16f28e13a9719ae0928138ec0125c04175d5a2826d07a14e26913bc623b\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-harness-automation-design-v2-0-backup\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/harness-automation-design-v2.0-backup.md\",\n      \"sha256\": \"9b27dc8b89be4d84d738e7c1e44ce5efcb4ddabe0f2c7c105f4b16a7fb942bfc\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-harness-automation-design\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/harness-automation-design.md\",\n      \"sha256\": \"be715a5787993196dd447b70d2db90d448957c54097082608ccb677c1289e507\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-harness-design-comparison\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/harness-design-comparison.md\",\n      \"sha256\": \"1ad7263e9ad68012e8511f0a7b773d97a9c0144690de6b75c644e2e6b97ca0bb\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-harness-skill-v2\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/harness-skill-v2.md\",\n      \"sha256\": \"37448fa527133a99b3dad892f6ba1000493befe64d91c3f06c1a177f98761ab2\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-project-governance-upgrade\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/project-governance-upgrade.md\",\n      \"sha256\": \"b8ac3cf666054cd18be53a9c4ca50193988da130eb3ffaa25ead56b0c07ed9d7\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-result-01-branch-worktree-collaboration-target\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/result-01-branch-worktree-collaboration-target.md\",\n      \"sha256\": \"83f8bacbfc1472a6e581d23fe1c4c492421f9a9b1da497e85458701b465d27f4\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-result-02-harness-v3-scenario-feature-inventory\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/result-02-harness-v3-scenario-feature-inventory.md\",\n      \"sha256\": \"1f362297ec7b6be694a90efb63523e0ff137c48f1e6eb95467562327948d0ce2\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-result-03-harness-v3-feature-contract\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/result-03-harness-v3-feature-contract.md\",\n      \"sha256\": \"f2689c89fef25c5ed544c16657988767551bde8b1d460fb8817b0ae193840d60\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-result-04-harness-v3-requirements\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/result-04-harness-v3-requirements.md\",\n      \"sha256\": \"e7b598310403f7d7212075f59bad3ebf0b28698c3c842ec0e6829edcc6aa8ce6\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-typescript-naming-adoption-baseline\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/typescript-naming-adoption-baseline.md\",\n      \"sha256\": \"40de35a515ae50b247d96bd26f031c8518197f87df4807e00655e480022ba42a\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"design-worktree-delivery\",\n      \"kind\": \"design\",\n      \"path\": \"docs/design/worktree-delivery.md\",\n      \"sha256\": \"31cd4272386dc703b4b033140636b0eae522cbe67f202396a5e1831753f91bbb\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"research-github-wheels-2026-08-31\",\n      \"kind\": \"research\",\n      \"path\": \"docs/research/github-wheels-2026-08-31.json\",\n      \"sha256\": \"2ae5dbd6bb795fef6ea10a32cf85159e4e4b2557338c06cc7e40efd9802d87b0\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"research-github-wheels-2026-08-31-2\",\n      \"kind\": \"research\",\n      \"path\": \"docs/research/github-wheels-2026-08-31.md\",\n      \"sha256\": \"e4d10b984d423a6b9b62029954059cb03952939f210e6a3ad118357c9f8d02e3\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"research-npm-release-worktree\",\n      \"kind\": \"research\",\n      \"path\": \"docs/research/npm-release-worktree.md\",\n      \"sha256\": \"83bc604d765cad9b055e6594ceeab292f0cbe439854be006792484e601a523b6\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"research-project-governance-upgrade-current-state\",\n      \"kind\": \"research\",\n      \"path\": \"docs/research/project-governance-upgrade-current-state.md\",\n      \"sha256\": \"352d12c89b8fc2155608c32701b0035cdd485d05d72ec926c3ffb2cda79fa0e2\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"eval-npm-release-worktree-pre-implementation\",\n      \"kind\": \"eval\",\n      \"path\": \"evals/baselines/npm-release-worktree-pre-implementation.json\",\n      \"sha256\": \"299a5bea6ff72f88e31a805a6b6f7e67d7fcf492ec11da2493f3f96a8f87dd60\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"eval-evals\",\n      \"kind\": \"eval\",\n      \"path\": \"evals/evals.json\",\n      \"sha256\": \"91848287fea3b58a2951731c1864e20a6f231287adab026c1ff9a66e735eae0d\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"eval-known-bad-npm-release-policy\",\n      \"kind\": \"eval\",\n      \"path\": \"evals/fixtures/known-bad-npm-release-policy.md\",\n      \"sha256\": \"172a210a2f2f59bdd177ca635e937255559dbd22515b1224e633dd776de3bb9f\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"eval-run-npm-release-policy\",\n      \"kind\": \"eval\",\n      \"path\": \"evals/run_npm_release_policy.mjs\",\n      \"sha256\": \"51e140657de71a9b7f45e93a4c8eb2ab47d7008c90780571c7b5f84c0bf35110\",\n      \"approved\": true\n    },\n    {\n      \"id\": \"eval-npm-release-worktree\",\n      \"kind\": \"eval\",\n      \"path\": \"evals/tasks/npm-release-worktree.jsonl\",\n      \"sha256\": \"3710cc36bcfbb96ee9d76abe997cc56d16e69b997247b2dc9ce566e7326d9cd9\",\n      \"approved\": true\n    }\n  ],\n  \"agents\": {\n    \"portableInstructionFile\": \"AGENTS.md\",\n    \"adapters\": [\n      {\n        \"id\": \"portable\",\n        \"capabilities\": [\n          \"root-instructions\",\n          \"scoped-instructions\",\n          \"structured-output\"\n        ]\n      },\n      {\n        \"id\": \"claude-code\",\n        \"capabilities\": [\n          \"root-instructions\",\n          \"scoped-instructions\",\n          \"instruction-imports\",\n          \"session-hooks\",\n          \"mcp\"\n        ]\n      },\n      {\n        \"id\": \"codex\",\n        \"capabilities\": [\n          \"root-instructions\",\n          \"scoped-instructions\",\n          \"mcp\",\n          \"structured-output\"\n        ]\n      }\n    ]\n  },\n  \"policies\": [\n    {\n      \"id\": \"single-implementation-owner\",\n      \"title\": \"Single implementation owner\",\n      \"statement\": \"Before implementation, search for an existing implementation and record the owning module; do not create a parallel implementation of the same capability.\",\n      \"rationale\": \"Parallel AI sessions otherwise duplicate the same capability and split maintenance ownership.\",\n      \"scope\": {\n        \"include\": [\n          \"**/*\"\n        ],\n        \"exclude\": [\n          \".harness/**\",\n          \"**/generated/**\"\n        ],\n        \"boundaries\": [\n          \"code\"\n        ]\n      },\n      \"formalization\": \"procedural\",\n      \"severity\": \"error\",\n      \"targets\": [\n        {\n          \"kind\": \"agent-instruction\",\n          \"adapter\": \"portable\",\n          \"configPath\": \"AGENTS.md\"\n        }\n      ],\n      \"verification\": {\n        \"commands\": [\n          [\n            \"harness-automation\",\n            \"context\",\n            \"--project\",\n            \".\"\n          ]\n        ],\n        \"passCriteria\": \"The session receipt records policy digest and implementation ownership review.\"\n      },\n      \"owner\": \"zhichao\",\n      \"sourceRefs\": [\n        \"prd\",\n        \"design-harness-automation-design-v2-0-backup\",\n        \"design-harness-automation-design\",\n        \"design-harness-design-comparison\",\n        \"design-harness-skill-v2\",\n        \"design-project-governance-upgrade\",\n        \"design-result-01-branch-worktree-collaboration-target\",\n        \"design-result-02-harness-v3-scenario-feature-inventory\",\n        \"design-result-03-harness-v3-feature-contract\",\n        \"design-result-04-harness-v3-requirements\",\n        \"design-typescript-naming-adoption-baseline\",\n        \"design-worktree-delivery\",\n        \"research-github-wheels-2026-08-31\",\n        \"research-github-wheels-2026-08-31-2\",\n        \"research-npm-release-worktree\",\n        \"research-project-governance-upgrade-current-state\",\n        \"eval-npm-release-worktree-pre-implementation\",\n        \"eval-evals\",\n        \"eval-known-bad-npm-release-policy\",\n        \"eval-run-npm-release-policy\",\n        \"eval-npm-release-worktree\"\n      ],\n      \"status\": \"active\",\n      \"changeControl\": {\n        \"approvalRequired\": true,\n        \"migrationRequired\": false\n      }\n    },\n    {\n      \"id\": \"contract-first-change\",\n      \"title\": \"Contract-first interface changes\",\n      \"statement\": \"Change shared API, RPC, schema, database, or queue contracts before changing consumers; update compatibility tests in the same change.\",\n      \"rationale\": \"A stable source of truth prevents different sessions from implementing different interface assumptions.\",\n      \"scope\": {\n        \"include\": [\n          \"**/*\"\n        ],\n        \"exclude\": [\n          \".harness/**\"\n        ],\n        \"boundaries\": [\n          \"api\",\n          \"rpc\",\n          \"database\",\n          \"queue\"\n        ]\n      },\n      \"formalization\": \"cognitive\",\n      \"severity\": \"error\",\n      \"targets\": [\n        {\n          \"kind\": \"agent-instruction\",\n          \"adapter\": \"portable\",\n          \"configPath\": \".harness/generated/effective-policy.md\"\n        }\n      ],\n      \"verification\": {\n        \"commands\": [],\n        \"passCriteria\": \"Review confirms that contract sources and consumers changed together.\"\n      },\n      \"owner\": \"zhichao\",\n      \"sourceRefs\": [\n        \"prd\",\n        \"design-harness-automation-design-v2-0-backup\",\n        \"design-harness-automation-design\",\n        \"design-harness-design-comparison\",\n        \"design-harness-skill-v2\",\n        \"design-project-governance-upgrade\",\n        \"design-result-01-branch-worktree-collaboration-target\",\n        \"design-result-02-harness-v3-scenario-feature-inventory\",\n        \"design-result-03-harness-v3-feature-contract\",\n        \"design-result-04-harness-v3-requirements\",\n        \"design-typescript-naming-adoption-baseline\",\n        \"design-worktree-delivery\",\n        \"research-github-wheels-2026-08-31\",\n        \"research-github-wheels-2026-08-31-2\",\n        \"research-npm-release-worktree\",\n        \"research-project-governance-upgrade-current-state\",\n        \"eval-npm-release-worktree-pre-implementation\",\n        \"eval-evals\",\n        \"eval-known-bad-npm-release-policy\",\n        \"eval-run-npm-release-policy\",\n        \"eval-npm-release-worktree\"\n      ],\n      \"status\": \"active\",\n      \"changeControl\": {\n        \"approvalRequired\": true,\n        \"migrationRequired\": false\n      }\n    },\n    {\n      \"id\": \"generated-files-immutable\",\n      \"title\": \"Generated files are immutable\",\n      \"statement\": \"Never edit generated code or Harness compiler outputs directly; change their source and regenerate them.\",\n      \"rationale\": \"Direct edits are overwritten and create cross-session drift.\",\n      \"scope\": {\n        \"include\": [\n          \"**/generated/**\",\n          \".harness/generated/**\"\n        ],\n        \"exclude\": [],\n        \"boundaries\": [\n          \"generated-code\"\n        ]\n      },\n      \"formalization\": \"procedural\",\n      \"severity\": \"error\",\n      \"targets\": [\n        {\n          \"kind\": \"agent-instruction\",\n          \"adapter\": \"portable\",\n          \"configPath\": \"AGENTS.md\"\n        }\n      ],\n      \"verification\": {\n        \"commands\": [\n          [\n            \"harness-automation\",\n            \"drift\",\n            \"--project\",\n            \".\"\n          ]\n        ],\n        \"passCriteria\": \"Generated output hashes match the Harness manifest.\"\n      },\n      \"owner\": \"zhichao\",\n      \"sourceRefs\": [\n        \"prd\",\n        \"design-harness-automation-design-v2-0-backup\",\n        \"design-harness-automation-design\",\n        \"design-harness-design-comparison\",\n        \"design-harness-skill-v2\",\n        \"design-project-governance-upgrade\",\n        \"design-result-01-branch-worktree-collaboration-target\",\n        \"design-result-02-harness-v3-scenario-feature-inventory\",\n        \"design-result-03-harness-v3-feature-contract\",\n        \"design-result-04-harness-v3-requirements\",\n        \"design-typescript-naming-adoption-baseline\",\n        \"design-worktree-delivery\",\n        \"research-github-wheels-2026-08-31\",\n        \"research-github-wheels-2026-08-31-2\",\n        \"research-npm-release-worktree\",\n        \"research-project-governance-upgrade-current-state\",\n        \"eval-npm-release-worktree-pre-implementation\",\n        \"eval-evals\",\n        \"eval-known-bad-npm-release-policy\",\n        \"eval-run-npm-release-policy\",\n        \"eval-npm-release-worktree\"\n      ],\n      \"status\": \"active\",\n      \"changeControl\": {\n        \"approvalRequired\": true,\n        \"migrationRequired\": false\n      }\n    },\n    {\n      \"id\": \"typescript-naming\",\n      \"title\": \"TypeScript naming\",\n      \"statement\": \"Use camelCase for variables, functions, parameters, methods, and local properties; PascalCase for classes, interfaces, types, enums, React components, and exported Zod schemas; UPPER_SNAKE_CASE is allowed for module constants, imported constants, and static readonly class constants. Node __dirname/__filename and the exact unused-parameter placeholder _ are allowed.\",\n      \"rationale\": \"A deterministic naming gate prevents fresh sessions from alternating between camelCase and snake_case.\",\n      \"scope\": {\n        \"include\": [\n          \"**/*.ts\",\n          \"**/*.tsx\"\n        ],\n        \"exclude\": [\n          \"**/*.d.ts\",\n          \"**/generated/**\",\n          \".harness/**\"\n        ],\n        \"boundaries\": [\n          \"code\"\n        ]\n      },\n      \"formalization\": \"deterministic\",\n      \"severity\": \"error\",\n      \"targets\": [\n        {\n          \"kind\": \"linter\",\n          \"adapter\": \"harness-typescript-ast\"\n        }\n      ],\n      \"verification\": {\n        \"commands\": [\n          [\n            \"harness-automation\",\n            \"check\",\n            \"--project\",\n            \".\"\n          ]\n        ],\n        \"passCriteria\": \"The AST naming verifier passes its invalid fixture and the repository contains no unapproved violations.\"\n      },\n      \"examples\": {\n        \"valid\": [\n          \"const userId = 1\",\n          \"class UserService {}\"\n        ],\n        \"invalid\": [\n          \"const user_id = 1\",\n          \"class user_service {}\"\n        ]\n      },\n      \"owner\": \"zhichao\",\n      \"sourceRefs\": [\n        \"prd\",\n        \"design-harness-automation-design-v2-0-backup\",\n        \"design-harness-automation-design\",\n        \"design-harness-design-comparison\",\n        \"design-harness-skill-v2\",\n        \"design-project-governance-upgrade\",\n        \"design-result-01-branch-worktree-collaboration-target\",\n        \"design-result-02-harness-v3-scenario-feature-inventory\",\n        \"design-result-03-harness-v3-feature-contract\",\n        \"design-result-04-harness-v3-requirements\",\n        \"design-typescript-naming-adoption-baseline\",\n        \"design-worktree-delivery\",\n        \"research-github-wheels-2026-08-31\",\n        \"research-github-wheels-2026-08-31-2\",\n        \"research-npm-release-worktree\",\n        \"research-project-governance-upgrade-current-state\",\n        \"eval-npm-release-worktree-pre-implementation\",\n        \"eval-evals\",\n        \"eval-known-bad-npm-release-policy\",\n        \"eval-run-npm-release-policy\",\n        \"eval-npm-release-worktree\"\n      ],\n      \"status\": \"active\",\n      \"changeControl\": {\n        \"approvalRequired\": true,\n        \"migrationRequired\": true\n      }\n    }\n  ],\n  \"typescriptNamingBaseline\": {\n    \"ruleId\": \"typescript-naming\",\n    \"approvedIntakeHash\": \"c23dfce099a252b3c926890b446be90e5e7bb900c9bd709fd2d5833a0e12e8ae\",\n    \"fingerprints\": [\n      \"5f7d5836abc203bf0bc8e469dafa452611d1b2f22af030dc7c41f1cd6070244c\",\n      \"c63722c4fe9610ffa13ca9c13e6b0a212bf9fb980cba84077842f1832d549705\",\n      \"d1da6976a067caecbdd7d4085f4fa5e401ae929da2ad3537a0a4e29624f7196e\",\n      \"d48c569c7513dfd05795414f874862161e782994288f356351ba940e1d66fe52\"\n    ]\n  }\n}\n",
+      "managed": true
+    },
+    {
+      "id": "write-harness-generated-effective-policy-md",
+      "kind": "write",
+      "path": ".harness/generated/effective-policy.md",
+      "beforeHash": "b9c1a0f6dcdbf8a83ee44369b7925641b3f74fe6b0ac81745d804e3da3905dc5",
+      "afterHash": "d34ad06b16406c162876c46074bb90d289dd32bb1cd4ca9b55f3094329e41782",
+      "content": "# Effective Engineering Policy\n\nPolicy digest: `f5a3a4f48787f70b91303435abaa940feaff899e1f1faa21c4697ef467366170`\nOwner: zhichao\nStack: typescript\n\nThis file is generated. Change `.harness/policy.yaml`, obtain owner approval, and recompile instead of editing this file.\n\n## Stack adapter coverage\n\n- `typescript`: built-in deterministic support.\n\n## 1. Single implementation owner (single-implementation-owner)\n\nBefore implementation, search for an existing implementation and record the owning module; do not create a parallel implementation of the same capability.\n\n- Severity: error\n- Formalization: procedural\n- Verify with: `harness-automation context --project .`\n## 2. Contract-first interface changes (contract-first-change)\n\nChange shared API, RPC, schema, database, or queue contracts before changing consumers; update compatibility tests in the same change.\n\n- Severity: error\n- Formalization: cognitive\n- Verify with: owner review\n## 3. Generated files are immutable (generated-files-immutable)\n\nNever edit generated code or Harness compiler outputs directly; change their source and regenerate them.\n\n- Severity: error\n- Formalization: procedural\n- Verify with: `harness-automation drift --project .`\n## 4. TypeScript naming (typescript-naming)\n\nUse camelCase for variables, functions, parameters, methods, and local properties; PascalCase for classes, interfaces, types, enums, React components, and exported Zod schemas; UPPER_SNAKE_CASE is allowed for module constants, imported constants, and static readonly class constants. Node __dirname/__filename and the exact unused-parameter placeholder _ are allowed.\n\n- Severity: error\n- Formalization: deterministic\n- Verify with: `harness-automation check --project .`\n",
+      "managed": true
+    },
+    {
+      "id": "write-agents-md",
+      "kind": "write",
+      "path": "AGENTS.md",
+      "beforeHash": "9fea37fa144227ce0a34ec6ad4111010341d4807230ffe7b4e5a6d0dd96cdc3f",
+      "afterHash": "7a9565ba2699d4f6f5e99a59f5d8bfd225719d57dbe8fb5741c69525656127a5",
+      "content": "## 单人维护与主线基准\n\n- 本仓库由本人单人维护。本地管理检出的 `main` 是核心工作成果和默认集成基线；`origin/main` 用于同步，不因位于远端而具有更高优先级。\n- 新开发分支或 worktree 默认基于当前本地 `main`。不得仅因本地领先远端，就从 `origin/main` 重建基线、重置本地主线，或通过重新挑选提交替代已有完整成果。\n- 保护本地独有提交及未提交内容；未提交内容不会自动进入新 worktree，接续相关工作前须核对其归属。\n- 已授权的交付按“验证并合入本地 `main` → 普通推送同步远端 → 确认远端包含交付提交后清理”推进。\n- 若远端出现本地没有的提交，先检查来源和差异；不得自动丢弃任一侧成果或强推覆盖，无法稳妥整合时交由本人决定。\n\n<!-- harness-automation:v2:start -->\n## Harness engineering continuity\n\nEffective policy digest: `f5a3a4f48787f70b91303435abaa940feaff899e1f1faa21c4697ef467366170`\n\nBefore editing code in a new session:\n\n1. Run `harness-automation context --project .` and read `.harness/generated/effective-policy.md`.\n2. Search for the existing implementation and identify the owning module before adding a new one.\n3. Treat shared APIs, RPC, database schemas, queues, and generated code as contracts.\n4. Run `harness-automation check --project .` before declaring work complete.\n5. Never edit `.harness/generated/**` or this managed block directly.\n\n<!-- harness-automation:v2:end -->\n",
+      "managed": true
+    },
+    {
+      "id": "write-claude-md",
+      "kind": "write",
+      "path": "CLAUDE.md",
+      "beforeHash": "9fea37fa144227ce0a34ec6ad4111010341d4807230ffe7b4e5a6d0dd96cdc3f",
+      "afterHash": "7a9565ba2699d4f6f5e99a59f5d8bfd225719d57dbe8fb5741c69525656127a5",
+      "content": "## 单人维护与主线基准\n\n- 本仓库由本人单人维护。本地管理检出的 `main` 是核心工作成果和默认集成基线；`origin/main` 用于同步，不因位于远端而具有更高优先级。\n- 新开发分支或 worktree 默认基于当前本地 `main`。不得仅因本地领先远端，就从 `origin/main` 重建基线、重置本地主线，或通过重新挑选提交替代已有完整成果。\n- 保护本地独有提交及未提交内容；未提交内容不会自动进入新 worktree，接续相关工作前须核对其归属。\n- 已授权的交付按“验证并合入本地 `main` → 普通推送同步远端 → 确认远端包含交付提交后清理”推进。\n- 若远端出现本地没有的提交，先检查来源和差异；不得自动丢弃任一侧成果或强推覆盖，无法稳妥整合时交由本人决定。\n\n<!-- harness-automation:v2:start -->\n## Harness engineering continuity\n\nEffective policy digest: `f5a3a4f48787f70b91303435abaa940feaff899e1f1faa21c4697ef467366170`\n\nBefore editing code in a new session:\n\n1. Run `harness-automation context --project .` and read `.harness/generated/effective-policy.md`.\n2. Search for the existing implementation and identify the owning module before adding a new one.\n3. Treat shared APIs, RPC, database schemas, queues, and generated code as contracts.\n4. Run `harness-automation check --project .` before declaring work complete.\n5. Never edit `.harness/generated/**` or this managed block directly.\n\n<!-- harness-automation:v2:end -->\n",
+      "managed": true
+    },
+    {
+      "id": "write-harness-gitignore",
+      "kind": "write",
+      "path": ".harness/.gitignore",
+      "beforeHash": "848edfa49c00887f16ed7d92410f639701dd0f5685d4051057c52e1d28b1db73",
+      "afterHash": "848edfa49c00887f16ed7d92410f639701dd0f5685d4051057c52e1d28b1db73",
+      "content": "sessions/*\n!sessions/.gitkeep\neval-runs/*\n",
+      "managed": true
+    },
+    {
+      "id": "write-harness-manifest-json",
+      "kind": "write",
+      "path": ".harness/manifest.json",
+      "beforeHash": "10294276ef854ab5ebb29279abfcfe0b0616a93c5593bb8fef15983bd2b3b122",
+      "afterHash": "697e06cf7dcd66090cd6410962b3a071a7213326450e02d47158ef13967f53e5",
+      "content": "{\n  \"schemaVersion\": \"2.0\",\n  \"compiler\": {\n    \"package\": \"@realpkuasule/harness-automation\",\n    \"version\": \"2.8.19\"\n  },\n  \"policyDigest\": \"f5a3a4f48787f70b91303435abaa940feaff899e1f1faa21c4697ef467366170\",\n  \"intakeHash\": \"ad24c5880d43f1753459a2640e069b66c7002f4b0c196dbb8e824b81ff89baf1\",\n  \"discoveryHash\": \"ba91787449dc544fbd8c6390fba9f991c888d1b6d0e7082d9090e0fe70bb4b0b\",\n  \"outputs\": [\n    {\n      \"path\": \".harness/policy.yaml\",\n      \"sha256\": \"1c65e122ea37e4b6c9fe6c1ae46955a1ace74c81dd31343d33f79407a9bf6fae\"\n    },\n    {\n      \"path\": \".harness/generated/effective-policy.md\",\n      \"sha256\": \"d34ad06b16406c162876c46074bb90d289dd32bb1cd4ca9b55f3094329e41782\"\n    },\n    {\n      \"path\": \"AGENTS.md\",\n      \"sha256\": \"7a9565ba2699d4f6f5e99a59f5d8bfd225719d57dbe8fb5741c69525656127a5\"\n    },\n    {\n      \"path\": \"CLAUDE.md\",\n      \"sha256\": \"7a9565ba2699d4f6f5e99a59f5d8bfd225719d57dbe8fb5741c69525656127a5\"\n    },\n    {\n      \"path\": \".harness/.gitignore\",\n      \"sha256\": \"848edfa49c00887f16ed7d92410f639701dd0f5685d4051057c52e1d28b1db73\"\n    }\n  ]\n}\n",
+      "managed": true
+    }
+  ],
+  "commands": [
+    [
+      "harness-automation",
+      "context",
+      "--project",
+      "."
+    ],
+    [
+      "harness-automation",
+      "drift",
+      "--project",
+      "."
+    ],
+    [
+      "harness-automation",
+      "check",
+      "--project",
+      "."
+    ],
+    [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "build"
+    ],
+    [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "lint"
+    ],
+    [
+      "npm",
+      "--prefix",
+      "mcp-server",
+      "run",
+      "test:ci"
+    ],
+    [
+      "node",
+      "evals/run_npm_release_policy.mjs"
+    ],
+    [
+      "node",
+      "evals/run_npm_release_policy.mjs",
+      "evals/fixtures/known-bad-npm-release-policy.md"
+    ]
+  ],
+  "warnings": [
+    "No preset stack profile matched exactly; owner-approved custom stacks are required.",
+    "contract-first-change: guidance requires owner/reviewer judgment"
+  ],
+  "planHash": "ace374025507c3364ce662f080824c1349259a5d0f3d384f5fd5cd08d8abd47e"
+}

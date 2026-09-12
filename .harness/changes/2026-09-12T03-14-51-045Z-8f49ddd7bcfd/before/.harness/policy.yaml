@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "compiler": {
     "package": "@realpkuasule/harness-automation",
-    "version": "2.8.19"
+    "version": "2.8.11"
   },
   "evaluations": {
     "schemaVersion": "1.2",

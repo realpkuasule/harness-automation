@@ -2,27 +2,27 @@
   "schemaVersion": "2.0",
   "compiler": {
     "package": "@realpkuasule/harness-automation",
-    "version": "2.8.19"
+    "version": "2.8.11"
   },
-  "policyDigest": "10ddb928aa12b352f3666bf2298bb9b9f0f21db9c709ccf42a6b5945385d1111",
+  "policyDigest": "b3f6dd79d12f08a28a8c44fd0a9c6731e44cc0d369f2287f2493a9f5079a7f23",
   "intakeHash": "ad24c5880d43f1753459a2640e069b66c7002f4b0c196dbb8e824b81ff89baf1",
   "discoveryHash": "ba91787449dc544fbd8c6390fba9f991c888d1b6d0e7082d9090e0fe70bb4b0b",
   "outputs": [
     {
       "path": ".harness/policy.yaml",
-      "sha256": "c9a1d844dc36a7d3a08635b2ff3c0dc81e1fe6674957fcc2496cf1724a07896e"
+      "sha256": "29c84d5d94db6f65f00574b0f6a21875013265e3c640ae87dbece1991e72cf3a"
     },
     {
       "path": ".harness/generated/effective-policy.md",
-      "sha256": "c1d4371874b611704589314d3e6c94f293856eca16f0640e5418b1c823632ead"
+      "sha256": "b9c1a0f6dcdbf8a83ee44369b7925641b3f74fe6b0ac81745d804e3da3905dc5"
     },
     {
       "path": "AGENTS.md",
-      "sha256": "aa524beca5983b950619363b0b0567e215e8b3aa9065ecc8b3724f8f51b56504"
+      "sha256": "c24ba6bc602d2354eedbf36dbc8653adf750819f682e79875e8ee03cef7d73ca"
     },
     {
       "path": "CLAUDE.md",
-      "sha256": "aa524beca5983b950619363b0b0567e215e8b3aa9065ecc8b3724f8f51b56504"
+      "sha256": "36ab2e1cbd532bbbc741ac85f34f1860484a079d5a517ff1a59aa5bb1dd553bf"
     },
     {
       "path": ".harness/.gitignore",
