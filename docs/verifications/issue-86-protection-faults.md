@@ -22,6 +22,15 @@ passing JSON report with a nonzero exit or a timed-out mutant is not accepted.
 Only `correctly-caught` is acceptance evidence; a timeout, dependency error,
 skipped test, or a different failed test is not a caught protection.
 
+An assertion location is anchored to the assertion's own source text rather than
+to a line number, and the runner resolves it to lines before any sandbox is built.
+Any line carrying the anchor is an acceptable proof, because the run executes one
+named test by name, so the stack line can only come from that test. An anchor that
+matches nothing stops the run as `PROTECTION_FAULT_ANCHOR_STALE`, and one that
+matches more than eight lines stops it as `PROTECTION_FAULT_ANCHOR_AMBIGUOUS`;
+neither can silently pass. This replaced pinned line numbers, which every edit
+above an assertion invalidated.
+
 | Requirement IDs | Protection / fault IDs | Target test evidence |
 |---|---|---|
 | D-01, D-02 | actor identity and stale owner (`identity-owner`, `stale-owner`); expiry, revocation, closed writes and write budget (`expired-write`, `revoked-write`, `writes-closed`, `write-budget`); one-shot send and copied private handle (`one-shot`, `copied-private-handle`) | named authority, lease, human-approval, publication tests fail at the declared assertion location |
@@ -43,4 +52,4 @@ the plan` test; promoting it to a fault model needs either a runner that preserv
 or a host where `/tmp` is not a symlink.
 
 The structured report, rather than this table, is the source of case-level evidence: it records the exact source SHA,
-patch hash, setup and test argv, sanitized execution environment, test ID, assertion location, and output hashes.
+patch hash, setup and test argv, sanitized execution environment, test ID, the resolved assertion locations, and output hashes.
