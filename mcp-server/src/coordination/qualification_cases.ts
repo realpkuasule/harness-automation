@@ -16,7 +16,44 @@ const assertions = {
   "dg01-human-budget": ["first-bounded-write-not-production", "wrong-purpose", "wrong-ref", "wrong-actor", "wrong-repository", "wrong-endpoint", "wrong-hash", "expiry", "budget-exhaustion", "concurrent-quota", "unknown-recovery-no-replay-count", "retry-charged", "adopted-config-outlives-apply-ticket"],
 } satisfies Record<QualificationManifest["requiredCases"][number], string[]>;
 
-export function requiredQualificationCases(ids: QualificationManifest["requiredCases"]) {
-  return ids.map((id) => ({ id, status: "not-run" as "not-run" | "incomplete",
-    subassertions: assertions[id].map((name) => ({ id: name, status: "not-run" as "not-run" | "passed", evidenceHash: null as string | null })) }));
+export type QualificationSubassertionStatus = "not-run" | "passed" | "failed";
+export type QualificationCaseStatus = "not-run" | "incomplete" | "passed" | "failed";
+export interface QualificationSubassertion { id: string; status: QualificationSubassertionStatus; evidenceHash: string | null }
+export interface QualificationCase {
+  id: QualificationManifest["requiredCases"][number];
+  status: QualificationCaseStatus;
+  subassertions: QualificationSubassertion[];
+}
+
+/**
+ * The aggregate follows the recorded assertions only. A failure dominates, because a group
+ * that provably failed must not read as merely incomplete; a pass requires every assertion.
+ */
+export function qualificationGroupStatus(subassertions: Array<{ status: QualificationSubassertionStatus }>): QualificationCaseStatus {
+  if (subassertions.some((assertion) => assertion.status === "failed")) return "failed";
+  if (subassertions.length > 0 && subassertions.every((assertion) => assertion.status === "passed")) return "passed";
+  return subassertions.some((assertion) => assertion.status === "passed") ? "incomplete" : "not-run";
+}
+
+/**
+ * Record one result. A failure is sticky: once an assertion failed, a later pass cannot
+ * overwrite it and its original evidence stays attached, so a run cannot green a group by
+ * covering it again. Unknown ids are errors rather than silently dropped results.
+ */
+export function recordQualificationSubassertion(cases: QualificationCase[], groupId: string,
+  assertionId: string, status: "passed" | "failed", evidenceHash: string): void {
+  const group = cases.find((item) => item.id === groupId);
+  const assertion = group?.subassertions.find((item) => item.id === assertionId);
+  if (!group || !assertion) throw new Error(`QUALIFICATION_CASE_UNKNOWN: ${groupId}/${assertionId}`);
+  if (assertion.status !== "failed") { assertion.status = status; assertion.evidenceHash = evidenceHash; }
+  group.status = qualificationGroupStatus(group.subassertions);
+}
+
+export function requiredQualificationCases(ids: QualificationManifest["requiredCases"]): QualificationCase[] {
+  return ids.map((id) => ({
+    id, status: "not-run" as QualificationCaseStatus,
+    subassertions: assertions[id].map((name) => ({
+      id: name, status: "not-run" as QualificationSubassertionStatus, evidenceHash: null as string | null,
+    })),
+  }));
 }

@@ -9,7 +9,7 @@ import { coordinationPushOutcome } from "./push_result.js";
 import { collectSettledEvidence, readSettledQualification, type SettledQualification } from "./qualification.js";
 import { loadCoordinationConfig } from "./service.js";
 import { GitHubCoordinationTransport } from "./transport.js";
-import { requiredQualificationCases } from "./qualification_cases.js";
+import { recordQualificationSubassertion, requiredQualificationCases } from "./qualification_cases.js";
 import { sameShaClientFacts } from "./same_sha.js";
 
 type Winner = { clientId: string; approvalRef: string; candidateId: string; attemptId: string; transactionId: string };
@@ -107,7 +107,7 @@ export function observedQualificationCases(handle: QualificationRemoteEvidence) 
   for (const group of cases) for (const assertion of group.subassertions) {
     if (group.id === "dg01-cas" && ["same-sha-update", "same-sha-noop-rejected", "same-sha-unique-winner"].includes(assertion.id) ||
         group.id === "dg01-recovery" && assertion.id === "rejected-restart-not-upgraded") {
-      assertion.status = "passed"; assertion.evidenceHash = evidenceHash; group.status = "incomplete";
+      recordQualificationSubassertion(cases, group.id, assertion.id, "passed", evidenceHash);
     }
   }
   return cases;
