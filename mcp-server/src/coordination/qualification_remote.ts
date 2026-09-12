@@ -9,7 +9,7 @@ import { coordinationPushOutcome } from "./push_result.js";
 import { collectSettledEvidence, readSettledQualification, type SettledQualification } from "./qualification.js";
 import { loadCoordinationConfig } from "./service.js";
 import { GitHubCoordinationTransport } from "./transport.js";
-import { recordQualificationSubassertion, requiredQualificationCases } from "./qualification_cases.js";
+import { recordQualificationSubassertion, requiredQualificationCases, type QualificationCase } from "./qualification_cases.js";
 import { sameShaClientFacts } from "./same_sha.js";
 
 type Winner = { clientId: string; approvalRef: string; candidateId: string; attemptId: string; transactionId: string };
@@ -85,9 +85,37 @@ export function readQualificationRemote(handle: QualificationRemoteEvidence) {
       clients: facts.evidence.map((item) => { const value = readVerifiedClientEvidence(item); return { clientId: value.clientId, heads: value.heads }; }) }) };
 }
 
+/**
+ * Bounded cleanup authority: only an aborted run with a proven drain may delete, and only the
+ * refs that run actually published. This reads the settlement, the publications the completed
+ * steps produced, and the native remote state after cleanup. It reports `failed` only on a
+ * positive violation; facts that merely do not add up leave the assertion not-run, because a
+ * subset can never grant coverage.
+ */
+function observedBoundedCleanup(cases: QualificationCase[], facts: ReturnType<typeof readQualificationRemote>): void {
+  const execution = facts.manifest.execution;
+  if (execution?.kind !== "local-synthetic-publication/1" || !execution.resourceStep) return;
+  const proof = readSettledQualification(facts.settled);
+  const completed = new Set(proof.steps.map((step) => step.stepId));
+  const publishedRefs = execution.steps.map((step) => facts.manifest.synthetic.publications
+    .find((item) => item.fixtureId === step.fixtureId && item.transactionId === step.transactionId)?.ref).filter((ref): ref is string => Boolean(ref));
+  const drained = proof.instances.length > 0 &&
+    proof.instances.every((instance) => instance.executionStatus === "aborted" && instance.finalMembers.length === 0);
+  const aborted = proof.executionStatus === "aborted" && Boolean(proof.executionError) && drained &&
+    publishedRefs.length === execution.steps.length && execution.steps.every((step) => completed.has(step.stepId)) &&
+    !completed.has(execution.resourceStep.stepId);
+  if (!aborted) return;
+  const evidenceHash = hashObject({ executionError: proof.executionError, steps: proof.steps, publishedRefs,
+    instances: proof.instances.map((instance) => ({ role: instance.launch.role, status: instance.executionStatus })), observations: facts.observations });
+  const survivors = facts.observations.filter((item) => publishedRefs.includes(item.ref) && item.head !== null);
+  recordQualificationSubassertion(cases, "dg01-acquire-contention", "bounded-cleanup-authority",
+    survivors.length > 0 ? "failed" : "passed", evidenceHash);
+}
+
 /** Partial case evidence requires actual native settlement, original receipts and current approved remote history. */
 export function observedQualificationCases(handle: QualificationRemoteEvidence) {
   const facts = readQualificationRemote(handle); const cases = requiredQualificationCases(facts.manifest.requiredCases);
+  observedBoundedCleanup(cases, facts);
   if (facts.manifest.execution?.kind !== "local-same-sha-publication/1") return cases;
   const proof = readSettledQualification(facts.settled); const negative = facts.manifest.sameShaPublicationNegativeControl!;
   if (proof.executionStatus !== "completed") return cases;

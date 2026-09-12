@@ -49,15 +49,19 @@ async function runPlan(plan: QualificationCliPlan) {
     const code = error instanceof Error ? error.message : "QUALIFICATION_EXECUTION_FAILED";
     const failure = error instanceof Error ? error.cause as { qualificationProgress?: unknown; abortedSettlement?: SettledQualification } | undefined : undefined;
     if (execution === null) execution = failure?.qualificationProgress ?? null;
-    let cleanupError: string | null = null;
+    let cleanupError: string | null = null; let caseError: string | null = null;
     if (failure?.abortedSettlement) {
       try {
         // Same original scope, native facts and one-shot cleaner; never retry the failed operation or cleanup.
         for (const ref of plan.manifest.refs) cleanup.push(await applyQualificationCleanup(planQualificationCleanup(observeQualificationRemote(failure.abortedSettlement), ref)));
       } catch (failure) { cleanupError = failure instanceof Error ? failure.message : "QUALIFICATION_CLEANUP_FAILED"; }
+      // Read the case inventory from native facts only after cleanup, and never let a mapping
+      // problem change the run's verdict: record it instead of throwing or hiding it.
+      try { requiredCases = observedQualificationCases(observeQualificationRemote(failure.abortedSettlement)); }
+      catch (mappingFailure) { caseError = mappingFailure instanceof Error ? mappingFailure.message : "QUALIFICATION_CASE_MAPPING_FAILED"; }
     }
     const report = { executionStatus: "failed", qualificationStatus: "incomplete", qualified: false, planHash: plan.planHash,
-      error: code, execution, cleanup, cleanupError, recovery, requiredCases };
+      error: code, execution, cleanup, cleanupError, caseError, recovery, requiredCases };
     try { durableWriteOnce(reportPath, canonicalJson(report), 0o600); }
     catch (recordError) { throw new AggregateError([error, recordError], "QUALIFICATION_EXECUTION_AND_REPORT_FAILED"); }
     return { exitCode: code.startsWith("ENVIRONMENT_BLOCKED:") ? 3 : 1, value: { ...report, reportPath } };

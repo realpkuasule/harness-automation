@@ -506,9 +506,16 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
       { status: "deleted", ref: p.controlRef }, { status: "deleted", ref: p.sourceRefs.a }, { status: "deleted", ref: p.sourceRefs.b }] });
     expect(git(p.f.root, "--git-dir=" + p.native.remote, "for-each-ref", "--format=%(refname)")).toBe("");
     expect(report.error).toBe("QUALIFICATION_RESOURCE_ADD_FAILED");                        // cleanup never turns the failure into a pass
+    // The aborted profile now maps bounded-cleanup-authority from these native facts, and only that one.
+    expect(report.caseError).toBeNull();
     expect(report.requiredCases.map((group: { id: string }) => group.id)).toEqual(["dg01-acquire-contention"]);
-    expect(report.requiredCases.every((group: { status: string; subassertions: Array<{ status: string; evidenceHash: null }> }) =>
-      group.status === "not-run" && group.subassertions.every((assertion) => assertion.status === "not-run" && assertion.evidenceHash === null))).toBe(true);
+    const [cases] = report.requiredCases;
+    expect(cases.status).toBe("incomplete");
+    expect(cases.subassertions.filter((assertion: { status: string }) => assertion.status !== "not-run")
+      .map((assertion: { id: string }) => assertion.id)).toEqual(["bounded-cleanup-authority"]);
+    const bounded = cases.subassertions.find((assertion: { id: string }) => assertion.id === "bounded-cleanup-authority");
+    expect(bounded.status).toBe("passed");
+    expect(bounded.evidenceHash).toMatch(/^[a-f0-9]{64}$/u);
   }, 180_000);
 
   it.each([false, true])("supervises fixed native publications and exact cleanup without claiming the full DG case (cross-client=%s)", async (crossClient) => {

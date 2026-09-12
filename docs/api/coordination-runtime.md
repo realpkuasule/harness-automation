@@ -88,8 +88,16 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
   then starts a fresh read-only process and checks unchanged original chain heads.
   `qualification_remote.observedQualificationCases` combines actual settlement,
   receipt facts and current approved remote history for four partial assertions.
-  `qualification_cases.ts` retains the full fixed per-group assertion inventory;
-  neither a manifest nor a passed subset can delete missing coverage or grant
+  An aborted run with a declared resource phase additionally maps
+  `dg01-acquire-contention/bounded-cleanup-authority`: it requires a proven drain, every
+  publication step completed, the resource step not completed, and every publication ref
+  gone from the remote afterwards. It reports `passed` only on those native facts, `failed`
+  when a publication ref survived cleanup, and leaves the assertion not-run when the facts
+  merely do not add up. A mapping failure is recorded as `caseError` in the failure report
+  rather than changing the run's verdict.
+  `qualification_cases.ts` retains the full fixed per-group assertion inventory, and
+  `recordQualificationSubassertion` refuses unknown ids and never overwrites a recorded
+  failure; neither a manifest nor a passed subset can delete missing coverage or grant
   production authority.
 - Qualification `localResources` bind exact source fixtures, new paths/branches,
   authority/common-dir, local policy hashes, finite windows and capacity. The
