@@ -842,6 +842,27 @@ interface ProjectPlanArgs {
   now?: Date;
 }
 
+/**
+ * A plan compiles only what its arguments name. On an already-applied project the
+ * orthogonal profiles live in the applied policy, so an omitted flag would silently
+ * drop the suites those profiles configure — including the pinned evaluation contract.
+ * Inherit them instead; an explicitly supplied list always wins.
+ */
+function appliedOrthogonalProfiles(root: string): {
+  deliveryProfiles: DeliveryProfile[];
+  domainProfiles: DomainProfile[];
+  qualityProfiles: QualityProfile[];
+} {
+  const policyPath = harnessPath(root, "policy.yaml");
+  if (!existsSync(policyPath)) return { deliveryProfiles: [], domainProfiles: [], qualityProfiles: [] };
+  const project = readJson<{ project?: PolicyDocument["project"] }>(policyPath).project;
+  return {
+    deliveryProfiles: project?.deliveryProfiles ?? [],
+    domainProfiles: project?.domainProfiles ?? [],
+    qualityProfiles: project?.qualityProfiles ?? [],
+  };
+}
+
 function compileProjectPlan(args: ProjectPlanArgs & { writePlan: boolean }): { plan: ChangePlan; path: string; policy: PolicyDocument } {
   const root = resolve(args.projectRoot);
   const intakeFile = harnessPath(root, "intake.json");
@@ -852,7 +873,8 @@ function compileProjectPlan(args: ProjectPlanArgs & { writePlan: boolean }): { p
   const discovery = readJson<Discovery>(discoveryFile);
   const intakeHash = fileHash(intakeFile)!;
   ensureApprovedSources(root, intake);
-  const qualityProfiles = [...new Set(args.qualityProfiles ?? [])];
+  const appliedProfiles = appliedOrthogonalProfiles(root);
+  const qualityProfiles = [...new Set(args.qualityProfiles ?? appliedProfiles.qualityProfiles)];
   if (qualityProfiles.includes("eval-driven-development")) {
     const approvedEvalPaths = new Set(
       intake.sources.filter((source) => source.kind === "eval").map((source) => source.path),
@@ -876,8 +898,8 @@ function compileProjectPlan(args: ProjectPlanArgs & { writePlan: boolean }): { p
     profile: args.profile,
     stacks: args.stacks,
     inheritedStacks: args.inheritedStacks,
-    deliveryProfiles: args.deliveryProfiles,
-    domainProfiles: args.domainProfiles,
+    deliveryProfiles: args.deliveryProfiles ?? appliedProfiles.deliveryProfiles,
+    domainProfiles: args.domainProfiles ?? appliedProfiles.domainProfiles,
     qualityProfiles,
   });
   const currentBaseline = currentTypeScriptNamingBaseline(root);

@@ -540,6 +540,27 @@ printf '%s' '{"items":[{"full_name":"example/wheel","html_url":"https://github.c
 });
 
 describe("v2 plan/apply/check/rollback", () => {
+  it("keeps applied orthogonal profiles when a later plan omits them", () => {
+    const root = temporaryProject();
+    fullTypeScriptProject(root);
+    hardenedEvaluationContract(root);
+    applyCurrentPolicy(root, { projectRoot: root, qualityProfiles: ["eval-driven-development"] });
+    const applied = JSON.parse(readFileSync(join(root, ".harness/policy.yaml"), "utf8")) as {
+      project: { qualityProfiles: string[] };
+      evaluations?: { suites: unknown[] };
+    };
+    expect(applied.project.qualityProfiles).toEqual(["eval-driven-development"]);
+    expect(applied.evaluations?.suites).toHaveLength(1);
+
+    const inherited = planProject({ projectRoot: root });
+    expect(inherited.policy.project.qualityProfiles).toEqual(["eval-driven-development"]);
+    expect(inherited.policy.evaluations?.suites).toHaveLength(1);
+
+    const overridden = planProject({ projectRoot: root, qualityProfiles: [] });
+    expect(overridden.policy.project.qualityProfiles).toEqual([]);
+    expect(overridden.policy.evaluations ?? { suites: [] }).toMatchObject({ suites: [] });
+  });
+
   it("ratchets a rule-bound TypeScript naming baseline through intake and immutable plans", () => {
     const root = temporaryProject();
     fullTypeScriptProject(root);

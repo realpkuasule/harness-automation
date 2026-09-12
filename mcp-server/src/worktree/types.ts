@@ -114,6 +114,13 @@ export interface WorkspaceBranchCleanup {
   localRef: string;
   expectedHead: string;
   branchConfig: Array<{ key: string; value: string }>;
+  /**
+   * True when the branch carried no upstream and the canonical ref was provably absent,
+   * so the remote identity was derived rather than declared. The retention policy can
+   * delete a remote feature ref before the owner closes it, which leaves nothing to
+   * declare; the plan records that it derived the identity instead of guessing it.
+   */
+  derivedFromCanonicalRef: boolean;
   managementBranch: string;
   managementHead: string;
   proof:
@@ -365,6 +372,15 @@ export type WorkspaceOperation =
       expectedLeaseHash: string;
       ignoredPathCount?: number;
       ignoredPathsHash?: string;
+      /**
+       * Ignored path patterns the approving owner declared disposable for this close, plus
+       * the counts and hashes of what they actually matched. Close removes the worktree
+       * directory, so undeclared ignored content still blocks; apply re-partitions with
+       * these exact patterns to prove the disposed set did not change.
+       */
+      disposableIgnoredPaths?: string[];
+      disposedIgnoredPathCount?: number;
+      disposedIgnoredPathsHash?: string;
       branchCleanup?: WorkspaceBranchCleanup;
     }
   | {

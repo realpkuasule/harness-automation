@@ -1683,6 +1683,50 @@ describe("hash-approved worktree lifecycle", () => {
     })).toThrow(/MANAGEMENT_BRANCH_NOT_CURRENT.*remote absent/);
   }, 60_000);
 
+  it("closes when the one-day retention policy already removed the remote ref and the branch never carried an upstream", () => {
+    const root = repositoryWithRemote();
+    const worktreePath = `${root}-retained-away`;
+    repositories.push(worktreePath);
+    configure(root, { managementBranch: "main", remoteBranchDeletion: true });
+    const branch = "issue-85-retained-away";
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#85",
+      branch,
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    writeFileSync(join(worktreePath, "evidence.txt"), "85\n", "utf8");
+    git(worktreePath, "add", "evidence.txt");
+    git(worktreePath, "commit", "-m", "feat: evidence fixture 85");
+    git(worktreePath, "push", "origin", branch);
+    const head = git(worktreePath, "rev-parse", "HEAD");
+    git(root, "merge", "--no-ff", branch, "-m", "merge: evidence fixture 85");
+    git(root, "push", "origin", "main");
+
+    git(git(root, "remote", "get-url", "origin"), "update-ref", "-d", `refs/heads/${branch}`);
+
+    const closed = planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#85",
+      acceptedCommit: head,
+    });
+    expect(closed.plan.operation.branchCleanup?.remote).toMatchObject({
+      name: "origin",
+      ref: `refs/heads/${branch}`,
+      expectedHead: null,
+    });
+    expect(closed.plan.operation.branchCleanup?.proof).toEqual({ kind: "ancestry" });
+    expect(closed.plan.warnings).toContain(
+      "Remote branch cleanup is derived from the canonical origin ref because the branch carries no upstream.",
+    );
+  }, 60_000);
+
   it("blocks protected or shared branch cleanup mappings", () => {
     const root = repositoryWithRemote();
     const worktreePath = `${root}-mapping-guard`;
@@ -1964,6 +2008,54 @@ describe("hash-approved worktree lifecycle", () => {
       acceptedCommit: git(worktreePath, "rev-parse", "HEAD"),
     })).toThrow(/WORKTREE_IGNORED_CONTENT.*valuable\.cache/);
     expect(existsSync(join(worktreePath, "valuable.cache"))).toBe(true);
+  });
+
+  it("closes only when every ignored path is explicitly declared disposable in the plan", () => {
+    const root = repositoryWithRemote();
+    const worktreePath = `${root}-disposable-close`;
+    repositories.push(worktreePath);
+    configure(root, { managementBranch: "main" });
+    const allocated = planWorkspaceAllocation({
+      projectRoot: root,
+      workItem: "github:example/project#58",
+      branch: "issue-58-disposable",
+      path: worktreePath,
+      owner: "owner",
+    });
+    applyWorkspacePlan({
+      projectRoot: root,
+      planPath: allocated.path,
+      approval: allocated.plan.planHash,
+    });
+    git(worktreePath, "push", "-u", "origin", "issue-58-disposable");
+    writeFileSync(join(root, ".git", "info", "exclude"), "deps/\nvaluable.cache\n", "utf8");
+    mkdirSync(join(worktreePath, "deps", "nested"), { recursive: true });
+    writeFileSync(join(worktreePath, "deps", "nested", "index.js"), "built\n", "utf8");
+    writeFileSync(join(worktreePath, "valuable.cache"), "keep me\n", "utf8");
+    const acceptedCommit = git(worktreePath, "rev-parse", "HEAD");
+
+    expect(() => planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#58",
+      acceptedCommit,
+    })).toThrow(/WORKTREE_IGNORED_CONTENT.*valuable\.cache/);
+
+    expect(() => planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#58",
+      acceptedCommit,
+      disposeIgnoredPaths: ["deps/"],
+    })).toThrow(/WORKTREE_IGNORED_CONTENT.*valuable\.cache/);
+
+    const closed = planWorkspaceClose({
+      projectRoot: root,
+      workItem: "github:example/project#58",
+      acceptedCommit,
+      disposeIgnoredPaths: ["deps/", "valuable.cache"],
+    });
+    expect(closed.plan.operation.ignoredPathCount).toBe(0);
+    expect(closed.plan.operation.disposedIgnoredPathCount).toBe(2);
+    expect(closed.plan.operation.disposedIgnoredPathsHash).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("accepts exact GitHub squash-merge evidence before deleting the feature branch", () => {

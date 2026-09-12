@@ -2002,6 +2002,56 @@ function githubMergeProof(
   return { kind: "github-pr", number, mergedAt };
 }
 
+/**
+ * The retention policy deletes remote feature refs after one day. A branch that was pushed
+ * without `-u` then carries no upstream at all, and close used to deadlock on
+ * BRANCH_UPSTREAM_REQUIRED forever. Derive the canonical identity only when that exact ref
+ * is provably absent: we still refuse when something is published there, because we cannot
+ * claim a ref the branch never declared.
+ */
+function upstreamForCleanup(
+  root: string,
+  branch: string,
+  managementBranch: string,
+): { upstream: { remote: string; ref: string; config: Array<{ key: string; value: string }> }; derived: boolean } {
+  try {
+    return { upstream: branchUpstream(root, branch), derived: false };
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith("BRANCH_UPSTREAM_REQUIRED")) throw error;
+    const remote = branchUpstream(root, managementBranch).remote;
+    const ref = `refs/heads/${branch}`;
+    const endpoint = remotePushEndpoint(root, remote);
+    if (remoteRefHead(root, endpoint.value, remote, ref) !== null) throw error;
+    return { upstream: { remote, ref, config: [] }, derived: true };
+  }
+}
+
+/**
+ * Close removes the worktree directory, so it refuses when gitignored content would be
+ * destroyed. Derived build output and dependency trees are the common case and are usually
+ * disposable, but guessing which ignored paths are safe would be unsafe. The owner declares
+ * the exact patterns in the plan they approve, and anything undeclared still blocks. A
+ * pattern matches when its path segments appear contiguously in the ignored path, so
+ * `node_modules/` and `__pycache__/` match at any depth.
+ */
+function partitionIgnoredPaths(
+  ignored: string[],
+  patterns: string[],
+): { disposed: string[]; blocking: string[] } {
+  const declared = patterns
+    .map((pattern) => pattern.replace(/^\.?\//u, "").replace(/\/+$/u, "").split("/").filter(Boolean))
+    .filter((segments) => segments.length > 0);
+  const disposable = (path: string): boolean => {
+    const segments = path.split("/");
+    return declared.some((pattern) => segments.some((_, start) =>
+      pattern.every((segment, offset) => segments[start + offset] === segment)));
+  };
+  const disposed: string[] = [];
+  const blocking: string[] = [];
+  for (const path of ignored) (disposable(path) ? disposed : blocking).push(path);
+  return { disposed, blocking };
+}
+
 function branchCleanupEvidence(
   status: WorkspaceStatus,
   lease: WorkspaceLease,
@@ -2024,7 +2074,7 @@ function branchCleanupEvidence(
     "--verify",
     `${managementBranch}^{commit}`,
   ]).trim();
-  const upstream = branchUpstream(status.projectDir, lease.branch);
+  const { upstream, derived } = upstreamForCleanup(status.projectDir, lease.branch, managementBranch);
   const managementUpstream = branchUpstream(status.projectDir, managementBranch);
   const endpoint = remotePushEndpoint(status.projectDir, upstream.remote);
   const managementEndpoint = remotePushEndpoint(status.projectDir, managementUpstream.remote);
@@ -2059,6 +2109,7 @@ function branchCleanupEvidence(
     localRef,
     expectedHead,
     branchConfig: upstream.config,
+    derivedFromCanonicalRef: derived,
     managementBranch,
     managementHead,
     proof,
@@ -2075,6 +2126,7 @@ export function planWorkspaceClose(args: {
   projectRoot: string;
   workItem: string;
   acceptedCommit: string;
+  disposeIgnoredPaths?: string[];
   now?: Date;
 }): { plan: WorkspacePlan; path: string } {
   const status = workspaceStatus(args.projectRoot);
@@ -2102,8 +2154,10 @@ export function planWorkspaceClose(args: {
     throw new Error(`ACCEPTED_COMMIT_MISMATCH: expected ${observed.head}, received ${args.acceptedCommit}`);
   }
   const ignored = ignoredPaths(status.projectDir, lease.path);
-  if (ignored.length > 0) {
-    throw new Error(`WORKTREE_IGNORED_CONTENT: ${lease.path}: ${JSON.stringify(ignored)}`);
+  const declaredDisposables = args.disposeIgnoredPaths ?? [];
+  const { disposed, blocking } = partitionIgnoredPaths(ignored, declaredDisposables);
+  if (blocking.length > 0) {
+    throw new Error(`WORKTREE_IGNORED_CONTENT: ${lease.path}: ${JSON.stringify(blocking)}`);
   }
   const branchCleanup = status.config.remoteBranchDeletion
     ? branchCleanupEvidence(status, lease, observed.head)
@@ -2119,12 +2173,17 @@ export function planWorkspaceClose(args: {
       expectedHead: observed.head,
       expectedLeaseHash: fileHash(leaseFile(status.commonDir, lease.workItem)) ?? "",
       ignoredPathCount: 0,
-      ignoredPathsHash: hashObject(ignored),
+      ignoredPathsHash: hashObject(blocking),
+      disposableIgnoredPaths: declaredDisposables,
+      disposedIgnoredPathCount: disposed.length,
+      disposedIgnoredPathsHash: hashObject(disposed),
       branchCleanup,
     },
     now: args.now,
     warnings: branchCleanup
-      ? ["Close deletes the exact merged local branch and its matching remote ref using SHA compare-and-swap."]
+      ? [branchCleanup.derivedFromCanonicalRef
+          ? "Remote branch cleanup is derived from the canonical origin ref because the branch carries no upstream."
+          : "Close deletes the exact merged local branch and its matching remote ref using SHA compare-and-swap."]
       : ["Local and remote branches are preserved by explicit compatibility configuration."],
   }));
 }
@@ -3882,9 +3941,15 @@ function applyWorkspacePlanLocked(
         operation.lease.path,
         resolve(root, args.planPath),
       );
-      if (ignored.length > 0 ||
-          operation.ignoredPathCount !== undefined && operation.ignoredPathCount !== ignored.length ||
-          operation.ignoredPathsHash !== undefined && operation.ignoredPathsHash !== hashObject(ignored)) {
+      const { disposed, blocking } = partitionIgnoredPaths(
+        ignored,
+        operation.disposableIgnoredPaths ?? [],
+      );
+      if (blocking.length > 0 ||
+          operation.ignoredPathCount !== undefined && operation.ignoredPathCount !== blocking.length ||
+          operation.ignoredPathsHash !== undefined && operation.ignoredPathsHash !== hashObject(blocking) ||
+          operation.disposedIgnoredPathCount !== undefined && operation.disposedIgnoredPathCount !== disposed.length ||
+          operation.disposedIgnoredPathsHash !== undefined && operation.disposedIgnoredPathsHash !== hashObject(disposed)) {
         throw new Error(`WORKSPACE_DRIFT: ignored close content changed: ${JSON.stringify(ignored)}`);
       }
       if (operation.branchCleanup) {

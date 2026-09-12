@@ -556,6 +556,7 @@ function runWorktreeCommand(
         projectRoot: root,
         workItem: required(args, "work-item"),
         acceptedCommit: required(args, "accepted-commit"),
+        disposeIgnoredPaths: args.values.get("dispose-ignored") ?? [],
       }));
       return;
     case "rebind":
@@ -726,7 +727,7 @@ Usage:
   harness-automation worktree allocate --work-item <provider:id> --branch <name> [--path <absolute-path>] --owner <name> [--project .]
   harness-automation worktree adopt --manifest <json-path> [--project .]
   harness-automation worktree review [--commit <sha>] [--project .] -- <command> [args...]
-  harness-automation worktree close --work-item <provider:id> --accepted-commit <sha> [--project .]
+  harness-automation worktree close --work-item <provider:id> --accepted-commit <sha> [--dispose-ignored <ignored-path-pattern>]... [--project .]
   harness-automation worktree renew --work-item <provider:id> [--project .]
   harness-automation worktree recover --path <absolute-path> [--project .]
   harness-automation worktree apply-ai --plan <relative-path> --intent <plain-language intent> [--project .]  # legacy bindings return ReviewPending until DG-02
