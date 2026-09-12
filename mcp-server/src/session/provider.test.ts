@@ -59,6 +59,24 @@ if (!graphql) {
   process.stderr.write("unknown rest call"); process.exit(1);
 }
 const query = process.argv.find((v) => v.startsWith("query="))?.slice(6) ?? "";
+// GitHub rejects an operation that declares a variable it never references, and a fake that
+// accepts it hides exactly that defect. Fail the way the real API does.
+const declared = [...query.matchAll(/\\$(\\w+)\\s*:/g)].map((m) => m[1]);
+const selection = query.slice(query.indexOf("{"));
+const unused = declared.filter((name) => !selection.includes("$" + name));
+if (unused.length) {
+  process.stderr.write("Variable $" + unused[0] + " is declared by anonymous query but not used");
+  process.exit(1);
+}
+// gh sends -f values as strings and only -F converts them, so an Int supplied with -f is invalid.
+for (const [, name, type] of query.matchAll(/\\$(\\w+)\\s*:\\s*(Int!?|Boolean!?)/g)) {
+  const flag = process.argv.findIndex((v) => v === name + "=" || v.startsWith(name + "="));
+  const previous = flag > 0 ? process.argv[flag - 1] : "";
+  if (previous !== "-F") {
+    process.stderr.write("Variable $" + name + " of type " + type + " was provided invalid value");
+    process.exit(1);
+  }
+}
 if (query.includes("fieldValues(first: 20)")) {
   process.stdout.write(JSON.stringify({ data: { repository: { issue: { projectItems: { nodes: [{
     project: { number: 2, owner: { __typename: "User", login: "example" } },
@@ -70,11 +88,11 @@ if (query.includes("fieldValues(first: 20)")) {
 }
 if (query.includes("projectV2(number:")) {
   if (mode === "fail-write-context") { process.stderr.write("project unavailable"); process.exit(1); }
-  process.stdout.write(JSON.stringify({ data: { repository: {
-    issue: { projectItems: { nodes: [
+  process.stdout.write(JSON.stringify({ data: {
+    repository: { issue: { projectItems: { nodes: [
       { id: "PVTI_1", project: { number: 2, owner: { __typename: "User", login: "example" } } }
-    ] } },
-    projectV2: { id: "PVT_1", fields: { nodes: [
+    ] } } },
+    repositoryOwner: { projectV2: { id: "PVT_1", fields: { nodes: [
       { __typename: "ProjectV2SingleSelectField", id: "F_STATUS", name: "Status", options: [
         { id: "OPT_IN_PROGRESS", name: "In Progress" },
         { id: "OPT_READY", name: "Ready for Review" }

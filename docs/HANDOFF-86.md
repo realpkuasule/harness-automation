@@ -107,7 +107,6 @@ scripts/verify-protection-faults.mjs
 CHANGELOG.jsonl
 
 ## SEED（由 CLI 确定性生成，勿手改）
-
 【固定前缀块】
 项目：harness-automation
 仓库：https://github.com/realpkuasule/harness-automation
@@ -122,6 +121,3 @@ CHANGELOG.jsonl
 【第一步】先读 docs/HANDOFF-86.md，恢复已有的 work-item、授权回执、PR、head SHA 与 checks 证据。
 输出 3 行当前状态、下一自动步骤和下一不可逆边界；只有授权缺失/失效、deterministic blocker 或证据冲突时才询问人，其他情况直接继续。
 完成报告必须包含：改了什么、生成物完整路径、验收结果。
-
-
-【交付授权】未找到有效授权回执；在执行外部交付动作前先取得一次覆盖完整工作流的授权。

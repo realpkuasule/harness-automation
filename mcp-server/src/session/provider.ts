@@ -50,7 +50,7 @@ export function readProjectField(
   fieldName: string,
 ): ProjectFieldRead {
   const [owner, name] = repository.split("/", 2);
-  const query = `query($owner: String!, $name: String!, $projectNumber: Int!, $issueNumber: Int!, $field: String!) {
+  const query = `query($owner: String!, $name: String!, $issueNumber: Int!) {
     repository(owner: $owner, name: $name) {
       issue(number: $issueNumber) {
         projectItems(first: 100) {
@@ -70,9 +70,7 @@ export function readProjectField(
   const result = commandJson(root, "gh", [
     "api", "graphql", "-f", `query=${query}`,
     "-f", `owner=${owner}`, "-f", `name=${name}`,
-    "-f", `projectNumber=${project.number}`,
-    "-f", `issueNumber=${issueNumber}`,
-    "-f", `field=${fieldName}`,
+    "-F", `issueNumber=${issueNumber}`,
   ]);
   if (!result.ok) {
     throw new Error(`GITHUB_PROJECT_QUERY_FAILED: ${result.error ?? "unknown error"}`);
@@ -119,7 +117,14 @@ function projectWriteContext(
   fieldName: string,
 ): ProjectWriteContext {
   const [owner, name] = repository.split("/", 2);
-  const query = `query($owner: String!, $name: String!, $projectNumber: Int!, $issueNumber: Int!, $field: String!) {
+  const projectFields = `fields(first: 100) { nodes {
+      __typename
+      ... on ProjectV2Field { id name }
+      ... on ProjectV2SingleSelectField { id name options { id name } }
+    } }`;
+  // The project belongs to the owner, not to the repository: repository.projectV2 resolves only a
+  // project linked to that repository, so an owner-level project is never found through it.
+  const query = `query($owner: String!, $name: String!, $projectOwner: String!, $projectNumber: Int!, $issueNumber: Int!) {
     repository(owner: $owner, name: $name) {
       issue(number: $issueNumber) {
         projectItems(first: 100) {
@@ -129,43 +134,37 @@ function projectWriteContext(
           }
         }
       }
-      projectV2(number: $projectNumber) {
-        id
-        fields(first: 100) {
-          nodes {
-            __typename
-            ... on ProjectV2Field { id name }
-            ... on ProjectV2SingleSelectField { id name options { id name } }
-          }
-        }
-      }
+    }
+    repositoryOwner(login: $projectOwner) {
+      __typename
+      ... on Organization { projectV2(number: $projectNumber) { id ${projectFields} } }
+      ... on User { projectV2(number: $projectNumber) { id ${projectFields} } }
     }
   }`;
   const result = commandJson(root, "gh", [
     "api", "graphql", "-f", `query=${query}`,
     "-f", `owner=${owner}`, "-f", `name=${name}`,
-    "-f", `projectNumber=${project.number}`,
-    "-f", `issueNumber=${issueNumber}`,
-    "-f", `field=${fieldName}`,
+    "-f", `projectOwner=${project.owner}`,
+    "-F", `projectNumber=${project.number}`,
+    "-F", `issueNumber=${issueNumber}`,
   ]);
   if (!result.ok) {
     throw new Error(`GITHUB_PROJECT_QUERY_FAILED: ${result.error ?? "unknown error"}`);
   }
-  const value = result.value as { data?: { repository?: {
-    issue?: { projectItems?: { nodes?: Array<{ id?: string; project?: { number?: number; owner?: { login?: string } } }> } };
-    projectV2?: { id?: string; fields?: { nodes?: Array<{
+  const value = result.value as { data?: {
+    repository?: { issue?: { projectItems?: { nodes?: Array<{ id?: string; project?: { number?: number; owner?: { login?: string } } }> } } };
+    repositoryOwner?: { projectV2?: { id?: string; fields?: { nodes?: Array<{
       __typename?: string;
       id?: string;
       name?: string;
       options?: Array<{ id?: string; name?: string }>;
-    }> } };
-  } } };
-  const repositoryValue = value.data?.repository;
-  const itemNode = repositoryValue?.issue?.projectItems?.nodes?.find((candidate) =>
+    }> } } };
+  } };
+  const itemNode = value.data?.repository?.issue?.projectItems?.nodes?.find((candidate) =>
     candidate.project?.number === project.number &&
     candidate.project.owner?.login?.toLowerCase() === project.owner.toLowerCase(),
   );
-  const projectNode = repositoryValue?.projectV2;
+  const projectNode = value.data?.repositoryOwner?.projectV2;
   if (!projectNode?.id || !itemNode?.id) {
     throw new Error(`GITHUB_PROJECT_MAPPING_MISSING: issue #${issueNumber} is not present in project #${project.number}`);
   }
