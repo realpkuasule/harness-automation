@@ -7,6 +7,8 @@ import { abandonClientProcess, readClientSettlement, runClientStep, settleClient
 import { collectClientEvidence, evaluateQualificationRun, readVerifiedClientEvidence, type EvidenceLock, type VerifiedClientEvidence } from "./evidence.js";
 import { qualificationSteps, validateQualificationManifest, type QualificationManifest } from "./manifest.js";
 import { sameShaClientFacts } from "./same_sha.js";
+import { nativeCoordinationObservers } from "./runtime.js";
+import { createQualificationWorkspaceLocked, reserveQualificationWorkspacesLocked } from "../worktree/qualification.js";
 
 const targetSchema = z.object({ clientId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u), projectRoot: z.string().min(1), approvalRef: z.string().regex(/^[a-f0-9]{64}$/u) }).strict();
 export type QualificationClientTarget = z.infer<typeof targetSchema>;
@@ -71,6 +73,24 @@ export async function runLocalQualification(input: QualificationManifest, inputT
     }
     return evidence;
   };
+  // The plan's fixed order is publication first, then fixture allocation: one locked
+  // reservation for the whole approved batch, then one exact creation per resource, all in
+  // this parent process. A failure anywhere in the batch surfaces as an ordinary run failure,
+  // so it takes the same cooperative abort and settlement path as a failed publication.
+  const runResourceStep = (target: typeof prepared[number]): Promise<string> => withMutationLock(
+    resolveRepositoryContext(target.projectRoot),
+    (lock) => {
+      const context = resolveRepositoryContext(target.projectRoot);
+      // Borrow the lock this step already holds; collecting without it would re-acquire nested.
+      const facts = readVerifiedClientEvidence(collectClientEvidence(context.projectDir, target.approvalRef, lock));
+      const scope = facts.chains[0].state.approval.scope;
+      if (scope.kind !== "qualification-run" || !scope.localResources) throw new Error("HUMAN_LOCAL_RESOURCE_SCOPE_REQUIRED");
+      const clock = nativeCoordinationObservers(context, scope.binding).provider.serverClock();
+      reserveQualificationWorkspacesLocked(lock, context.projectDir, target.approvalRef, scope.binding, clock);
+      const created = scope.localResources.items.map((item) =>
+        hashObject(createQualificationWorkspaceLocked(lock, context.projectDir, target.approvalRef, item.resourceId)));
+      return hashObject({ resourceStep: target.clientId, created });
+    });
   const recordSettlement = (evidence: VerifiedClientEvidence[], executionStatus: Settlement["executionStatus"], executionError: string | null) => {
     const handle: SettledQualification = Object.freeze({ kind: "settled-local-qualification" });
     supervised.forEach(readClientSettlement);
@@ -99,7 +119,15 @@ export async function runLocalQualification(input: QualificationManifest, inputT
         if (resultHash !== hashObject(sameShaClientFacts(target.projectRoot, target.approvalRef, index === 0 ? "updated" : "no-op"))) throw new Error("QUALIFICATION_SAME_SHA_EVIDENCE_INVALID");
         steps.push({ stepId: `${step.stepId}-dispatch`, resultHash });
       }
-    } else for (const step of scheduled) steps.push({ stepId: step.stepId, resultHash: await runClientStep(clients.get(step.clientId)!, step.stepId) });
+    } else {
+      for (const step of scheduled) steps.push({ stepId: step.stepId, resultHash: await runClientStep(clients.get(step.clientId)!, step.stepId) });
+      const resourceStep = manifest.execution.kind === "local-synthetic-publication/1" ? manifest.execution.resourceStep : undefined;
+      if (resourceStep) {
+        const target = prepared.find((item) => item.clientId === resourceStep.clientId);
+        if (!target) throw new Error("QUALIFICATION_CLIENT_UNKNOWN");
+        steps.push({ stepId: resourceStep.stepId, resultHash: await runResourceStep(target) });
+      }
+    }
     // No parent holds apply.lock while waiting for a child which needs that same lock.
     for (const client of clients.values()) await settleClientProcess(client);
     const evidence = await closeClientWrites();

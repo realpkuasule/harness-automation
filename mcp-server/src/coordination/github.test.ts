@@ -94,9 +94,11 @@ function nativeGitFixture({ root, bin, endpoint }: ReturnType<typeof fixture>) {
   const fault = join(bin, "fault.json"); const fired = join(bin, "fault-fired");
   writeFileSync(join(bin, "git"), `#!${process.execPath}
 const fs=require('node:fs');const cp=require('node:child_process');let a=process.argv.slice(2);
-const fault=fs.existsSync(${JSON.stringify(fault)})?JSON.parse(fs.readFileSync(${JSON.stringify(fault)},'utf8')):{};
+const faulted=fs.existsSync(${JSON.stringify(fault)});
+const fault=faulted?JSON.parse(fs.readFileSync(${JSON.stringify(fault)},'utf8')):{};
 const deleting=a.includes('push')&&a.at(-1).startsWith(':refs/heads/');
 const adding=a.includes('worktree')&&a.includes('add');
+if(adding&&faulted){fault.adds=(Number(fault.adds)||0)+1;fs.writeFileSync(${JSON.stringify(fault)},JSON.stringify(fault));}
 if(adding&&fault.addFailBefore)process.exit(1);
 if(a.some(x=>['ls-remote','fetch','push'].includes(x))){
   if(!a.includes(${JSON.stringify(endpoint)})||process.env.HARNESS_GIT_TOKEN!=='synthetic-provider-canary')process.exit(2);
@@ -111,7 +113,7 @@ if(deleting&&fault.beforeDeleteHead)cp.execFileSync(${JSON.stringify(realGit)},[
 const r=cp.spawnSync(${JSON.stringify(realGit)},a,{env:process.env,stdio:['inherit','pipe','pipe']});
 if(deleting&&fault.readbackFailure)fs.writeFileSync(${JSON.stringify(fired)},'deleted');
 process.stdout.write(deleting&&fault.dropDeleteOutput||a.includes('push')&&fault.dropPushRef&&a.at(-1).endsWith(':'+fault.dropPushRef)?'':r.stdout??'');process.stderr.write(r.stderr??'');
-process.exit(adding&&fault.addFailAfter||a.includes('update-ref')&&fault.branchResultLost?1:r.status??1);
+process.exit(adding&&(fault.addFailAfter||(fault.failAddOn&&Number(fault.adds)===Number(fault.failAddOn)))||a.includes('update-ref')&&fault.branchResultLost?1:r.status??1);
 `, { mode: 0o700 });
   return { trace, remote, realGit, fault };
 }
@@ -147,6 +149,29 @@ function prepareSupervisedFixture(crossClient = false) {
     ] } });
   return { f, native, manifest, projectRoots, source, sourceRef, controlRef, synthetic, sourceClient, now };
 }
+function prepareResourceFixture() {
+  const f = fixture(); const native = nativeGitFixture(f); const binding = observeCoordinationBinding(f.root, "origin", "42", "git"); const now = Date.now();
+  const controlRef = "refs/heads/supervised-control";
+  const sourceRefs = { a: "refs/heads/qualification-source-a", b: "refs/heads/qualification-source-b" } as const;
+  const synthetic = syntheticScope("supervised", controlRef);
+  const source = (id: "a" | "b") => prepareSyntheticObject("source-fixture", { ...synthetic.objects[0].metadata, objectId: `source-${id}` });
+  const sources = { a: source("a"), b: source("b") };
+  synthetic.objects.push(sources.a, sources.b);
+  for (const id of ["a", "b"] as const) synthetic.publications.push({ fixtureId: `source-${id}`, transactionId: `source-${id}-create`, ref: sourceRefs[id], expected: null });
+  const refs = [controlRef, sourceRefs.a, sourceRefs.b];
+  const definition = { kind: "qualification-run" as const, binding, runId: "supervised", synthetic, refs, operations: ["create" as const],
+    maxCommits: 3, maxWriteAttempts: 3, maxCleanupAttempts: 3, expiresAt: new Date(now + 3600_000).toISOString(), cleanupExpiresAt: new Date(now + 7200_000).toISOString() };
+  const manifest = prepareQualificationManifest({ schemaVersion: "qualification-run-manifest/1", runId: "supervised", repository: binding.repository, repositoryId: binding.repositoryId,
+    endpointHash: binding.endpointHash, refs, synthetic, requiredCases: ["dg01-acquire-contention"], clients: [{ clientId: "local", scope: definition }],
+    cleanupClientId: "local", maxCommits: 3, maxWriteAttempts: 3, maxCleanupAttempts: 3, expiresAt: definition.expiresAt, cleanupExpiresAt: definition.cleanupExpiresAt,
+    execution: { kind: "local-synthetic-publication/1", steps: [
+      { stepId: "init", clientId: "local", operation: "bootstrap", fixtureId: "genesis", transactionId: "bootstrap" },
+      { stepId: "source-a", clientId: "local", operation: "publish-source", fixtureId: "source-a", transactionId: "source-a-create" },
+      { stepId: "source-b", clientId: "local", operation: "publish-source", fixtureId: "source-b", transactionId: "source-b-create" },
+    ] } });
+  return { f, native, manifest, projectRoots: [f.root], sourceRefs, sources, controlRef, synthetic, now };
+}
+
 function registerSupervisedFixture(prepared: ReturnType<typeof prepareSupervisedFixture>) {
   const { manifest, projectRoots, now } = prepared;
   return manifest.clients.map((client, index) => {
@@ -438,6 +463,52 @@ describe("authenticated GitHub merge observation (LOCAL native-command fixtures)
       expect(git(p.f.root, "--git-dir=" + p.native.remote, "rev-parse", p.controlRef)).toBe(p.synthetic.objects[0].commitSha);
     }
     expect(JSON.parse(readFileSync(report.reportPath, "utf8"))).toMatchObject({ error: report.error, cleanup: report.cleanup, executionStatus: "failed" });
+  }, 180_000);
+
+  it("aborts and still cleans the published subset when a later local fixture cannot be created", async () => {
+    const p = prepareResourceFixture();
+    git(p.f.root, "symbolic-ref", "HEAD", "refs/heads/main");
+    git(p.f.root, "-c", "core.hooksPath=/dev/null", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "primary");
+    const allowed = join(p.f.bin, "workspaces"); mkdirSync(allowed);
+    const configured = planWorkspaceConfiguration({ projectRoot: p.f.root, mode: "enforced", managementBranch: "main", maxPersistentWorktrees: 3,
+      allowedRoots: [allowed], protectedRoots: [p.f.root, p.f.commonDir, "/"] });
+    applyWorkspacePlan({ projectRoot: p.f.root, planPath: configured.path, approval: configured.plan.planHash });
+
+    const resource = (id: "a" | "b") => ({ resourceId: `source-${id}`, clientId: "local", path: join(allowed, `source-${id}`),
+      branch: p.sourceRefs[id].slice("refs/heads/".length), fixtureId: `source-${id}`, sourceSha: p.sources[id].commitSha,
+      operations: ["import-source", "create-once", "observe", "close-exact"] });
+    const input = { ...p.manifest }; delete (input as { execution?: unknown }).execution;
+    input.clients[0].scope.localResources = { authorityRoot: p.f.root, commonDir: p.f.commonDir,
+      configHash: fileHash(join(p.f.root, ".harness/worktree-delivery.json"))!, hostBindingHash: workspaceStatus(p.f.root).hostBinding.hash!,
+      expiresAt: input.expiresAt, cleanupExpiresAt: input.cleanupExpiresAt, maxConcurrent: 3, items: [resource("a"), resource("b")] };
+    const { manifestHash, ...definition } = input; expect(manifestHash).toBe(p.manifest.manifestHash);
+    p.manifest = prepareQualificationManifest({ ...definition, execution: { ...p.manifest.execution!, resourceStep: { stepId: "fixtures", clientId: "local" } } });
+
+    const planned = await qualificationCli(p.f.root, "plan", "--input", qualificationRequest(p));
+    expect(planned.status, planned.stderr).toBe(0);
+    const plan = JSON.parse(planned.stdout);
+    const approved = await qualificationCli(p.f.root, "approve", "--plan", plan.planPath, "--approve", plan.planHash,
+      "--approved-by", "fixture-human", "--approval-source", "synthetic-resource-failure-message");
+    expect(approved.status, approved.stderr).toBe(0);
+
+    writeFileSync(p.native.fault, JSON.stringify({ failAddOn: 2 }));                       // publication succeeds; the second fixture fails
+    const failed = await qualificationCli(p.f.root, "run", "--plan", plan.planPath);
+    expect(failed.status, failed.stderr || failed.stdout).toBe(1);
+    const report = JSON.parse(failed.stdout);
+    expect(report).toMatchObject({ qualificationStatus: "incomplete", qualified: false,
+      execution: { executionStatus: "aborted", abortError: null, drainCoverage: "this-run-native-process-groups-only",
+        steps: [{ stepId: "init" }, { stepId: "source-a" }, { stepId: "source-b" }] } });
+    expect(report.execution.instances.every((instance: { executionStatus: string; finalMembers: unknown[] }) =>
+      instance.executionStatus === "aborted" && instance.finalMembers.length === 0)).toBe(true);
+    // Publication really succeeded before the fixture failure: the three published refs are
+    // deleted, not observed-absent, so they existed on the remote when cleanup ran.
+    expect(report).toMatchObject({ cleanupError: null, cleanup: [
+      { status: "deleted", ref: p.controlRef }, { status: "deleted", ref: p.sourceRefs.a }, { status: "deleted", ref: p.sourceRefs.b }] });
+    expect(git(p.f.root, "--git-dir=" + p.native.remote, "for-each-ref", "--format=%(refname)")).toBe("");
+    expect(report.error).toBe("QUALIFICATION_RESOURCE_ADD_FAILED");                        // cleanup never turns the failure into a pass
+    expect(report.requiredCases.map((group: { id: string }) => group.id)).toEqual(["dg01-acquire-contention"]);
+    expect(report.requiredCases.every((group: { status: string; subassertions: Array<{ status: string; evidenceHash: null }> }) =>
+      group.status === "not-run" && group.subassertions.every((assertion) => assertion.status === "not-run" && assertion.evidenceHash === null))).toBe(true);
   }, 180_000);
 
   it.each([false, true])("supervises fixed native publications and exact cleanup without claiming the full DG case (cross-client=%s)", async (crossClient) => {

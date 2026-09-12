@@ -25,6 +25,11 @@ const inputSchema = z.object({
   }).strict().optional(),
   execution: z.discriminatedUnion("kind", [z.object({ kind: z.literal("local-synthetic-publication/1"),
     steps: z.array(z.object({ stepId: id, clientId: id, operation: z.enum(["bootstrap", "publish-source"]), fixtureId: id, transactionId: id }).strict()).min(1).max(4096),
+    // Runs in the parent, after every listed step, and creates that client's whole approved
+    // localResources batch under one locked reservation. It is not a client step: the fixed
+    // order is publication first, then fixture allocation. Optional, so every already-written
+    // manifest stays byte-identical.
+    resourceStep: z.object({ stepId: id, clientId: id }).strict().optional(),
   }).strict(), z.object({ kind: z.literal("local-same-sha-publication/1") }).strict()]).optional(),
 }).strict();
 const manifestSchema = inputSchema.extend({ manifestHash: digest });
@@ -79,8 +84,16 @@ export function prepareQualificationManifest(input: QualificationManifestInput):
     if (value.clients.reduce((sum, client) => sum + client.scope[field], 0) > value[field]) invalid();
   }
   const negative = value.sameShaPublicationNegativeControl;
-  // Existing publication profiles allocate no workspaces. The future acquire profile owns that explicit capability.
-  if (value.execution && value.clients.some((client) => client.scope.localResources)) throw new Error("QUALIFICATION_LOCAL_RESOURCE_EXECUTION_UNSUPPORTED");
+  // Existing publication profiles allocate no workspaces. Only a profile that explicitly
+  // declares the parent-executed resource step owns that capability; every other execution
+  // block still rejects resource descriptors instead of silently allocating them.
+  const resourceStep = value.execution?.kind === "local-synthetic-publication/1" ? value.execution.resourceStep : undefined;
+  if (value.execution && value.clients.some((client) => client.scope.localResources) && !resourceStep) {
+    throw new Error("QUALIFICATION_LOCAL_RESOURCE_EXECUTION_UNSUPPORTED");
+  }
+  if (resourceStep && !value.clients.find((client) => client.clientId === resourceStep.clientId)?.scope.localResources) {
+    throw new Error("QUALIFICATION_LOCAL_RESOURCE_SCOPE_REQUIRED");
+  }
   if (negative && (!value.requiredCases.includes(negative.caseId) ||
       new Set(negative.publications.map((item) => item.clientId)).size !== 2 || new Set(negative.publications.map((item) => item.transactionId)).size !== 2 ||
       !value.synthetic.publications.some((item) => item.fixtureId === negative.fixtureId && item.ref === negative.ref && item.expected === negative.expected))) invalid();
