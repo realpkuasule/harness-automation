@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "worktree-delivery/1.0",
+  "kind": "workspace-plan",
+  "id": "worktree-close-2026-09-12T06-36-17-623Z-f91e8cb920cd",
+  "createdAt": "2026-09-12T06:36:17.623Z",
+  "projectDir": "/Users/zhichao/codex/harness-automation",
+  "commonDir": "/Users/zhichao/codex/harness-automation/.git",
+  "observedHash": "6551b809aa0374af3e81bd37122ef569439fb46effc22abab0409d0c7f98b02e",
+  "operation": {
+    "kind": "close",
+    "lease": {
+      "schemaVersion": "1.0",
+      "workItem": "github:realpkuasule/harness-automation#86",
+      "branch": "codex/issue-86-remote-coordination-v3",
+      "path": "/Users/zhichao/codex/harness-automation-worktrees/86",
+      "owner": "zhichao",
+      "acceptedCommit": "be779bc3f27096a0cce7f3c39f5d952053ca9064",
+      "createdAt": "2026-09-04T02:53:34.879Z",
+      "heartbeatAt": "2026-09-07T10:00:38.956Z",
+      "status": "active"
+    },
+    "expectedHead": "be779bc3f27096a0cce7f3c39f5d952053ca9064",
+    "expectedLeaseHash": "e9b1429f306f1f398591d1c6205d0dcae03c2e9ebf24c82b3703403af5513d06",
+    "ignoredPathCount": 0,
+    "ignoredPathsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "branchCleanup": {
+      "branch": "codex/issue-86-remote-coordination-v3",
+      "localRef": "refs/heads/codex/issue-86-remote-coordination-v3",
+      "expectedHead": "be779bc3f27096a0cce7f3c39f5d952053ca9064",
+      "branchConfig": [
+        {
+          "key": "branch.codex/issue-86-remote-coordination-v3.remote",
+          "value": "origin"
+        },
+        {
+          "key": "branch.codex/issue-86-remote-coordination-v3.merge",
+          "value": "refs/heads/codex/issue-86-remote-coordination-v3"
+        }
+      ],
+      "managementBranch": "main",
+      "managementHead": "2aa1a301099dfadd1a1b607519a0301d504c62b8",
+      "proof": {
+        "kind": "ancestry"
+      },
+      "remote": {
+        "name": "origin",
+        "ref": "refs/heads/codex/issue-86-remote-coordination-v3",
+        "expectedHead": null,
+        "endpointHash": "a359dde492248f134ca9da312bd95503b6e99686b38a4659719d78d7b8dcea58"
+      }
+    }
+  },
+  "warnings": [
+    "Close deletes the exact merged local branch and its matching remote ref using SHA compare-and-swap."
+  ],
+  "planHash": "f42e45c92efa13614fc06e81135b83df630bfe4407082a4a69f050ab223eef0a"
+}
