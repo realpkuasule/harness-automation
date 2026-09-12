@@ -124,10 +124,16 @@ transfer/takeover, qualification runner and adoption paths are unfinished.
   path records a `retained` fact carrying its reason and evidence hash, so the last ownership
   phase, its evidence and the occupied capacity survive the refusal. An already-absent branch
   counts as removed rather than as `BRANCH_DELETE_FAILED`: git reports that case as
-  "unable to resolve reference", which the previous stderr match never caught. Scoped workspace
-  runtime and acquire profile execution remain pending. Existing publication profiles reject
-  resource descriptors instead of silently allocating them. Per-worktree configuration is
-  explicitly unsupported for these fixed fixtures; Harness does not copy or rewrite it.
+  "unable to resolve reference", which the previous stderr match never caught.
+  The fixed runner now reaches the resource primitives in production: a manifest that declares
+  `resourceStep` allocates that client's approved batch through `reserveQualificationWorkspacesLocked`
+  and `createQualificationWorkspaceLocked`, in the parent, under one lock, after every publication
+  step. A profile that does not declare it still rejects resource descriptors instead of silently
+  allocating them. `closeQualificationWorkspaceLocked` and the scoped `qualification_runtime`
+  wrapper still have no production caller and are exercised only by tests, so native close has no
+  runtime path yet and the two-client acquire execution profile is not wired in.
+  Per-worktree configuration is explicitly unsupported for these fixed fixtures; Harness does not
+  copy or rewrite it.
 
 Artifact inventory uses Node's package search paths, not dependency execution.
 Type-only packages, hidden/redirected package exports and dependencies sharing a
