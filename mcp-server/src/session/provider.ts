@@ -1,4 +1,4 @@
-import { commandJson } from "../worktree/provider.js";
+import { commandJson, graphqlCommandJson } from "../worktree/provider.js";
 import type { WorktreeDeliveryConfig } from "../worktree/types.js";
 import type { ParsedWorkItem } from "./types.js";
 
@@ -67,10 +67,8 @@ export function readProjectField(
       }
     }
   }`;
-  const result = commandJson(root, "gh", [
-    "api", "graphql", "-f", `query=${query}`,
-    "-f", `owner=${owner}`, "-f", `name=${name}`,
-    "-F", `issueNumber=${issueNumber}`,
+  const result = graphqlCommandJson(root, query, [
+    ["-f", `owner=${owner}`], ["-f", `name=${name}`], ["-F", `issueNumber=${issueNumber}`],
   ]);
   if (!result.ok) {
     throw new Error(`GITHUB_PROJECT_QUERY_FAILED: ${result.error ?? "unknown error"}`);
@@ -141,12 +139,9 @@ function projectWriteContext(
       ... on User { projectV2(number: $projectNumber) { id ${projectFields} } }
     }
   }`;
-  const result = commandJson(root, "gh", [
-    "api", "graphql", "-f", `query=${query}`,
-    "-f", `owner=${owner}`, "-f", `name=${name}`,
-    "-f", `projectOwner=${project.owner}`,
-    "-F", `projectNumber=${project.number}`,
-    "-F", `issueNumber=${issueNumber}`,
+  const result = graphqlCommandJson(root, query, [
+    ["-f", `owner=${owner}`], ["-f", `name=${name}`], ["-f", `projectOwner=${project.owner}`],
+    ["-F", `projectNumber=${project.number}`], ["-F", `issueNumber=${issueNumber}`],
   ]);
   if (!result.ok) {
     throw new Error(`GITHUB_PROJECT_QUERY_FAILED: ${result.error ?? "unknown error"}`);
@@ -215,12 +210,9 @@ export function updateProjectField(
         clientMutationId
       }
     }`;
-    const result = commandJson(root, "gh", [
-      "api", "graphql", "-f", `query=${mutation}`,
-      "-f", `projectId=${context.projectId}`,
-      "-f", `itemId=${context.itemId}`,
-      "-f", `fieldId=${context.field.id}`,
-      "-F", `value=${valueInput}`,
+    const result = graphqlCommandJson(root, mutation, [
+      ["-f", `projectId=${context.projectId}`], ["-f", `itemId=${context.itemId}`],
+      ["-f", `fieldId=${context.field.id}`], ["-F", `value=${valueInput}`],
     ]);
     if (!result.ok) {
       return { fieldName, applied: false, error: `GITHUB_PROJECT_UPDATE_FAILED: ${result.error ?? "unknown error"}` };

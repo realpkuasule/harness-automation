@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { commandJson } from "../worktree/provider.js";
+import { commandJson, unusedGraphqlVariables } from "../worktree/provider.js";
 import { resolveRepositoryContext, runGit } from "../repository/git.js";
 import { githubEndpointRepository } from "../repository/remote.js";
 import { scrubSensitive } from "../credentials/service.js";
@@ -132,6 +132,8 @@ function graphql(
   request: GitHubTrackingRequest,
   operation: string,
 ): Record<string, unknown> {
+  const unused = unusedGraphqlVariables(query);
+  if (unused.length > 0) throw new Error(`GITHUB_TRACKING_${operation}_FAILED: GRAPHQL_VARIABLE_UNUSED: ${unused.join(", ")}`);
   const args = ["api", "graphql", "-f", `query=${query}`];
   for (const [name, value] of Object.entries(variables)) {
     if (value !== undefined) args.push(typeof value === "number" ? "-F" : "-f", `${name}=${value}`);

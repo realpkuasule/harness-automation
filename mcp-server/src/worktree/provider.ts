@@ -6,6 +6,37 @@ import type {
   WorkspaceLease,
 } from "./types.js";
 
+/**
+ * Variables the assembled operation declares but never references. GitHub rejects those outright
+ * with variableNotUsed, and the mistake is invisible to a fake that only inspects the query text —
+ * which is how it reached the live API from this repository. Checking the assembled document also
+ * sees interpolated fragments, which no static scan of the source can resolve.
+ */
+export function unusedGraphqlVariables(query: string): string[] {
+  const declared = [...query.matchAll(/\$(\w+)\s*:/gu)].map((match) => match[1]);
+  const selection = query.slice(query.indexOf("{"));
+  return declared.filter((name) => !selection.includes(`$${name}`));
+}
+
+/**
+ * Runs a GraphQL document through `gh` with the caller's own variable flags, refusing to send a
+ * document that declares a variable it never uses. Callers keep their flags because `-f` sends a
+ * string while `-F` also converts numbers and parses JSON, and only the caller knows which is
+ * meant; an `Int` sent with `-f` is the other mistake the live API has caught here.
+ */
+export function graphqlCommandJson(
+  cwd: string,
+  query: string,
+  variables: Array<[flag: string, argument: string]>,
+): { ok: boolean; value?: unknown; error?: string } {
+  const unused = unusedGraphqlVariables(query);
+  if (unused.length > 0) {
+    return { ok: false, error: `GRAPHQL_VARIABLE_UNUSED: ${unused.join(", ")}` };
+  }
+  return commandJson(cwd, "gh", ["api", "graphql", "-f", `query=${query}`,
+    ...variables.flatMap(([flag, argument]) => [flag, argument])]);
+}
+
 export function commandJson(cwd: string, command: string, args: string[]): {
   ok: boolean;
   value?: unknown;
@@ -119,17 +150,8 @@ function projectItems(
     repository(owner: $owner, name: $name) {${selections}
     }
   }`;
-  const result = commandJson(root, "gh", [
-    "api",
-    "graphql",
-    "-f",
-    `query=${query}`,
-    "-f",
-    `owner=${owner}`,
-    "-f",
-    `name=${name}`,
-    "-f",
-    `statusField=${project.statusField}`,
+  const result = graphqlCommandJson(root, query, [
+    ["-f", `owner=${owner}`], ["-f", `name=${name}`], ["-f", `statusField=${project.statusField}`],
   ]);
   if (!result.ok) {
     return { values, error: graphQlRateLimitError(root, result.error ?? "unknown error") };

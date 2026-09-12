@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { observeProvider } from "./provider.js";
+import { graphqlCommandJson, observeProvider, unusedGraphqlVariables } from "./provider.js";
 import type { WorktreeDeliveryConfig, WorkspaceLease } from "./types.js";
 
 const directories: string[] = [];
@@ -125,6 +125,22 @@ afterEach(() => {
   if (originalCountFile === undefined) delete process.env.HARNESS_TEST_GH_COUNT_FILE;
   else process.env.HARNESS_TEST_GH_COUNT_FILE = originalCountFile;
   for (const root of directories.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("graphql document guard", () => {
+  it("reports a declared variable the operation never references", () => {
+    expect(unusedGraphqlVariables("query($a: String!, $b: String!) { repository(owner: $a) { name } }"))
+      .toEqual(["b"]);
+    expect(unusedGraphqlVariables("query($a: String!) { repository(owner: $a) { name } }")).toEqual([]);
+    // A fragment that is interpolated at assembly time is inside the document the guard sees.
+    const assembled = `query($a: String!, $b: String!) { repository(owner: $a) {${" projectV2(number: $b) { id }"}} }`;
+    expect(unusedGraphqlVariables(assembled)).toEqual([]);
+  });
+
+  it("refuses to send such a document rather than letting the live API reject it", () => {
+    const result = graphqlCommandJson(process.cwd(), "query($a: String!, $b: String!) { repository(owner: $a) { name } }", [["-f", "a=x"]]);
+    expect(result).toMatchObject({ ok: false, error: "GRAPHQL_VARIABLE_UNUSED: b" });
+  });
 });
 
 describe("worktree provider adapters", () => {
