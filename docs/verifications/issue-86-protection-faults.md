@@ -31,7 +31,16 @@ skipped test, or a different failed test is not a caught protection.
 | D-01 | scope binding between the approved `localResources` and the runtime workspace context (`local-runtime-context-leak`) | the binding-drift assertion fails at its declared location with `HUMAN_AUTHORIZATION_BINDING_MISMATCH` |
 | W-07 | two local writers competing for one control ref resolve to one winner (`local-acquire-contention`) | the contention assertion fails at its declared location with `COORDINATION_CAS_CONFLICT` for the loser |
 | L-03 | a local branch advanced past its recorded source SHA is retained rather than deleted (`local-close-branch-drift`) | the exact-SHA retention assertion fails at its declared location |
-| L-02 | the disposable ignored set cannot change between the approved plan and close (`local-disposable-drift`) | the disposed count and hash recheck fails at its declared location with `WORKSPACE_DRIFT: ignored close content changed` |
+
+The disposable ignored set that `worktree close --dispose-ignored` approves is rechecked
+by apply, but that recheck has no fault model here. Every test that reaches
+`applyWorkspacePlan` on a close must first allocate a worktree, and the runner's sanitized
+environment passes only `PATH` and `HOME`. With `TMPDIR` unset, `os.tmpdir()` returns
+`/tmp`, which is a symlink to `/private/tmp` on macOS, so allocation correctly fails with
+`WORKTREE_PATH_PARENT_NOT_DIRECTORY: /tmp` before the fault can be exercised. The recheck is
+covered by the `rejects a close whose disposable ignored set changed after the owner approved
+the plan` test; promoting it to a fault model needs either a runner that preserves `TMPDIR`
+or a host where `/tmp` is not a symlink.
 
 The structured report, rather than this table, is the source of case-level evidence: it records the exact source SHA,
 patch hash, setup and test argv, sanitized execution environment, test ID, assertion location, and output hashes.
