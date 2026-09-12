@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
@@ -32,9 +32,10 @@ const cases = [
   ["local-close-branch-drift", "src/worktree/qualification.ts", "  if (currentBranch && currentBranch !== resource.sourceSha) return retain(\"BRANCH_REF_DRIFT\", { currentBranch });", "  if (false) return retain(\"BRANCH_REF_DRIFT\", { currentBranch });", "src/coordination/github.test.ts", "retains when the local branch was advanced past the recorded source SHA", "AssertionError: expected [Function] to throw error including 'BRANCH_REF_DRIFT'", { file: "src/coordination/github.test.ts", contains: "expect(() => closeQualificationWorkspaceLocked(lock, p.f.root, approvalRef, \"source\")).toThrow(\"BRANCH_REF_DRIFT\");" }],
   ["local-runtime-context-leak", "src/worktree/qualification_runtime.ts", "  if (scope.localResources.configHash !== scope.binding.configHash) {\n    throw new Error(\"HUMAN_AUTHORIZATION_BINDING_MISMATCH\");", "  if (false) {\n    throw new Error(\"HUMAN_AUTHORIZATION_BINDING_MISMATCH\");", "src/worktree/qualification.test.ts", "rejects a binding drift between localResources.configHash and binding.configHash (HUMAN_AUTHORIZATION_BINDING_MISMATCH)", "AssertionError: expected [Function] to throw an error", { file: "src/worktree/qualification.test.ts", contains: ".toThrow(\"HUMAN_AUTHORIZATION_BINDING_MISMATCH\");" }],
   ["local-acquire-contention", "src/coordination/push_result.ts", "  if (outcome === \"rejected\") throw new Error(\"COORDINATION_CAS_CONFLICT\");", "  if (false) throw new Error(\"COORDINATION_CAS_CONFLICT\");", "src/coordination/lifecycle-acquire.test.ts", "two A workers competing for the same control ref produce one winner and one COORDINATION_CAS_CONFLICT loser", "AssertionError: expected [Function] to throw error including 'COORDINATION_CAS_CONFLICT'", { file: "src/coordination/lifecycle-acquire.test.ts", contains: "expect(() => store.dispatchPrepared(a2Prepared)).toThrow(\"COORDINATION_CAS_CONFLICT\");" }],
+  ["local-disposable-drift", "src/worktree/service.ts", "          operation.disposedIgnoredPathCount !== undefined && operation.disposedIgnoredPathCount !== disposed.length ||\n          operation.disposedIgnoredPathsHash !== undefined && operation.disposedIgnoredPathsHash !== hashObject(disposed)) {", "          false ||\n          false) {", "src/worktree/service.test.ts", "rejects a close whose disposable ignored set changed after the owner approved the plan", "AssertionError: expected [Function] to throw an error", { file: "src/worktree/service.test.ts", contains: "})).toThrow(/WORKSPACE_DRIFT: ignored close content changed/u);" }],
 ];
 const hash = (value) => createHash("sha256").update(value).digest("hex");
-const executionEnvironment = Object.freeze({ source: "fresh mcp-server package copy", gitMetadata: "excluded", harnessState: "excluded", credentials: "not provided", home: "fresh temporary directory", dependencyInstall: "npm ci --offline --ignore-scripts", ci: "1" });
+const executionEnvironment = Object.freeze({ source: "fresh mcp-server package copy", gitMetadata: "excluded", harnessState: "excluded", credentials: "not provided", home: "fresh temporary directory", temporaryDirectory: "per-run real TMPDIR, so os.tmpdir() is not a symlink", dependencyInstall: "npm ci --offline --ignore-scripts", ci: "1" });
 const hasSingleTargetReport = (result) => Array.isArray(result?.report?.matches) && result.report.matches.length === 1 &&
   typeof result.report.report?.success === "boolean" && typeof result.report.report.numFailedTests === "number";
 const completedTarget = (result) => result?.error === null && result.signal === null && typeof result.exitCode === "number" && hasSingleTargetReport(result);
@@ -96,6 +97,12 @@ const targetResult = (path, testName) => {
 // clear error rather than partway through the sandboxes.
 const failureLocations = new Map(cases.map(([id, , , , , , , spec]) => [id, resolveFailureLocations(spec)]));
 const root = mkdtempSync(join(tmpdir(), "harness-protection-faults-"));
+// A sandbox must look like a real host, not a narrower one. With TMPDIR unset, os.tmpdir()
+// returns /tmp, which is a symlink to /private/tmp on macOS, and the harness correctly refuses
+// a worktree whose parent is a symlink — so every case that allocates a worktree died with
+// WORKTREE_PATH_PARENT_NOT_DIRECTORY before its fault could be exercised. Give the run its own
+// real temporary root instead; it is still isolated, and no case shares it.
+const executionTmp = join(root, "tmp"); mkdirSync(executionTmp);
 const evidence = [];
 try {
   for (const [id, path, before, after, testFile, testName, expectedAssertion] of cases) {
@@ -111,7 +118,7 @@ try {
       const reportPath = join(sandbox, `${phase}.json`);
       const testPattern = testName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
       const argv = ["./node_modules/.bin/vitest", "run", testFile, "-t", testPattern, "--reporter=json", `--outputFile=${reportPath}`, "--maxWorkers=1"];
-      const execution = run(argv[0], argv.slice(1), sandbox, { PATH: process.env.PATH, HOME: join(root, "home"), CI: "1" });
+      const execution = run(argv[0], argv.slice(1), sandbox, { PATH: process.env.PATH, HOME: join(root, "home"), TMPDIR: executionTmp, CI: "1" });
       return { argv, environment: executionEnvironment, ...execution, report: targetResult(reportPath, testName) };
     };
     const clean = invoke("baseline");
