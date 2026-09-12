@@ -106,18 +106,18 @@ if (query.includes("fieldValues(first: 20)")) {
   process.exit(0);
 }
 if (query.includes("projectV2(number:")) {
-  process.stdout.write(JSON.stringify({ data: { repository: {
-    issue: { projectItems: { nodes: [
+  process.stdout.write(JSON.stringify({ data: {
+    repository: { issue: { projectItems: { nodes: [
       { id: "PVTI_1", project: { number: 2, owner: { __typename: "User", login: "example" } } }
-    ] } },
-    projectV2: { id: "PVT_1", fields: { nodes: [
+    ] } } },
+    repositoryOwner: { projectV2: { id: "PVT_1", fields: { nodes: [
       { __typename: "ProjectV2SingleSelectField", id: "F_STATUS", name: "Status", options: [
         { id: "OPT_IN_PROGRESS", name: "In Progress" },
         { id: "OPT_READY", name: "Ready for Review" }
       ] },
       { __typename: "ProjectV2Field", id: "F_HANDOFF", name: "Handoff Doc" }
-    ] } }
-  } } }));
+    ] } } }
+  } }));
   process.exit(0);
 }
 if (query.includes("updateProjectV2ItemFieldValue")) {
