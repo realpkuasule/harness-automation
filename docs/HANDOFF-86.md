@@ -48,6 +48,18 @@ Issue #86 bounded-cleanup-authority 全链路：
 - 7695a8d 故障位置从行号钉死改为语义锚点（同类改动此前三次导致位移）。
 - ee4ff90 故障运行器补真实 TMPDIR，恢复 local-disposable-drift，用例数 18 到 19。
 
+会话交接路径（真实 API 上此路径从未工作过，五个缺陷均由实跑发现）：
+- 2758441 修：查询声明未使用变量（variableNotUsed）、Int 变量用 -f 传、
+  写上下文用 repository.projectV2 查用户级项目。
+- fb38d16 把「未使用变量」校验搬到 gh 边界，覆盖全部 GraphQL 调用点。
+- 4c7efe3 改为经 stdin 传 JSON body：gh 的 -F 只转换标量，对象会被当字符串，
+  这是第 4、5 个缺陷的根治方式。
+- 1f5a2dd 同步 4 个测试替身；过期替身正是让上述缺陷长期隐藏的原因。
+
+发布：
+- 9ac75dd v2.8.20 已发布到 npm，latest 已从 2.8.11 前进。因 npm 本地元数据缓存，
+  `npm view` 可能仍显示旧值，复核请直查 registry。
+
 ## 当前状态（跑通什么、依赖什么、密钥位置）
 
 在 09e8d5e 上实跑通过：
@@ -74,7 +86,10 @@ Issue #86 bounded-cleanup-authority 全链路：
    （QUALIFICATION_ACQUIRE_EXECUTION_UNSUPPORTED）：争用调度尚未接线。这是有意的 fail-closed，
    运行器宁可拒绝也不静默跑一个不含争用的序列。
 4. dg01-* 各用例组中目前只有少数子断言可由运行事实映射，其余仍为 not-run。
-5. npm 发布断层（2.8.12 到 2.8.19 未发布）。
+5. 版本口径（负责人已裁决，勿擅自改动）：本线的 CHANGELOG phase 自 2026-09-04 起为
+   `3.0`，设计文档称 v3，但包版本仍走 2.8.x。裁决为：**2.8.20 承载全部修复并已发布；
+   `3.0.0` 保留给 DG-01 资格真正达标之时**，不因「改动量大」而提前发布。2.8.12 到 2.8.19
+   不逐版补发（`@latest` 只取最新，跳版不破坏 semver）。
 6. Wave4 / #87（origin/codex/issue-87-session-prepare，tip 77799b83）按计划 §1 冻结；
    解冻前须先裁决与 main 互斥的 mutation-lock 设计冲突，不是机械 rebase。
 7. 本机未安装 harness Skill（~/.claude、~/.codex、~/.agents 下均 missing），属仓库外主机改动。
