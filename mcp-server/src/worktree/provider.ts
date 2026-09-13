@@ -19,25 +19,28 @@ export function unusedGraphqlVariables(query: string): string[] {
 }
 
 /**
- * Runs a GraphQL document through `gh` with the caller's own variable flags, refusing to send a
- * document that declares a variable it never uses. Callers keep their flags because `-f` sends a
- * string while `-F` also converts numbers and parses JSON, and only the caller knows which is
- * meant; an `Int` sent with `-f` is the other mistake the live API has caught here.
+ * Runs a GraphQL document through `gh`, sending the whole request as JSON on stdin and refusing to
+ * send a document that declares a variable it never uses.
+ *
+ * The JSON body is not a style choice. `gh`'s `-f` sends every value as a string, and `-F`, despite
+ * its name, converts only scalars: a JSON object passed to it arrives as a string, so an input
+ * object like `$value: ProjectV2FieldValue!` is rejected with "provided invalid value". Numeric
+ * variables have the same problem with `-f`. `--input -` preserves the real JSON types, so variable
+ * types stop depending on which flag a caller happened to pick.
  */
 export function graphqlCommandJson(
   cwd: string,
   query: string,
-  variables: Array<[flag: string, argument: string]>,
+  variables: Record<string, unknown>,
 ): { ok: boolean; value?: unknown; error?: string } {
   const unused = unusedGraphqlVariables(query);
   if (unused.length > 0) {
     return { ok: false, error: `GRAPHQL_VARIABLE_UNUSED: ${unused.join(", ")}` };
   }
-  return commandJson(cwd, "gh", ["api", "graphql", "-f", `query=${query}`,
-    ...variables.flatMap(([flag, argument]) => [flag, argument])]);
+  return commandJson(cwd, "gh", ["api", "graphql", "--input", "-"], JSON.stringify({ query, variables }));
 }
 
-export function commandJson(cwd: string, command: string, args: string[]): {
+export function commandJson(cwd: string, command: string, args: string[], input?: string): {
   ok: boolean;
   value?: unknown;
   error?: string;
@@ -47,6 +50,7 @@ export function commandJson(cwd: string, command: string, args: string[]): {
     encoding: "utf8",
     maxBuffer: 10 * 1024 * 1024,
     timeout: 30_000,
+    ...(input === undefined ? {} : { input }),
   });
   if (result.error || result.status !== 0) {
     return {
@@ -150,9 +154,7 @@ function projectItems(
     repository(owner: $owner, name: $name) {${selections}
     }
   }`;
-  const result = graphqlCommandJson(root, query, [
-    ["-f", `owner=${owner}`], ["-f", `name=${name}`], ["-f", `statusField=${project.statusField}`],
-  ]);
+  const result = graphqlCommandJson(root, query, { owner, name, statusField: project.statusField });
   if (!result.ok) {
     return { values, error: graphQlRateLimitError(root, result.error ?? "unknown error") };
   }

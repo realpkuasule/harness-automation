@@ -68,7 +68,9 @@ if (!graphql) {
   }
   process.exit(1);
 }
-const query = process.argv.find((v) => v.startsWith("query="))?.slice(6) ?? "";
+let query = process.argv.find((v) => v.startsWith("query="))?.slice(6) ?? "";
+// The JSON body arrives on stdin; the argv form is kept for any older caller.
+if (graphql && !query) { try { query = JSON.parse(fs.readFileSync(0, "utf8")).query ?? ""; } catch {} }
 if (query.includes("fieldValueByName")) {
   process.stdout.write(JSON.stringify({ data: { repository: { issue0: { projectItems: { nodes: [{
     project: { number: 2, owner: { __typename: "User", login: "example" } },

@@ -88,7 +88,9 @@ if (!graphql) {
   }
   process.stderr.write("unknown rest call"); process.exit(1);
 }
-const query = process.argv.find((v) => v.startsWith("query="))?.slice(6) ?? "";
+let query = process.argv.find((v) => v.startsWith("query="))?.slice(6) ?? "";
+// The JSON body arrives on stdin; the argv form is kept for any older caller.
+if (graphql && !query) { try { query = JSON.parse(fs.readFileSync(0, "utf8")).query ?? ""; } catch {} }
 if (query.includes("fieldValueByName")) {
   const status = mode === "todo-status" ? "Todo" : "In Progress";
   const nodes = mode === "missing-item" ? [] : [{

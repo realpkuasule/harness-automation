@@ -58,7 +58,9 @@ if (!graphql) {
   }
   process.stderr.write("unknown rest call"); process.exit(1);
 }
-const query = process.argv.find((v) => v.startsWith("query="))?.slice(6) ?? "";
+let query = process.argv.find((v) => v.startsWith("query="))?.slice(6) ?? "";
+// The JSON body arrives on stdin; the argv form is kept for any older caller.
+if (graphql && !query) { try { query = JSON.parse(fs.readFileSync(0, "utf8")).query ?? ""; } catch {} }
 // GitHub rejects an operation that declares a variable it never references, and a fake that
 // accepts it hides exactly that defect. Fail the way the real API does.
 const declared = [...query.matchAll(/\\$(\\w+)\\s*:/g)].map((m) => m[1]);
@@ -67,15 +69,6 @@ const unused = declared.filter((name) => !selection.includes("$" + name));
 if (unused.length) {
   process.stderr.write("Variable $" + unused[0] + " is declared by anonymous query but not used");
   process.exit(1);
-}
-// gh sends -f values as strings and only -F converts them, so an Int supplied with -f is invalid.
-for (const [, name, type] of query.matchAll(/\\$(\\w+)\\s*:\\s*(Int!?|Boolean!?)/g)) {
-  const flag = process.argv.findIndex((v) => v === name + "=" || v.startsWith(name + "="));
-  const previous = flag > 0 ? process.argv[flag - 1] : "";
-  if (previous !== "-F") {
-    process.stderr.write("Variable $" + name + " of type " + type + " was provided invalid value");
-    process.exit(1);
-  }
 }
 if (query.includes("fieldValues(first: 20)")) {
   process.stdout.write(JSON.stringify({ data: { repository: { issue: { projectItems: { nodes: [{

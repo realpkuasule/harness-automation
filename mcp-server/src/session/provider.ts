@@ -67,9 +67,7 @@ export function readProjectField(
       }
     }
   }`;
-  const result = graphqlCommandJson(root, query, [
-    ["-f", `owner=${owner}`], ["-f", `name=${name}`], ["-F", `issueNumber=${issueNumber}`],
-  ]);
+  const result = graphqlCommandJson(root, query, { owner, name, issueNumber });
   if (!result.ok) {
     throw new Error(`GITHUB_PROJECT_QUERY_FAILED: ${result.error ?? "unknown error"}`);
   }
@@ -139,10 +137,8 @@ function projectWriteContext(
       ... on User { projectV2(number: $projectNumber) { id ${projectFields} } }
     }
   }`;
-  const result = graphqlCommandJson(root, query, [
-    ["-f", `owner=${owner}`], ["-f", `name=${name}`], ["-f", `projectOwner=${project.owner}`],
-    ["-F", `projectNumber=${project.number}`], ["-F", `issueNumber=${issueNumber}`],
-  ]);
+  const result = graphqlCommandJson(root, query, {
+    owner, name, projectOwner: project.owner, projectNumber: project.number, issueNumber });
   if (!result.ok) {
     throw new Error(`GITHUB_PROJECT_QUERY_FAILED: ${result.error ?? "unknown error"}`);
   }
@@ -202,18 +198,18 @@ export function updateProjectField(
               ` (available: ${context.field.options.map((candidate) => candidate.name).join(", ") || "none"})`,
             );
           }
-          return `{ singleSelectOptionId: "${option.id}" }`;
+          return { singleSelectOptionId: option.id };
         })()
-      : `{ text: ${JSON.stringify(fieldValue)} }`;
+      : { text: fieldValue };
     const mutation = `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!) {
       updateProjectV2ItemFieldValue(input: { projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: $value }) {
         clientMutationId
       }
     }`;
-    const result = graphqlCommandJson(root, mutation, [
-      ["-f", `projectId=${context.projectId}`], ["-f", `itemId=${context.itemId}`],
-      ["-f", `fieldId=${context.field.id}`], ["-F", `value=${valueInput}`],
-    ]);
+    // $value is an input object, so it must go as JSON: an unquoted GraphQL literal arrives as a
+    // string and GitHub answers "provided invalid value".
+    const result = graphqlCommandJson(root, mutation, {
+      projectId: context.projectId, itemId: context.itemId, fieldId: context.field.id, value: valueInput });
     if (!result.ok) {
       return { fieldName, applied: false, error: `GITHUB_PROJECT_UPDATE_FAILED: ${result.error ?? "unknown error"}` };
     }

@@ -138,7 +138,7 @@ describe("graphql document guard", () => {
   });
 
   it("refuses to send such a document rather than letting the live API reject it", () => {
-    const result = graphqlCommandJson(process.cwd(), "query($a: String!, $b: String!) { repository(owner: $a) { name } }", [["-f", "a=x"]]);
+    const result = graphqlCommandJson(process.cwd(), "query($a: String!, $b: String!) { repository(owner: $a) { name } }", { a: "x" });
     expect(result).toMatchObject({ ok: false, error: "GRAPHQL_VARIABLE_UNUSED: b" });
   });
 });
